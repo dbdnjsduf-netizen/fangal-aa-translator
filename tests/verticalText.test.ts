@@ -29,6 +29,19 @@ test('세로 열을 위→아래, 오른쪽→왼쪽 순서로 복원한다', ()
   assert.equal(groups[0].capacity, 9);
 });
 
+test('세로 문장 안의 숫자와 콜론을 빠뜨리지 않는다', () => {
+  const sample = [
+    '|　１　彼　|',
+    '|　５　は　|',
+    '|　歳　：　|',
+    '|　だ　　　|',
+  ].join('\n');
+  const groups = detectVerticalTextGroups(sample, makeLineSegments(sample));
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].sourceText, '彼は：１５歳だ');
+  assert.equal(groups[0].capacity, 7);
+});
+
 test('세로쓰기 주석을 같은 말풍선 그룹 전체에 적용한다', () => {
   const segments = makeLineSegments(VERTICAL_SAMPLE);
   const annotated = annotateVerticalTextSegments(VERTICAL_SAMPLE, segments);
@@ -137,6 +150,14 @@ test('빈 번역·원문 복사·남은 일본어 문자는 재시도 대상으�
   assert.deepEqual(
     validateTranslatedItems(['⟦VERTICAL_MAX=9⟧ここでは薬草'], ['여기선약초']),
     ['여기선약초'],
+  );
+  assert.deepEqual(
+    validateTranslatedItems(['えええーーーっ！！'], ['에에에ーーー엣!!']),
+    ['에에에―――엣!!'],
+  );
+  assert.deepEqual(
+    validateTranslatedItems(['モーマ・システム'], ['모마・시스템']),
+    ['모마·시스템'],
   );
 });
 

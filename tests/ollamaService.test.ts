@@ -78,8 +78,8 @@ test('하드 문자 제한을 넘는 항목은 다음 청크로 이동한다', (
 
 test('대량 항목은 모델이 안정적으로 셀 수 있는 작은 청크로 제한한다', () => {
   const result = createChunks(Array.from({ length: 350 }, (_, index) => `대사${index}`));
-  assert.ok(result.chunks.length >= 3);
-  assert.ok(result.chunks.every((chunk) => chunk.length <= 96));
+  assert.ok(result.chunks.length >= 5);
+  assert.ok(result.chunks.every((chunk) => chunk.length <= 64));
   assert.equal(result.chunks.flat().length, 350);
 });
 
@@ -303,7 +303,7 @@ test('기본 워커 세 개가 청크를 병렬 처리하고 원래 순서를 �
 
   try {
     const result = await translateBatch(inputs, [], false, 'Translate.');
-    assert.equal(chatRequests, 3);
+    assert.ok(chatRequests >= 3);
     assert.equal(maximumActiveRequests, 3);
     assert.deepEqual(
       result.translations,

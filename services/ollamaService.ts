@@ -249,12 +249,13 @@ export interface ChunkLimits {
 }
 
 export function createChunks(texts: (string | null)[], limits: ChunkLimits = {}) {
-  // Cloud models are much less likely to merge, omit, or truncate indexed
-  // translations when the requested output stays below these conservative limits.
-  const SOFT_CHARS_LIMIT = limits.softChars ?? 3_200;
-  const HARD_CHARS_LIMIT = Math.max(limits.hardChars ?? 4_200, SOFT_CHARS_LIMIT);
-  const SOFT_ITEMS_LIMIT = limits.softItems ?? 75;
-  const HARD_ITEMS_LIMIT = Math.max(limits.hardItems ?? 96, SOFT_ITEMS_LIMIT);
+  // Gemma cloud is much less likely to merge, omit, or truncate indexed
+  // translations around 50 items. Physical AA gaps are preferred as soft
+  // boundaries; 64 items remains the absolute fallback when no gap exists.
+  const SOFT_CHARS_LIMIT = limits.softChars ?? 2_400;
+  const HARD_CHARS_LIMIT = Math.max(limits.hardChars ?? 3_200, SOFT_CHARS_LIMIT);
+  const SOFT_ITEMS_LIMIT = limits.softItems ?? 50;
+  const HARD_ITEMS_LIMIT = Math.max(limits.hardItems ?? 64, SOFT_ITEMS_LIMIT);
   const chunks: string[][] = [];
   const chunkGaps: number[][] = [];
   let currentChunk: string[] = [];
@@ -417,7 +418,9 @@ function validateTranslatedItem(input: string, translation: string, index: numbe
 }
 
 export function sanitizeTranslationCandidate(source: string, translation: string) {
-  const markerless = translation.replace(/^\s*⟦VERTICAL_MAX=\d+⟧/i, '');
+  const markerless = normalizeJapanesePunctuation(
+    translation.replace(/^\s*⟦VERTICAL_MAX=\d+⟧/i, ''),
+  );
   if (!containsJapaneseText(markerless) || !containsHangul(markerless)) {
     return markerless;
   }
@@ -459,6 +462,14 @@ export function sanitizeTranslationCandidate(source: string, translation: string
     .trim();
 
   return `${leadingWhitespace}${core}${trailingWhitespace}`;
+}
+
+function normalizeJapanesePunctuation(text: string) {
+  return text
+    // Gemma frequently keeps the source elongation mark after otherwise valid
+    // Hangul (에에에ーーー). These are typography, not untranslated words.
+    .replace(/[ーｰ]+/gu, (marks) => '―'.repeat(Array.from(marks).length))
+    .replace(/[・･]/gu, '·');
 }
 
 async function translateChunk(

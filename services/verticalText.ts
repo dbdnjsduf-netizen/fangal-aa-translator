@@ -1,6 +1,9 @@
 import { TextSegment } from '../types';
 
-const VERTICAL_SOURCE_CHAR = /[ぁ-んァ-ヶ一-龯々〆ヵヶー！？。、…「」『』（）［］【】│┃]/;
+// Digits and a small set of in-sentence marks are context tokens, not enough
+// to establish a vertical group by themselves. Once Japanese text establishes
+// the group, however, dropping them changes meanings such as １５歳 or 後５年.
+const VERTICAL_SOURCE_CHAR = /[ぁ-んァ-ヶ一-龯々〆ヵヶー！？。、…「」『』（）［］【】│┃0-9０-９:：・･]/;
 const PIPE_BOUNDARY = /[|｜]/;
 const LEFT_ARROW_BOUNDARY = /[>＞]/;
 const RIGHT_ARROW_BOUNDARY = /[<＜]/;
