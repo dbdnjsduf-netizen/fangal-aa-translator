@@ -43,6 +43,21 @@ test('이미 인식된 전체 세그먼트는 불필요하게 분할하지 않�
   assert.equal(result.isManualSelection, undefined);
 });
 
+test('부분 수동 선택의 주변 조각은 부모의 기존 선택 상태를 물려받지 않는다', () => {
+  const recognized = segment('前取りこぼし後', {
+    isJapanese: true,
+    isSelected: true,
+  });
+  const result = applyManualSelectionRanges(
+    [recognized],
+    [{ segmentId: recognized.id, start: 1, end: 6 }],
+  );
+
+  assert.deepEqual(result.map(({ text }) => text), ['前', '取りこぼし', '後']);
+  assert.deepEqual(result.map(({ isSelected }) => isSelected), [false, true, false]);
+  assert.equal(result[1].isManualSelection, true);
+});
+
 test('공백뿐인 범위와 이미 번역된 범위는 수동 번역 대상으로 만들지 않는다', () => {
   const whitespace = segment('   ');
   const translated = segment('번역됨', { id: 'segment-2', isTranslated: true });

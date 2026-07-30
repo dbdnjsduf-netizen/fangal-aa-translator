@@ -86,6 +86,9 @@ type TranslationError = Error & {
   retryable?: boolean;
   splitRecoverable?: boolean;
   usage?: Usage;
+  invalidIndices?: number[];
+  partialTranslations?: Array<string | undefined>;
+  rejectedTranslations?: string[];
 };
 
 export interface TranslationResponseData {
@@ -363,21 +366,99 @@ export function validateTranslatedItems(inputs: string[], translations: string[]
     );
   }
 
-  return translations.map((translation, index) => {
-    const source = inputs[index].replace(/^⟦VERTICAL_MAX=\d+⟧/i, '').trim();
-    const output = translation.replace(/^⟦VERTICAL_MAX=\d+⟧/i, '').trim();
-    if (!containsJapaneseText(source)) return translation;
-    if (!output) {
-      throw makeRetryableValidationError(`${index + 1}번 일본어 항목의 번역이 비어 있습니다.`);
+  const validated: Array<string | undefined> = new Array(inputs.length).fill(undefined);
+  const issues: Array<{ index: number; error: TranslationError }> = [];
+
+  translations.forEach((translation, index) => {
+    try {
+      validated[index] = validateTranslatedItem(inputs[index], translation, index);
+    } catch (error) {
+      issues.push({
+        index,
+        error: error instanceof Error
+          ? error as TranslationError
+          : makeRetryableValidationError(String(error)),
+      });
     }
-    if (normalizeForComparison(output) === normalizeForComparison(source)) {
-      throw makeRetryableValidationError(`${index + 1}번 항목이 일본어 원문 그대로 반환되었습니다.`);
-    }
-    if (/[\u3040-\u30ff\u3400-\u9fff\uff66-\uff9f]/u.test(output)) {
-      throw makeRetryableValidationError(`${index + 1}번 번역에 일본어 가나·한자가 남아 있습니다.`);
-    }
-    return translation;
   });
+
+  if (issues.length > 0) {
+    const error = makeRetryableValidationError(issues[0].error.message);
+    error.invalidIndices = issues.map(({ index }) => index);
+    error.partialTranslations = validated;
+    error.rejectedTranslations = [...translations];
+    throw error;
+  }
+
+  return validated as string[];
+}
+
+function validateTranslatedItem(input: string, translation: string, index: number) {
+  const source = input.replace(/^⟦VERTICAL_MAX=\d+⟧/i, '').trim();
+  const sanitized = sanitizeTranslationCandidate(source, translation);
+  const output = sanitized.trim();
+  if (!containsJapaneseText(source)) return sanitized;
+  if (!output) {
+    throw makeRetryableValidationError(`${index + 1}번 일본어 항목의 번역이 비어 있습니다.`);
+  }
+  if (normalizeForComparison(output) === normalizeForComparison(source)) {
+    throw makeRetryableValidationError(`${index + 1}번 항목이 일본어 원문 그대로 반환되었습니다.`);
+  }
+  if (containsJapaneseText(output)) {
+    const residues = output
+      .match(/[\u3040-\u30ff\u3400-\u9fff\uff66-\uff9f]+/gu)
+      ?.slice(0, 3)
+      .join(', ');
+    throw makeRetryableValidationError(
+      `${index + 1}번 번역에 일본어가 남아 있습니다${residues ? ` (${residues})` : ''}.`,
+    );
+  }
+  return sanitized;
+}
+
+export function sanitizeTranslationCandidate(source: string, translation: string) {
+  const markerless = translation.replace(/^\s*⟦VERTICAL_MAX=\d+⟧/i, '');
+  if (!containsJapaneseText(markerless) || !containsHangul(markerless)) {
+    return markerless;
+  }
+
+  const leadingWhitespace = markerless.match(/^\s*/u)?.[0] || '';
+  const trailingWhitespace = markerless.match(/\s*$/u)?.[0] || '';
+  const sourceCore = source.replace(/^⟦VERTICAL_MAX=\d+⟧/i, '').trim();
+  const normalizedSource = normalizeForComparison(sourceCore);
+  let core = markerless.trim();
+
+  // Models often append the complete source as a reading aid, e.g. "용사勇者".
+  // Removing that exact duplicate is lossless because a Hangul translation is
+  // already present outside the source text.
+  if (sourceCore && core.includes(sourceCore)) {
+    const withoutExactSource = core.replace(sourceCore, '').trim();
+    if (containsHangul(withoutExactSource)) core = withoutExactSource;
+  }
+
+  // Also remove a parenthesized annotation only when it equals the complete
+  // source. A partial source annotation may still carry untranslated meaning,
+  // so it must go through item-level repair instead of being deleted.
+  const annotationPattern =
+    /\s*(?:\([^()]*[\u3040-\u30ff\u3400-\u9fff\uff66-\uff9f][^()]*\)|（[^（）]*[\u3040-\u30ff\u3400-\u9fff\uff66-\uff9f][^（）]*）|\[[^[\]]*[\u3040-\u30ff\u3400-\u9fff\uff66-\uff9f][^[\]]*\]|【[^【】]*[\u3040-\u30ff\u3400-\u9fff\uff66-\uff9f][^【】]*】)/gu;
+  core = core.replace(annotationPattern, (annotation) => {
+    const annotationText = annotation
+      .replace(/^[\s(（\[【]+|[\s)）\]】]+$/gu, '')
+      .trim();
+    const normalizedAnnotation = normalizeForComparison(annotationText);
+    if (
+      normalizedAnnotation
+      && normalizedSource === normalizedAnnotation
+      && containsHangul(core.replace(annotation, ''))
+    ) {
+      return '';
+    }
+    return annotation;
+  })
+    .replace(/\(\s*\)|（\s*）|\[\s*\]|【\s*】/gu, '')
+    .trim();
+
+  return `${leadingWhitespace}${core}${trailingWhitespace}`;
 }
 
 async function translateChunk(
@@ -390,6 +471,7 @@ async function translateChunk(
   const prompt = buildTranslationPrompt(chunk, gaps, customDict, useDefaultDict);
 
   let lastError: unknown;
+  let lastRejectedTranslations: string[] | undefined;
   const accumulatedUsage = {
     inputTokens: 0,
     outputTokens: 0,
@@ -400,10 +482,11 @@ async function translateChunk(
     try {
       accumulatedUsage.requestCount += 1;
       const retryInstruction = attempt > 0 && lastError instanceof Error
-        ? `\n\nRETRY_CORRECTION:
-The previous response was rejected: ${lastError.message}
-Count the INPUT_JSON entries again and return exactly ${chunk.length} translated strings.
-Do not merge adjacent dialogue and do not add an explanation.`
+        ? buildTranslationRetryCorrection(
+            lastError.message,
+            chunk.length,
+            lastRejectedTranslations,
+          )
         : '';
       const response = await requestChat([
         {
@@ -435,13 +518,16 @@ Do not merge adjacent dialogue and do not add an explanation.`
       };
     } catch (error) {
       lastError = error;
+      lastRejectedTranslations = (error as TranslationError)?.rejectedTranslations;
       if (!isRetryable(error) || attempt === MAX_RETRIES - 1) break;
       // Repeating the same malformed multi-item request wastes cloud quota.
       // Split immediately; only a single-item request uses all three retries.
       if ((error as TranslationError)?.splitRecoverable && chunk.length > 1) {
         break;
       }
-      await delayWithJitter(Math.min(2_000 * (2 ** attempt), 12_000));
+      if (!(error as TranslationError)?.splitRecoverable) {
+        await delayWithJitter(Math.min(2_000 * (2 ** attempt), 12_000));
+      }
     }
   }
 
@@ -477,6 +563,44 @@ async function translateChunkResilient(
   } catch (error) {
     const parentUsage = getErrorUsage(error);
     const translationError = error as TranslationError;
+    const invalidIndices = translationError.invalidIndices || [];
+    const partialTranslations = translationError.partialTranslations;
+    if (
+      chunk.length > 1
+      && partialTranslations
+      && invalidIndices.length > 0
+      && invalidIndices.length < chunk.length
+      && invalidIndices.length <= 8
+    ) {
+      const recovered = partialTranslations.map(
+        (translation, index) => translation ?? chunk[index],
+      );
+      const recoveredUsage = { ...parentUsage };
+      onRecoveredPartial?.(baseOffset, recovered);
+
+      for (const invalidIndex of invalidIndices) {
+        try {
+          const repaired = await translateChunkResilient(
+            [chunk[invalidIndex]],
+            [],
+            customDict,
+            useDefaultDict,
+            systemInstruction,
+          );
+          recovered[invalidIndex] = repaired.translations[0];
+          mergeUsage(recoveredUsage, repaired.usage);
+          onRecoveredPartial?.(baseOffset + invalidIndex, repaired.translations);
+        } catch (repairError) {
+          attachUsage(repairError, recoveredUsage);
+          throw repairError;
+        }
+      }
+
+      return {
+        translations: recovered,
+        usage: recoveredUsage,
+      };
+    }
     if (!translationError.splitRecoverable || chunk.length <= 1) {
       throw error;
     }
@@ -580,6 +704,24 @@ export function buildTranslationSystemInstruction(systemInstruction: string) {
   }`;
 }
 
+export function buildTranslationRetryCorrection(
+  message: string,
+  expectedCount: number,
+  rejectedTranslations?: string[],
+) {
+  const rejectedOutput = rejectedTranslations
+    ? `\nREJECTED_OUTPUT_JSON:\n${JSON.stringify(rejectedTranslations)}`
+    : '';
+  return `\n\nRETRY_CORRECTION:
+The previous response was rejected: ${message}${rejectedOutput}
+Rewrite every rejected item from scratch as Korean.
+- Return exactly ${expectedCount} strings in one JSON array and preserve all indices.
+- Convert every Japanese kana and every CJK ideograph to Hangul.
+- Never append the Japanese source as a note, reading aid, or parenthetical annotation.
+- Keep Latin letters, numbers, and punctuation only when they belong in the Korean translation.
+- Do not merge adjacent dialogue and do not add an explanation.`;
+}
+
 export function buildTranslationPrompt(
   chunk: string[],
   gaps: number[],
@@ -665,6 +807,10 @@ function isRetryable(error: unknown) {
 
 function containsJapaneseText(text: string) {
   return /[\u3040-\u30ff\u3400-\u9fff\uff66-\uff9f]/u.test(text);
+}
+
+function containsHangul(text: string) {
+  return /[\u1100-\u11ff\u3130-\u318f\uac00-\ud7a3]/u.test(text);
 }
 
 function normalizeForComparison(text: string) {

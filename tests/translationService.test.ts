@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { translateSelection as translateWithGemini } from '../services/geminiService';
+import {
+  translateBatch as translateBatchWithGemini,
+  translateSelection as translateWithGemini,
+} from '../services/geminiService';
 import { createChunks } from '../services/ollamaService';
 import {
   getProviderModelLabel,
@@ -93,6 +96,70 @@ test('Gemini 요청은 키를 URL이 아닌 헤더로 보내고 고정 길이 JS
     );
     assert.equal(capturedBody.generationConfig.responseFormat.text.schema.minItems, 1);
     assert.equal(capturedBody.generationConfig.responseFormat.text.schema.maxItems, 1);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousWindow) {
+      Object.defineProperty(globalThis, 'window', previousWindow);
+    } else {
+      Reflect.deleteProperty(globalThis, 'window');
+    }
+  }
+});
+
+test('Gemini도 일본어가 남은 항목만 구조화 응답으로 다시 번역한다', async () => {
+  const previousFetch = globalThis.fetch;
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const requestedChunks: string[][] = [];
+
+  Object.defineProperty(globalThis, 'window', {
+    value: globalThis,
+    writable: true,
+    configurable: true,
+  });
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body));
+    const prompt = String(body.contents[0].parts[0].text);
+    const inputJson = prompt
+      .split('INPUT_JSON:\n')[1]
+      .split('\n\nRETRY_CORRECTION:')[0];
+    const chunk = JSON.parse(inputJson) as string[];
+    requestedChunks.push(chunk);
+
+    const output = chunk.length > 1
+      ? ['가', '나', '용사 勇者', '라']
+      : prompt.includes('RETRY_CORRECTION:')
+        ? ['용사다']
+        : ['용사 勇者'];
+    return new Response(JSON.stringify({
+      candidates: [{
+        content: { parts: [{ text: JSON.stringify(output) }] },
+        finishReason: 'STOP',
+      }],
+      usageMetadata: {
+        promptTokenCount: 10,
+        candidatesTokenCount: 5,
+      },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    const result = await translateBatchWithGemini(
+      ['あ', 'い', '勇者だ', 'え'],
+      'TEST_ONLY_NOT_A_REAL_KEY',
+      [],
+      false,
+      'Translate.',
+    );
+    assert.deepEqual(result.translations, ['가', '나', '용사다', '라']);
+    assert.deepEqual(requestedChunks, [
+      ['あ', 'い', '勇者だ', 'え'],
+      ['勇者だ'],
+      ['勇者だ'],
+    ]);
+    assert.equal(result.usage.requestCount, 3);
   } finally {
     globalThis.fetch = previousFetch;
     if (previousWindow) {

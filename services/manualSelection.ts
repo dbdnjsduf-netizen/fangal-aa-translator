@@ -73,6 +73,9 @@ function sliceSegment(
     id: `${segment.id}-slice-${start}-${end}-${label}`,
     text,
     original,
+    // A manual range means exactly that range was requested. Surrounding slices
+    // must not inherit a previous automatic/drag selection from the parent.
+    isSelected: false,
   };
 }
 

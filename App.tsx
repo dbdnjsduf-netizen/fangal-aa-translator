@@ -32,10 +32,16 @@ import {
 import {
   applyVerticalTranslations,
   detectVerticalTextGroups,
-  fitTranslationToDisplayWidth,
   makeVerticalTranslationRequest,
   VerticalTextGroup,
 } from './services/verticalText';
+import {
+  applyNormalTranslationUpdates,
+  clearCompletedSelections,
+  isSegmentTranslationSelectable,
+  NormalTranslationUpdate,
+  selectAllTranslatableSegments,
+} from './services/translationApplication';
 import { FileText, Info, Activity, Download, Timer, History, Book, MessageSquareQuote, Server, CheckSquare } from 'lucide-react';
 
 type SmartTranslationUnit =
@@ -135,6 +141,12 @@ function App() {
   useEffect(() => {
     localStorage.setItem('aat_system_prompt', systemPrompt);
   }, [systemPrompt]);
+
+  useEffect(() => {
+    if (segments.some((segment) => segment.isTranslated && segment.isSelected)) {
+      setSegments(clearCompletedSelections(segments));
+    }
+  }, [segments]);
 
   // Stats State
   const [apiStats, setApiStats] = useState<ApiUsageStats>({
@@ -250,7 +262,9 @@ function App() {
   };
 
   const handleSmartTranslate = async () => {
-    const selectedSegments = segments.filter(s => s.isSelected);
+    const selectedSegments = segments.filter(
+      (segment) => segment.isSelected && isSegmentTranslationSelectable(segment),
+    );
     if (selectedSegments.length === 0) return;
     if (!isProviderReady(
       translationProvider,
@@ -300,7 +314,7 @@ function App() {
       };
 
       segments.forEach((segment, segmentIndex) => {
-        if (!segment.isSelected) return;
+        if (!segment.isSelected || !isSegmentTranslationSelectable(segment)) return;
         const verticalGroup = verticalGroupBySegmentId.get(segment.id);
         if (verticalGroup) {
           if (addedVerticalGroups.has(verticalGroup.id)) return;
@@ -326,7 +340,7 @@ function App() {
       }
 
       const updateSegmentsWithPartial = (translatedTexts: string[], collectFailures = false) => {
-        const normalTranslationMap = new Map<string, { sourceText: string; translatedText: string }>();
+        const normalTranslations: NormalTranslationUpdate[] = [];
         const verticalTranslations: Array<{
           unit: Extract<SmartTranslationUnit, { kind: 'vertical' }>;
           translatedText: string;
@@ -336,9 +350,10 @@ function App() {
           if (
             unit.kind === 'normal'
             && translatedText !== undefined
-            && translatedText !== unit.requestText
+            && (collectFailures || translatedText !== unit.requestText)
           ) {
-            normalTranslationMap.set(unit.segmentId, {
+            normalTranslations.push({
+              segmentId: unit.segmentId,
               sourceText: unit.sourceText,
               translatedText,
             });
@@ -352,26 +367,13 @@ function App() {
           }
         });
 
-        const failures: string[] = [];
-        let newSegments = segments.map((segment) => {
-          const translation = normalTranslationMap.get(segment.id);
-          if (translation !== undefined) {
-            const isUnchanged = translation.translatedText.trim() === segment.text.trim();
-            if (isUnchanged) return segment;
-
-            const fitted = fitTranslationToDisplayWidth(segment.text, translation.translatedText);
-            if (collectFailures && fitted.reason) {
-              failures.push(`${translation.sourceText}: ${fitted.reason}`);
-            }
-            return {
-              ...segment,
-              text: fitted.text,
-              isTranslated: true,
-              isSelected: false,
-            };
-          }
-          return segment;
-        });
+        const normalResult = applyNormalTranslationUpdates(
+          segments,
+          normalTranslations,
+          collectFailures,
+        );
+        const failures = [...normalResult.layoutFailures];
+        let newSegments = normalResult.segments;
 
         const verticalResult = applyVerticalTranslations(
           newSegments,
@@ -385,7 +387,7 @@ function App() {
             `세로쓰기 번역을 적용하지 못했습니다: ${verticalResult.reason || '좌표 충돌'}`,
           );
         }
-        newSegments = verticalResult.segments;
+        newSegments = clearCompletedSelections(verticalResult.segments);
         if (collectFailures) {
           verticalTranslations.forEach(({ unit }, index) => {
             const reason = verticalResult.items[index]?.reason;
@@ -453,10 +455,7 @@ function App() {
 
   const handleSelectAllJapanese = () => {
     startTransition(() => {
-      const newSegments = segments.map(s => 
-        (!s.isAutoSelectExcluded && (s.isManualSelection || s.isStrictJapanese || s.isAutoSelected || s.isBoxedDialogue || s.isContextDialogue || s.isArrowBox || s.isVerticalBox || s.isIndentedDialogue || s.isIsolatedDialogue)) ? { ...s, isSelected: true } : s
-      );
-      setSegments(newSegments);
+      setSegments(selectAllTranslatableSegments(segments));
     });
   };
 
@@ -643,7 +642,9 @@ function App() {
         }}
         smartSelectionCount={new Set(
           segments
-            .filter((segment) => segment.isSelected)
+            .filter(
+              (segment) => segment.isSelected && isSegmentTranslationSelectable(segment),
+            )
             .map((segment) => segment.verticalGroupId || segment.id),
         ).size}
         onSmartTranslate={handleSmartTranslate}

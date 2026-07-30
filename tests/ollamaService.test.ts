@@ -167,6 +167,93 @@ test('항목 수가 틀린 큰 응답은 자동 분할하고 성공한 앞부분
   }
 });
 
+test('일본어가 남은 소수 항목만 격리 재번역하고 정상 항목은 다시 요청하지 않는다', async () => {
+  const previousFetch = globalThis.fetch;
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const requestedChunks: string[][] = [];
+  const partialSnapshots: string[][] = [];
+  let correctionPrompt = '';
+
+  Object.defineProperty(globalThis, 'window', {
+    value: globalThis,
+    writable: true,
+    configurable: true,
+  });
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === '/api/config') {
+      return new Response(JSON.stringify({ maxConcurrency: 1 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    assert.equal(url, '/api/chat');
+    const request = JSON.parse(String(init?.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const userPrompt = request.messages.find(({ role }) => role === 'user')?.content || '';
+    const inputJson = userPrompt
+      .split('INPUT_JSON:\n')[1]
+      .split('\n\nRETRY_CORRECTION:')[0];
+    const chunk = JSON.parse(inputJson) as string[];
+    requestedChunks.push(chunk);
+
+    let output: string[];
+    if (chunk.length > 1) {
+      output = ['가', '나', '용사 勇者', '라'];
+    } else if (userPrompt.includes('RETRY_CORRECTION:')) {
+      correctionPrompt = userPrompt;
+      output = ['용사다'];
+    } else {
+      output = ['용사 勇者'];
+    }
+
+    return new Response(JSON.stringify({
+      message: { content: JSON.stringify(output) },
+      prompt_eval_count: 10,
+      eval_count: 5,
+      total_duration: 1_000_000,
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    const result = await translateBatch(
+      ['あ', 'い', '勇者だ', 'え'],
+      [],
+      false,
+      'Translate.',
+      undefined,
+      (items) => partialSnapshots.push([...items]),
+    );
+    assert.deepEqual(result.translations, ['가', '나', '용사다', '라']);
+    assert.deepEqual(requestedChunks, [
+      ['あ', 'い', '勇者だ', 'え'],
+      ['勇者だ'],
+      ['勇者だ'],
+    ]);
+    assert.equal(result.usage.requestCount, 3);
+    assert.match(correctionPrompt, /REJECTED_OUTPUT_JSON/);
+    assert.match(correctionPrompt, /every CJK ideograph to Hangul/);
+    assert.ok(partialSnapshots.some((items) => (
+      items[0] === '가'
+      && items[1] === '나'
+      && items[2] === '勇者だ'
+      && items[3] === '라'
+    )));
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousWindow) {
+      Object.defineProperty(globalThis, 'window', previousWindow);
+    } else {
+      Reflect.deleteProperty(globalThis, 'window');
+    }
+  }
+});
+
 test('기본 워커 세 개가 청크를 병렬 처리하고 원래 순서를 보존한다', async () => {
   const previousFetch = globalThis.fetch;
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');

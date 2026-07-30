@@ -6,6 +6,7 @@ import {
   applyManualSelectionRanges,
   ManualSelectionRange,
 } from '../services/manualSelection';
+import { isSegmentTranslationSelectable } from '../services/translationApplication';
 
 interface EditorProps {
   content: string;
@@ -111,10 +112,14 @@ export const Editor: React.FC<EditorProps> = ({
 
   const toggleSegmentSelection = (id: string) => {
     const target = segments.find((segment) => segment.id === id);
-    if (!target) return;
+    if (!target || !isSegmentTranslationSelectable(target)) return;
     const nextSelected = !target.isSelected;
     const newSegments = segments.map((segment) => {
-      if (target.verticalGroupId && segment.verticalGroupId === target.verticalGroupId) {
+      if (
+        target.verticalGroupId
+        && segment.verticalGroupId === target.verticalGroupId
+        && isSegmentTranslationSelectable(segment)
+      ) {
         return { ...segment, isSelected: nextSelected };
       }
       return segment.id === id ? { ...segment, isSelected: nextSelected } : segment;
@@ -296,14 +301,14 @@ export const Editor: React.FC<EditorProps> = ({
         const target = document.elementFromPoint(e.clientX, e.clientY);
         if (target instanceof HTMLElement && target.id) {
             const segment = segments.find(s => s.id === target.id);
-            if (segment && segment.isJapanese) {
+            if (segment && isSegmentTranslationSelectable(segment)) {
                 toggleSegmentSelection(target.id);
             }
         }
     } else {
         // Find intersecting segments
         const intersectedSegments = segments.map(seg => {
-          if (!seg.isJapanese) return seg;
+          if (!isSegmentTranslationSelectable(seg)) return seg;
 
           const el = document.getElementById(seg.id);
           if (el && containerRef.current) {
@@ -423,7 +428,7 @@ export const Editor: React.FC<EditorProps> = ({
                    }}
                    className={`
                      rounded px-0.5 transition-colors duration-75 inline-block
-                     ${!isDragMode && 'cursor-pointer'}
+                     ${!isDragMode && isSegmentTranslationSelectable(seg) ? 'cursor-pointer' : 'cursor-default'}
                      ${seg.isSelected 
                         ? seg.isVerticalText
                           ? 'bg-purple-600 text-white shadow-[0_0_10px_rgba(147,51,234,0.5)]'

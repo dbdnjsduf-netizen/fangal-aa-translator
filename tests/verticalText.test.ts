@@ -116,11 +116,23 @@ test('빈 번역·원문 복사·남은 일본어 문자는 재시도 대상으�
   );
   assert.throws(
     () => validateTranslatedItems(['ここでは薬草'], ['여기では 약초']),
-    /가나·한자가 남아/,
+    /일본어가 남아/,
+  );
+  assert.deepEqual(
+    validateTranslatedItems(['勇者'], ['용사勇者']),
+    ['용사'],
+  );
+  assert.deepEqual(
+    validateTranslatedItems(['勇者'], ['용사(勇者)']),
+    ['용사'],
   );
   assert.throws(
-    () => validateTranslatedItems(['勇者'], ['용사勇者']),
-    /가나·한자가 남아/,
+    () => validateTranslatedItems(['勇者だ'], ['그는 勇者']),
+    /일본어가 남아/,
+  );
+  assert.throws(
+    () => validateTranslatedItems(['彼は魔王だ'], ['그는(魔王)']),
+    /일본어가 남아/,
   );
   assert.deepEqual(
     validateTranslatedItems(['⟦VERTICAL_MAX=9⟧ここでは薬草'], ['여기선약초']),

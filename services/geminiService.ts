@@ -1,6 +1,7 @@
 import { ApiUsageStats, DictionaryEntry } from '../types';
 import {
   BatchTranslationResult,
+  buildTranslationRetryCorrection,
   buildTranslationPrompt,
   buildTranslationSystemInstruction,
   chooseRecoverySplitIndex,
@@ -31,6 +32,9 @@ type TranslationError = Error & {
   retryable?: boolean;
   splitRecoverable?: boolean;
   usage?: Usage;
+  invalidIndices?: number[];
+  partialTranslations?: Array<string | undefined>;
+  rejectedTranslations?: string[];
 };
 
 interface GeminiResponse {
@@ -176,14 +180,16 @@ async function translateChunk(
   const prompt = buildTranslationPrompt(chunk, gaps, customDict, useDefaultDict);
   const accumulatedUsage = emptyUsage();
   let lastError: unknown;
+  let lastRejectedTranslations: string[] | undefined;
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
     try {
       const retryInstruction = attempt > 0 && lastError instanceof Error
-        ? `\n\nRETRY_CORRECTION:
-The previous response was rejected: ${lastError.message}
-Count the INPUT_JSON entries again and return exactly ${chunk.length} translated strings.
-Do not merge adjacent dialogue and do not add an explanation.`
+        ? buildTranslationRetryCorrection(
+            lastError.message,
+            chunk.length,
+            lastRejectedTranslations,
+          )
         : '';
       accumulatedUsage.requestCount += 1;
       const response = await requestGemini(
@@ -212,9 +218,12 @@ Do not merge adjacent dialogue and do not add an explanation.`
       };
     } catch (error) {
       lastError = error;
+      lastRejectedTranslations = (error as TranslationError)?.rejectedTranslations;
       if (!isRetryable(error) || attempt === MAX_RETRIES - 1) break;
       if ((error as TranslationError)?.splitRecoverable && chunk.length > 1) break;
-      await delayWithJitter(Math.min(2_000 * (2 ** attempt), 12_000));
+      if (!(error as TranslationError)?.splitRecoverable) {
+        await delayWithJitter(Math.min(2_000 * (2 ** attempt), 12_000));
+      }
     }
   }
 
@@ -250,6 +259,45 @@ async function translateChunkResilient(
   } catch (error) {
     const parentUsage = getErrorUsage(error);
     const translationError = error as TranslationError;
+    const invalidIndices = translationError.invalidIndices || [];
+    const partialTranslations = translationError.partialTranslations;
+    if (
+      chunk.length > 1
+      && partialTranslations
+      && invalidIndices.length > 0
+      && invalidIndices.length < chunk.length
+      && invalidIndices.length <= 8
+    ) {
+      const recovered = partialTranslations.map(
+        (translation, index) => translation ?? chunk[index],
+      );
+      const recoveredUsage = { ...parentUsage };
+      onRecoveredPartial?.(baseOffset, recovered);
+
+      for (const invalidIndex of invalidIndices) {
+        try {
+          const repaired = await translateChunkResilient(
+            [chunk[invalidIndex]],
+            [],
+            apiKey,
+            customDict,
+            useDefaultDict,
+            systemInstruction,
+          );
+          recovered[invalidIndex] = repaired.translations[0];
+          mergeUsage(recoveredUsage, repaired.usage);
+          onRecoveredPartial?.(baseOffset + invalidIndex, repaired.translations);
+        } catch (repairError) {
+          attachUsage(repairError, recoveredUsage);
+          throw repairError;
+        }
+      }
+
+      return {
+        translations: recovered,
+        usage: recoveredUsage,
+      };
+    }
     if (!translationError.splitRecoverable || chunk.length <= 1) throw error;
 
     const splitIndex = chooseRecoverySplitIndex(chunk.length, gaps);
