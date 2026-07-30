@@ -1,379 +1,445 @@
+import { ApiUsageStats, DictionaryEntry } from '../types';
+import {
+  BatchTranslationResult,
+  buildTranslationPrompt,
+  buildTranslationSystemInstruction,
+  chooseRecoverySplitIndex,
+  createChunks,
+  DEFAULT_SYSTEM_PROMPT,
+  parseIndexedTranslations,
+  TranslationProgress,
+  TranslationResponseData,
+  validateTranslatedItems,
+} from './ollamaService';
 
-import { GoogleGenAI } from "@google/genai";
-import { DictionaryEntry, ApiUsageStats } from "../types";
+export const GEMINI_MODEL = 'gemini-3.6-flash';
 
-// Estimated Pricing based on Gemini 3.0 Flash Tier
-// Input: $0.50 per 1M tokens / Output: $3.00 per 1M tokens
-const COST_PER_1M_INPUT_TOKENS = 0.50; 
-const COST_PER_1M_OUTPUT_TOKENS = 3.00;
+const GEMINI_API_URL =
+  `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+const GEMINI_MAX_CONCURRENCY = 2;
+const MAX_RETRIES = 3;
+const REQUEST_TIMEOUT_MS = 330_000;
 
-export const DEFAULT_DICTIONARY: DictionaryEntry[] = [
-  { id: 'def-1', original: 'やる夫', translated: '야루오' },
-  { id: 'def-2', original: 'やらない夫', translated: '야라나이오' },
-  { id: 'def-3', original: 'できない子', translated: '데키나이코' },
-  { id: 'def-4', original: 'できる夫', translated: '데키루오' },
-  { id: 'def-5', original: 'できる子', translated: '데키루코' },
-  { id: 'def-6', original: 'やらない子', translated: '야라나이코' },
-  { id: 'def-7', original: 'きらない夫', translated: '키라나이오' },
-  { id: 'def-8', original: 'ドクオ', translated: '도쿠오' },
-  { id: 'def-9', original: '独男', translated: '도쿠오' },
-  { id: 'def-10', original: 'ショボーン', translated: '쇼본' },
-  { id: 'def-11', original: '荒巻スカルチノフ', translated: '아라마키 스칼치노프' },
-  { id: 'def-12', original: 'モナー', translated: '모나' },
-  { id: 'def-13', original: 'ギコ猫', translated: '기코네코' },
-  { id: 'def-14', original: 'ギコ', translated: '기코' },
-  { id: 'def-15', original: 'しぃ', translated: '시이' },
-];
+interface Usage {
+  inputTokens: number;
+  outputTokens: number;
+  durationMs: number;
+  requestCount: number;
+}
 
-export const DEFAULT_SYSTEM_PROMPT = `You are a specialized translator for Japanese ASCII Art (AA) / Shift-JIS Art context.
-Translate the text into natural, concise Korean suitable for internet communities.
-Handle internet slang, onomatopoeia, and character dialogue appropriately.
+type TranslationError = Error & {
+  retryable?: boolean;
+  splitRecoverable?: boolean;
+  usage?: Usage;
+};
 
-STRICT 1:1 MAPPING (NO MERGING):
-- You must translate each item exactly at its given index. 
-- DO NOT merge, cluster, or combine multiple input items into a single output index.
-- DO NOT try to mimic the "fragmented" style or the exact length of the input (e.g., do not translate "오하이오" into "안 녀 어 엉").
-- Translate each fragment naturally as Korean syllables. If a fragment becomes redundant, use an empty string ("").
-- The total number of output items MUST exactly match the input items.
-- Do not add filler text or explanations.`;
-
-export interface TranslationResponseData {
-  text: string;
-  usage: {
-    inputTokens: number;
-    outputTokens: number;
-    cost: number;
+interface GeminiResponse {
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{ text?: string }>;
+    };
+    finishReason?: string;
+  }>;
+  promptFeedback?: {
+    blockReason?: string;
+  };
+  usageMetadata?: {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+  };
+  error?: {
+    code?: number;
+    message?: string;
+    status?: string;
   };
 }
 
-export interface BatchTranslationResult {
-  translations: string[];
-  usage: {
-    inputTokens: number;
-    outputTokens: number;
-    requestCount: number;
-    cost: number;
+export function hasGeminiApiKey(apiKey: string) {
+  return apiKey.trim().length > 0;
+}
+
+export async function translateSelection(
+  textToTranslate: string,
+  apiKey: string,
+  customDict: DictionaryEntry[] = [],
+  useDefaultDict = true,
+  systemInstruction = DEFAULT_SYSTEM_PROMPT,
+): Promise<TranslationResponseData> {
+  assertApiKey(apiKey);
+  const result = await translateChunk(
+    [textToTranslate],
+    [],
+    apiKey.trim(),
+    customDict,
+    useDefaultDict,
+    systemInstruction,
+  );
+  return { text: result.translations[0], usage: result.usage };
+}
+
+export async function translateBatch(
+  texts: (string | null)[],
+  apiKey: string,
+  customDict: DictionaryEntry[] = [],
+  useDefaultDict = true,
+  systemInstruction = DEFAULT_SYSTEM_PROMPT,
+  onProgress?: (progress: TranslationProgress) => void,
+  onPartialResult?: (translations: string[], usage: ApiUsageStats) => void,
+): Promise<BatchTranslationResult> {
+  assertApiKey(apiKey);
+  const { chunks, chunkGaps } = createChunks(texts, {
+    softChars: 2_800,
+    hardChars: 3_600,
+    softItems: 50,
+    hardItems: 64,
+  });
+  if (chunks.length === 0) {
+    return {
+      translations: [],
+      usage: emptyUsage(),
+    };
+  }
+
+  const results = chunks.map((chunk) => [...chunk]);
+  const failures: Error[] = [];
+  const usage = emptyUsage();
+  let nextChunkIndex = 0;
+  let completedChunks = 0;
+  const concurrency = Math.min(GEMINI_MAX_CONCURRENCY, chunks.length);
+
+  const emitPartial = () => {
+    onPartialResult?.(results.flat(), {
+      requestCount: usage.requestCount,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      totalDurationMs: usage.durationMs,
+    });
   };
+
+  const worker = async () => {
+    while (nextChunkIndex < chunks.length) {
+      const index = nextChunkIndex++;
+      try {
+        const result = await translateChunkResilient(
+          chunks[index],
+          chunkGaps[index],
+          apiKey.trim(),
+          customDict,
+          useDefaultDict,
+          systemInstruction,
+          (offset, recoveredTranslations) => {
+            results[index].splice(
+              offset,
+              recoveredTranslations.length,
+              ...recoveredTranslations,
+            );
+            emitPartial();
+          },
+        );
+        results[index] = result.translations;
+        mergeUsage(usage, result.usage);
+        emitPartial();
+      } catch (error) {
+        mergeUsage(usage, getErrorUsage(error));
+        emitPartial();
+        failures.push(error instanceof Error ? error : new Error(String(error)));
+      } finally {
+        completedChunks += 1;
+        onProgress?.({
+          totalChunks: chunks.length,
+          completedChunks,
+          currentProgress: Math.round((completedChunks / chunks.length) * 100),
+        });
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+
+  if (failures.length > 0) {
+    throw new Error(
+      `${failures.length}개 Gemini 번역 청크가 실패했습니다. ${failures[0].message}`,
+    );
+  }
+
+  return { translations: results.flat(), usage };
 }
 
-export interface TranslationProgress {
-  totalChunks: number;
-  completedChunks: number;
-  currentProgress: number; // 0 to 100
-}
+async function translateChunk(
+  chunk: string[],
+  gaps: number[],
+  apiKey: string,
+  customDict: DictionaryEntry[],
+  useDefaultDict: boolean,
+  systemInstruction: string,
+) {
+  const prompt = buildTranslationPrompt(chunk, gaps, customDict, useDefaultDict);
+  const accumulatedUsage = emptyUsage();
+  let lastError: unknown;
 
-const getClient = (apiKey?: string) => {
-  // 사용자가 입력한 키를 우선적으로 사용
-  let key = apiKey?.trim();
-  let source = "User-provided Key";
-  
-  // 환경변수가 주입되지 않은 경우를 대비해 안전하게 체크
-  if (!key) {
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
     try {
-      key = (import.meta as any).env?.VITE_GEMINI_API_KEY || (process.env as any)?.GEMINI_API_KEY || (process.env as any)?.API_KEY;
-      source = "System Default Key";
-    } catch (e) {
-      // process.env가 정의되지 않은 경우 무시
+      const retryInstruction = attempt > 0 && lastError instanceof Error
+        ? `\n\nRETRY_CORRECTION:
+The previous response was rejected: ${lastError.message}
+Count the INPUT_JSON entries again and return exactly ${chunk.length} translated strings.
+Do not merge adjacent dialogue and do not add an explanation.`
+        : '';
+      accumulatedUsage.requestCount += 1;
+      const response = await requestGemini(
+        apiKey,
+        buildTranslationSystemInstruction(systemInstruction),
+        prompt + retryInstruction,
+        chunk.length,
+      );
+      mergeUsage(accumulatedUsage, response.usage);
+
+      let parsedTranslations: string[];
+      try {
+        parsedTranslations = parseIndexedTranslations(response.text, chunk.length);
+      } catch (error) {
+        const validationError = error instanceof Error
+          ? error as TranslationError
+          : new Error(String(error)) as TranslationError;
+        validationError.retryable = true;
+        validationError.splitRecoverable = true;
+        throw validationError;
+      }
+
+      return {
+        translations: validateTranslatedItems(chunk, parsedTranslations),
+        usage: accumulatedUsage,
+      };
+    } catch (error) {
+      lastError = error;
+      if (!isRetryable(error) || attempt === MAX_RETRIES - 1) break;
+      if ((error as TranslationError)?.splitRecoverable && chunk.length > 1) break;
+      await delayWithJitter(Math.min(2_000 * (2 ** attempt), 12_000));
     }
   }
 
-  if (!key) {
-    throw new Error("API Key가 설정되지 않았습니다. 우측 상단 [Key] 메뉴를 눌러 API Key를 입력해주세요.");
-  }
-  
-  console.log(`[Gemini] Using ${source} (${key.substring(0, 6)}...)`);
-  return new GoogleGenAI({ apiKey: key });
-};
+  const finalError = lastError instanceof Error
+    ? lastError as TranslationError
+    : new Error('Gemini 번역 요청에 실패했습니다.') as TranslationError;
+  finalError.usage = accumulatedUsage;
+  throw finalError;
+}
 
-const calculateCost = (input: number, output: number): number => {
-  const inputCost = (input / 1_000_000) * COST_PER_1M_INPUT_TOKENS;
-  const outputCost = (output / 1_000_000) * COST_PER_1M_OUTPUT_TOKENS;
-  return inputCost + outputCost;
-};
-
-const generateDictionaryPrompt = (customDict: DictionaryEntry[], useDefault: boolean): string => {
-  let terms: string[] = [];
-  
-  if (useDefault) {
-    terms = [...terms, ...DEFAULT_DICTIONARY.map(d => `${d.original} -> ${d.translated}`)];
-  }
-  
-  if (customDict.length > 0) {
-    terms = [...terms, ...customDict.map(d => `${d.original} -> ${d.translated}`)];
-  }
-
-  if (terms.length === 0) return "";
-
-  return `\nTERMINOLOGY RULES (Apply strictly):\n${terms.join('\n')}\n`;
-};
-
-// Helper for delays
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-export const translateSelection = async (
-  textToTranslate: string, 
-  customDict: DictionaryEntry[] = [], 
-  useDefaultDict: boolean = true,
-  systemInstruction: string = DEFAULT_SYSTEM_PROMPT,
-  apiKey?: string
-): Promise<TranslationResponseData> => {
+async function translateChunkResilient(
+  chunk: string[],
+  gaps: number[],
+  apiKey: string,
+  customDict: DictionaryEntry[],
+  useDefaultDict: boolean,
+  systemInstruction: string,
+  onRecoveredPartial?: (offset: number, translations: string[]) => void,
+  baseOffset = 0,
+  isRecoveryChild = false,
+): Promise<{ translations: string[]; usage: Usage }> {
   try {
-    const ai = getClient(apiKey);
-    const dictPrompt = generateDictionaryPrompt(customDict, useDefaultDict);
-    
-    // Upgraded to Gemini 3.0 Flash Preview
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: `${systemInstruction}
-      ${dictPrompt}
-      Text to translate: "${textToTranslate}"`,
-    });
+    const result = await translateChunk(
+      chunk,
+      gaps,
+      apiKey,
+      customDict,
+      useDefaultDict,
+      systemInstruction,
+    );
+    if (isRecoveryChild) onRecoveredPartial?.(baseOffset, result.translations);
+    return result;
+  } catch (error) {
+    const parentUsage = getErrorUsage(error);
+    const translationError = error as TranslationError;
+    if (!translationError.splitRecoverable || chunk.length <= 1) throw error;
 
-    const text = response.text?.trim() || textToTranslate;
-    
-    const inputTokens = response.usageMetadata?.promptTokenCount || 0;
-    const outputTokens = response.usageMetadata?.candidatesTokenCount || 0;
-    
-    return { 
-      text, 
+    const splitIndex = chooseRecoverySplitIndex(chunk.length, gaps);
+    const leftGaps = gaps.filter((gap) => gap < splitIndex);
+    const rightGaps = gaps
+      .filter((gap) => gap > splitIndex)
+      .map((gap) => gap - splitIndex);
+
+    let leftResult: { translations: string[]; usage: Usage };
+    try {
+      leftResult = await translateChunkResilient(
+        chunk.slice(0, splitIndex),
+        leftGaps,
+        apiKey,
+        customDict,
+        useDefaultDict,
+        systemInstruction,
+        onRecoveredPartial,
+        baseOffset,
+        true,
+      );
+    } catch (leftError) {
+      attachUsage(leftError, parentUsage);
+      throw leftError;
+    }
+
+    let rightResult: { translations: string[]; usage: Usage };
+    try {
+      rightResult = await translateChunkResilient(
+        chunk.slice(splitIndex),
+        rightGaps,
+        apiKey,
+        customDict,
+        useDefaultDict,
+        systemInstruction,
+        onRecoveredPartial,
+        baseOffset + splitIndex,
+        true,
+      );
+    } catch (rightError) {
+      attachUsage(rightError, parentUsage, leftResult.usage);
+      throw rightError;
+    }
+
+    return {
+      translations: [...leftResult.translations, ...rightResult.translations],
+      usage: sumUsage(parentUsage, leftResult.usage, rightResult.usage),
+    };
+  }
+}
+
+async function requestGemini(
+  apiKey: string,
+  systemInstruction: string,
+  userPrompt: string,
+  expectedCount: number,
+): Promise<{ text: string; usage: Usage }> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const startedAt = performance.now();
+
+  try {
+    const response = await fetch(GEMINI_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey,
+      },
+      body: JSON.stringify({
+        systemInstruction: {
+          parts: [{ text: systemInstruction }],
+        },
+        contents: [{
+          role: 'user',
+          parts: [{ text: userPrompt }],
+        }],
+        generationConfig: {
+          responseFormat: {
+            text: {
+              mimeType: 'application/json',
+              schema: {
+                type: 'array',
+                minItems: expectedCount,
+                maxItems: expectedCount,
+                items: { type: 'string' },
+              },
+            },
+          },
+        },
+      }),
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => ({})) as GeminiResponse;
+    if (!response.ok) throw createGeminiHttpError(response.status, payload);
+
+    const text = payload.candidates?.[0]?.content?.parts
+      ?.map((part) => part.text || '')
+      .join('')
+      .trim();
+    if (!text) {
+      const reason = payload.promptFeedback?.blockReason
+        || payload.candidates?.[0]?.finishReason
+        || '빈 응답';
+      const error = new Error(`Gemini가 번역을 반환하지 않았습니다 (${reason}).`) as TranslationError;
+      error.retryable = reason !== 'SAFETY';
+      throw error;
+    }
+
+    return {
+      text,
       usage: {
-        inputTokens,
-        outputTokens,
-        cost: calculateCost(inputTokens, outputTokens)
-      }
+        inputTokens: payload.usageMetadata?.promptTokenCount || 0,
+        outputTokens: payload.usageMetadata?.candidatesTokenCount || 0,
+        durationMs: Math.round(performance.now() - startedAt),
+        requestCount: 0,
+      },
     };
   } catch (error) {
-    console.error("Translation failed:", error);
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      const timeoutError = new Error(
+        'Gemini 응답 대기 시간이 초과되었습니다.',
+      ) as TranslationError;
+      timeoutError.retryable = true;
+      throw timeoutError;
+    }
     throw error;
+  } finally {
+    window.clearTimeout(timer);
   }
-};
+}
 
-export const translateBatch = async (
-  texts: (string | null)[],
-  customDict: DictionaryEntry[] = [], 
-  useDefaultDict: boolean = true,
-  systemInstruction: string = DEFAULT_SYSTEM_PROMPT,
-  apiKey?: string,
-  onProgress?: (progress: TranslationProgress) => void,
-  onPartialResult?: (translations: string[], usage: ApiUsageStats) => void
-): Promise<BatchTranslationResult> => {
-  const nonNullTexts = texts.filter((t): t is string => t !== null);
-  if (nonNullTexts.length === 0) return { translations: [], usage: { inputTokens: 0, outputTokens: 0, requestCount: 0, cost: 0 } };
-  
-  const ai = getClient(apiKey);
-  const dictPrompt = generateDictionaryPrompt(customDict, useDefaultDict);
-
-  const SOFT_CHARS_LIMIT = 8000;
-  const HARD_CHARS_LIMIT = 12000;
-  const SOFT_ITEMS_LIMIT = 400;
-  const HARD_ITEMS_LIMIT = 600;
-
-  const chunks: string[][] = [];
-  const chunkGaps: number[][] = []; // 각 청크 내에서 큰 공백(null) 직후에 오는 텍스트의 인덱스를 기록
-  let currentChunk: string[] = [];
-  let currentGaps: number[] = [];
-  let currentChunkLength = 0;
-  let hasPendingGap = false;
-
-  for (const text of texts) {
-    if (text === null) {
-      hasPendingGap = true;
-      // SOFT LIMIT: 8000자 혹은 400개 이상 쌓였을 때 공백을 만나면 끊어줌
-      if (currentChunkLength >= SOFT_CHARS_LIMIT || currentChunk.length >= SOFT_ITEMS_LIMIT) {
-        chunks.push(currentChunk);
-        chunkGaps.push(currentGaps);
-        currentChunk = [];
-        currentGaps = [];
-        currentChunkLength = 0;
-        hasPendingGap = false;
-      }
-      continue;
-    }
-
-    if (hasPendingGap && currentChunk.length > 0) {
-      currentGaps.push(currentChunk.length);
-      hasPendingGap = false;
-    }
-
-    const textLen = text.length;
-
-    // HARD LIMIT: 12000자 혹은 600개 항목을 넘으면 강제로 끊어줌
-    if (currentChunk.length > 0 && 
-       (currentChunkLength + textLen > HARD_CHARS_LIMIT || currentChunk.length >= HARD_ITEMS_LIMIT)) {
-      chunks.push(currentChunk);
-      chunkGaps.push(currentGaps);
-      currentChunk = [];
-      currentGaps = [];
-      currentChunkLength = 0;
-    }
-
-    currentChunk.push(text);
-    currentChunkLength += textLen;
+function createGeminiHttpError(status: number, payload: GeminiResponse) {
+  const serverMessage = payload.error?.message?.trim();
+  let message = serverMessage || `Gemini 요청 실패 (HTTP ${status})`;
+  if (status === 400 || status === 401 || status === 403) {
+    message = `Gemini API 키 또는 프로젝트 권한을 확인하세요. ${message}`;
+  } else if (status === 429) {
+    message = `Gemini 요청 한도에 도달했습니다. 잠시 후 다시 시도하세요. ${message}`;
   }
+  const error = new Error(message) as TranslationError;
+  error.retryable = status === 408 || status === 429 || status >= 500;
+  return error;
+}
 
-  if (currentChunk.length > 0) {
-    chunks.push(currentChunk);
-    chunkGaps.push(currentGaps);
+function assertApiKey(apiKey: string) {
+  if (!hasGeminiApiKey(apiKey)) {
+    throw new Error('Gemini 모드를 사용하려면 설정에서 API 키를 입력하세요.');
   }
+}
 
-  const totalChunks = chunks.length;
-  let completedChunks = 0;
-  let totalInput = 0;
-  let totalOutput = 0;
-  let requestCount = 0;
+function isRetryable(error: unknown) {
+  return Boolean((error as TranslationError)?.retryable)
+    || (error instanceof TypeError && error.message.toLowerCase().includes('fetch'));
+}
 
-  // Initialize results array with original texts (as fallback)
-  const results: string[][] = chunks.map(chunk => [...chunk]);
-
-  // Helper to process a single chunk
-  const processChunk = async (chunk: string[], index: number) => {
-    let attempts = 0;
-    const maxRetries = 3;
-    let success = false;
-    let chunkResult: string[] = [];
-    const gaps = chunkGaps[index];
-
-    while (!success && attempts < maxRetries) {
-      try {
-        if (attempts > 0) {
-          const waitTime = 2000 * Math.pow(2, attempts); 
-          await delay(waitTime);
-        }
-
-        // 청크 내부에 스레드 헤더가 있는지 확인하여 프롬프트에 힌트 제공
-        const threadHeaders = chunk
-          .map((t, i) => /^\d{4}\s*：\s*◆/.test(t) ? i : -1)
-          .filter(i => i !== -1);
-
-        const threadHint = threadHeaders.length > 0 
-          ? `\nNOTE: This chunk contains multiple posts. Thread headers are at indices: ${threadHeaders.join(', ')}. Treat each post as a separate context.\n`
-          : "";
-
-        const gapHint = gaps.length > 0
-          ? `\nNOTE: There are large physical gaps (empty lines/images) in the original document immediately BEFORE the following indices: ${gaps.join(', ')}. Text before and after these gaps are physically distant.\n`
-          : "";
-
-        const response = await ai.models.generateContent({
-          model: 'gemini-3-flash-preview', // 사용자의 요청에 따라 최신 3.0 Flash Preview 모델로 변경
-          contents: `${systemInstruction}
-          
-          TECHNICAL CONSTRAINT: Output MUST be a valid JSON object where keys are the exact indices (0, 1, 2...) of the input array.
-          CRITICAL: You MUST provide a key for EVERY index from 0 to ${chunk.length - 1}.
-          ${threadHint}${gapHint}
-          
-          STRICT 1:1 MAPPING RULE (NO MERGING):
-          1. Translate each item strictly in its own index. 
-          2. DO NOT merge consecutive items into the first index. Each index must stand on its own.
-          3. DO NOT try to match the "fragmented" style of the source. For example, translate vertical Japanese characters into natural Korean syllables, not broken characters.
-          4. You may output an empty string ("") ONLY IF the fragment is redundant or has no meaning.
-          
-          ${dictPrompt}
-          Input Array: ${JSON.stringify(chunk)}`,
-          config: {
-            temperature: 0.1, 
-            responseMimeType: "application/json",
-          }
-        });
-
-        const rawText = response.text?.trim();
-        const jsonStr = rawText?.replace(/```json|```/g, '').trim();
-
-        if (!jsonStr) throw new Error("Empty response from AI");
-
-        let parsed;
-        try {
-          parsed = JSON.parse(jsonStr);
-        } catch (e) {
-          throw new Error("Invalid JSON response");
-        }
-
-        // 인덱스 기반 매핑으로 배열 재구성 (개수 불일치 문제 해결)
-        chunkResult = new Array(chunk.length).fill("");
-        
-        if (Array.isArray(parsed)) {
-          // 배열로 왔을 경우 기존 방식대로 매핑 (최대한 살림)
-          for (let i = 0; i < Math.min(parsed.length, chunk.length); i++) {
-            chunkResult[i] = String(parsed[i]);
-          }
-        } else if (typeof parsed === 'object' && parsed !== null) {
-          // 객체로 왔을 경우 인덱스에 맞춰 매핑
-          for (let i = 0; i < chunk.length; i++) {
-            if (parsed[i] !== undefined) {
-              chunkResult[i] = String(parsed[i]);
-            } else if (parsed[String(i)] !== undefined) {
-              chunkResult[i] = String(parsed[String(i)]);
-            }
-          }
-        } else {
-          throw new Error("Response is not an array or object");
-        }
-
-        success = true;
-        results[index] = chunkResult;
-
-        // Report partial result
-        if (onPartialResult) {
-          const allCurrentTranslations = results.flat();
-          onPartialResult(allCurrentTranslations, {
-            requestCount,
-            inputTokens: totalInput,
-            outputTokens: totalOutput,
-            totalCost: calculateCost(totalInput, totalOutput)
-          });
-        }
-
-      } catch (error: any) {
-        attempts++;
-        console.warn(`Chunk ${index + 1} failed:`, error.message);
-        if (error.status === 429 || (error.response && error.response.status === 429)) {
-          await delay(5000 * attempts); 
-        }
-      }
-    }
-
-    completedChunks++;
-    if (onProgress) {
-      onProgress({
-        totalChunks,
-        completedChunks,
-        currentProgress: Math.round((completedChunks / totalChunks) * 100)
-      });
-    }
+function emptyUsage(): Usage {
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    durationMs: 0,
+    requestCount: 0,
   };
+}
 
-  // ------------------------------------------------------------------------
-  // [무료 티어 안전 모드]
-  // Google Gemini API 무료 티어는 1분에 최대 15회 요청(15 RPM)으로 제한됩니다.
-  // 이를 초과하지 않기 위해 한 번에 1개씩, 4초 간격으로 요청을 보냅니다.
-  // (유료 티어 사용 시 이 제한을 풀고 CONCURRENCY_LIMIT을 높일 수 있습니다)
-  // ------------------------------------------------------------------------
-  const CONCURRENCY_LIMIT = 1; 
-  const START_DELAY_MS = 4000; 
-  
-  for (let i = 0; i < chunks.length; i += CONCURRENCY_LIMIT) {
-    const batch = chunks.slice(i, i + CONCURRENCY_LIMIT);
-    const promises = batch.map(async (chunk, batchIndex) => {
-      const globalIndex = i + batchIndex;
-      await delay(batchIndex * START_DELAY_MS);
-      return processChunk(chunk, globalIndex);
-    });
-    
-    await Promise.all(promises);
-    
-    if (i + CONCURRENCY_LIMIT < chunks.length) {
-      await delay(START_DELAY_MS);
-    }
-  }
+function getErrorUsage(error: unknown): Usage {
+  const usage = (error as TranslationError)?.usage;
+  return usage ? { ...usage } : emptyUsage();
+}
 
-  const finalTranslations = results.flat();
+function sumUsage(...items: Usage[]): Usage {
+  return items.reduce((total, item) => {
+    mergeUsage(total, item);
+    return total;
+  }, emptyUsage());
+}
 
-  return { 
-    translations: finalTranslations, 
-    usage: {
-      inputTokens: totalInput,
-      outputTokens: totalOutput,
-      requestCount,
-      cost: calculateCost(totalInput, totalOutput)
-    }
-  };
-};
+function mergeUsage(target: Usage, item: Usage) {
+  target.inputTokens += item.inputTokens;
+  target.outputTokens += item.outputTokens;
+  target.durationMs += item.durationMs;
+  target.requestCount += item.requestCount;
+}
+
+function attachUsage(error: unknown, ...items: Usage[]) {
+  if (!(error instanceof Error)) return;
+  const translationError = error as TranslationError;
+  translationError.usage = sumUsage(...items, getErrorUsage(error));
+}
+
+function delayWithJitter(milliseconds: number) {
+  const jitter = Math.floor(Math.random() * 400);
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds + jitter));
+}

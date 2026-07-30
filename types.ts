@@ -28,6 +28,10 @@ export interface TextSegment {
   isContextDialogue?: boolean;
   isArrowBox?: boolean;
   isVerticalBox?: boolean;
+  isVerticalText?: boolean;
+  isManualSelection?: boolean;
+  verticalGroupId?: string;
+  verticalOrder?: number;
   isIndentedDialogue?: boolean;
   isIsolatedDialogue?: boolean;
   isAutoSelectExcluded?: boolean;
@@ -41,11 +45,21 @@ export interface ApiUsageStats {
   requestCount: number;
   inputTokens: number;
   outputTokens: number;
-  totalCost: number;
+  totalDurationMs: number;
 }
 
 export interface DictionaryEntry {
   id: string;
   original: string;
   translated: string;
+}
+
+export type TranslationProvider = 'ollama' | 'gemini';
+
+export interface OllamaRuntimeInfo {
+  ok: boolean;
+  modelAvailable: boolean;
+  model: string;
+  mode: 'local-proxy' | 'direct-cloud';
+  message: string;
 }

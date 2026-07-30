@@ -2,7 +2,7 @@
 import React, { useState, useRef } from 'react';
 import { X, Book, Plus, Trash2, Save, Upload, Download } from 'lucide-react';
 import { DictionaryEntry } from '../types';
-import { DEFAULT_DICTIONARY } from '../services/geminiService';
+import { DEFAULT_DICTIONARY } from '../services/ollamaService';
 
 interface DictionaryModalProps {
   isOpen: boolean;

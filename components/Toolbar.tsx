@@ -19,6 +19,8 @@ interface ToolbarProps {
 
   isDragMode?: boolean;
   onToggleDragMode?: () => void;
+  isManualSelectMode?: boolean;
+  onToggleManualSelectMode?: () => void;
 }
 
 export const Toolbar: React.FC<ToolbarProps> = ({ 
@@ -34,7 +36,9 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   smartSelectionCount,
   onSmartTranslate,
   isDragMode,
-  onToggleDragMode
+  onToggleDragMode,
+  isManualSelectMode,
+  onToggleManualSelectMode,
 }) => {
   
   return (
@@ -118,6 +122,18 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                     <MousePointer2 className="w-4 h-4" />
                     드래그
                 </button>
+                <button
+                    onClick={onToggleManualSelectMode}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
+                      isManualSelectMode
+                        ? 'bg-orange-600 text-white hover:bg-orange-500'
+                        : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                    }`}
+                    title="자동 감지에서 누락된 실제 문자 범위를 직접 선택"
+                >
+                    <Type className="w-4 h-4" />
+                    수동
+                </button>
 
                 {smartSelectionCount > 0 && (
                     <>
@@ -152,8 +168,9 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                         </button>
                     </>
                 )}
-                {smartSelectionCount === 0 && !isDragMode && <span className="text-slate-500 text-sm px-4">클릭하여 선택</span>}
-                {smartSelectionCount === 0 && isDragMode && <span className="text-purple-300 text-sm px-4 animate-pulse">드래그하여 선택...</span>}
+                {smartSelectionCount === 0 && !isDragMode && !isManualSelectMode && <span className="text-slate-500 text-sm px-4">클릭하여 선택</span>}
+                {smartSelectionCount === 0 && isDragMode && <span className="text-purple-300 text-sm px-4 animate-pulse">영역을 드래그하여 선택...</span>}
+                {smartSelectionCount === 0 && isManualSelectMode && <span className="text-orange-300 text-sm px-4 animate-pulse">누락된 문자를 드래그하세요...</span>}
             </>
         )}
 

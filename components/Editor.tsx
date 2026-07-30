@@ -1,6 +1,11 @@
 import React, { useState, useRef, useEffect, startTransition } from 'react';
 import { SelectionRange, TextSegment, ViewMode } from '../types';
 import SegmentationWorker from '../workers/segmentation.worker?worker';
+import { annotateVerticalTextSegments } from '../services/verticalText';
+import {
+  applyManualSelectionRanges,
+  ManualSelectionRange,
+} from '../services/manualSelection';
 
 interface EditorProps {
   content: string;
@@ -11,6 +16,7 @@ interface EditorProps {
   segments: TextSegment[];
   onSegmentsChange: (segments: TextSegment[]) => void;
   isDragMode?: boolean;
+  isManualSelectMode?: boolean;
 }
 
 export const Editor: React.FC<EditorProps> = ({ 
@@ -21,7 +27,8 @@ export const Editor: React.FC<EditorProps> = ({
   viewMode,
   segments,
   onSegmentsChange,
-  isDragMode = false
+  isDragMode = false,
+  isManualSelectMode = false,
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -45,6 +52,7 @@ export const Editor: React.FC<EditorProps> = ({
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
   const [dragCurrent, setDragCurrent] = useState<{ x: number; y: number } | null>(null);
+  const manualAnchorRef = useRef<{ node: Node; offset: number } | null>(null);
 
   // --- Raw Mode Logic ---
   const handleSelect = () => {
@@ -87,7 +95,7 @@ export const Editor: React.FC<EditorProps> = ({
           // Use startTransition so React can yield to the browser between renders,
           // preventing the UI (and other Chrome tabs) from freezing on large files.
           startTransition(() => {
-            onSegmentsChangeRef.current(e.data.segments);
+            onSegmentsChangeRef.current(annotateVerticalTextSegments(content, e.data.segments));
           });
         }
       };
@@ -102,11 +110,72 @@ export const Editor: React.FC<EditorProps> = ({
   }, [content, viewMode, segments.length]);
 
   const toggleSegmentSelection = (id: string) => {
-    const newSegments = segments.map(s => 
-      s.id === id ? { ...s, isSelected: !s.isSelected } : s
-    );
+    const target = segments.find((segment) => segment.id === id);
+    if (!target) return;
+    const nextSelected = !target.isSelected;
+    const newSegments = segments.map((segment) => {
+      if (target.verticalGroupId && segment.verticalGroupId === target.verticalGroupId) {
+        return { ...segment, isSelected: nextSelected };
+      }
+      return segment.id === id ? { ...segment, isSelected: nextSelected } : segment;
+    });
     onSegmentsChange(newSegments);
     onSelectionChange(null); 
+  };
+
+  const captureManualTextSelection = () => {
+    if (!isManualSelectMode || viewMode !== 'smart') return;
+    const container = containerRef.current;
+    const browserSelection = window.getSelection();
+    if (
+      !container
+      || !browserSelection
+      || browserSelection.rangeCount === 0
+      || browserSelection.isCollapsed
+    ) return;
+
+    const range = browserSelection.getRangeAt(0);
+    const startElement = findSegmentElement(range.startContainer);
+    const endElement = findSegmentElement(range.endContainer);
+    if (
+      !startElement
+      || !endElement
+      || !container.contains(startElement)
+      || !container.contains(endElement)
+    ) return;
+
+    const startId = startElement.dataset.segmentId;
+    const endId = endElement.dataset.segmentId;
+    const startIndex = segments.findIndex(({ id }) => id === startId);
+    const endIndex = segments.findIndex(({ id }) => id === endId);
+    if (startIndex < 0 || endIndex < startIndex) return;
+
+    const startOffset = textOffsetWithin(
+      startElement,
+      range.startContainer,
+      range.startOffset,
+    );
+    const endOffset = textOffsetWithin(
+      endElement,
+      range.endContainer,
+      range.endOffset,
+    );
+    const manualRanges: ManualSelectionRange[] = [];
+    for (let index = startIndex; index <= endIndex; index += 1) {
+      const segment = segments[index];
+      manualRanges.push({
+        segmentId: segment.id,
+        start: index === startIndex ? startOffset : 0,
+        end: index === endIndex ? endOffset : segment.text.length,
+      });
+    }
+
+    const nextSegments = applyManualSelectionRanges(segments, manualRanges);
+    if (nextSegments !== segments) {
+      onSegmentsChange(nextSegments);
+      onSelectionChange(null);
+    }
+    browserSelection.removeAllRanges();
   };
 
   const handleWheel = (e: React.WheelEvent) => {
@@ -118,7 +187,23 @@ export const Editor: React.FC<EditorProps> = ({
 
   // --- Pointer Events for Robust Dragging ---
   const handlePointerDown = (e: React.PointerEvent) => {
-    if (!isDragMode || viewMode !== 'smart' || !e.isPrimary || e.button !== 0) return;
+    if (viewMode !== 'smart' || !e.isPrimary || e.button !== 0) return;
+    if (isManualSelectMode) {
+      const caret = caretAtPoint(e.clientX, e.clientY);
+      const container = containerRef.current;
+      if (!caret || !container || !findSegmentElement(caret.node)) return;
+      e.preventDefault();
+      container.setPointerCapture(e.pointerId);
+      manualAnchorRef.current = caret;
+      window.getSelection()?.setBaseAndExtent(
+        caret.node,
+        caret.offset,
+        caret.node,
+        caret.offset,
+      );
+      return;
+    }
+    if (!isDragMode) return;
     
     // Prevent default browser actions (text selection etc)
     e.preventDefault();
@@ -139,6 +224,18 @@ export const Editor: React.FC<EditorProps> = ({
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
+    if (isManualSelectMode && manualAnchorRef.current) {
+      const caret = caretAtPoint(e.clientX, e.clientY);
+      if (!caret || !findSegmentElement(caret.node)) return;
+      e.preventDefault();
+      window.getSelection()?.setBaseAndExtent(
+        manualAnchorRef.current.node,
+        manualAnchorRef.current.offset,
+        caret.node,
+        caret.offset,
+      );
+      return;
+    }
     if (!isDragging || !dragStart) return;
     
     const container = containerRef.current;
@@ -152,6 +249,24 @@ export const Editor: React.FC<EditorProps> = ({
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
+    if (isManualSelectMode && manualAnchorRef.current) {
+      const container = containerRef.current;
+      const caret = caretAtPoint(e.clientX, e.clientY);
+      if (caret && findSegmentElement(caret.node)) {
+        window.getSelection()?.setBaseAndExtent(
+          manualAnchorRef.current.node,
+          manualAnchorRef.current.offset,
+          caret.node,
+          caret.offset,
+        );
+        captureManualTextSelection();
+      }
+      manualAnchorRef.current = null;
+      if (container?.hasPointerCapture(e.pointerId)) {
+        container.releasePointerCapture(e.pointerId);
+      }
+      return;
+    }
     if (!isDragging || !dragStart || !dragCurrent) {
         if (isDragging) {
            // Cleanup if weird state
@@ -187,7 +302,7 @@ export const Editor: React.FC<EditorProps> = ({
         }
     } else {
         // Find intersecting segments
-        const newSegments = segments.map(seg => {
+        const intersectedSegments = segments.map(seg => {
           if (!seg.isJapanese) return seg;
 
           const el = document.getElementById(seg.id);
@@ -210,6 +325,16 @@ export const Editor: React.FC<EditorProps> = ({
           }
           return seg;
         });
+        const selectedVerticalGroups = new Set(
+          intersectedSegments
+            .filter((segment) => segment.isSelected && segment.verticalGroupId)
+            .map((segment) => segment.verticalGroupId),
+        );
+        const newSegments = intersectedSegments.map((segment) => (
+          segment.verticalGroupId && selectedVerticalGroups.has(segment.verticalGroupId)
+            ? { ...segment, isSelected: true }
+            : segment
+        ));
         onSegmentsChange(newSegments);
     }
 
@@ -275,7 +400,9 @@ export const Editor: React.FC<EditorProps> = ({
       ) : (
         <div 
           ref={containerRef}
-          className={`w-full h-full bg-[#1a1b26] text-[#a9b1d6] p-4 overflow-auto whitespace-pre font-aa leading-tight select-none relative ${isDragMode ? 'cursor-crosshair' : ''} touch-none`}
+          className={`w-full h-full bg-[#1a1b26] text-[#a9b1d6] p-4 overflow-auto whitespace-pre font-aa leading-tight relative ${
+            isManualSelectMode ? 'select-text cursor-text' : 'select-none'
+          } ${isDragMode ? 'cursor-crosshair touch-none' : ''}`}
           style={{ fontSize: `${fontSize}px` }}
           onWheel={handleWheel}
           onPointerDown={handlePointerDown}
@@ -288,7 +415,9 @@ export const Editor: React.FC<EditorProps> = ({
                  <span
                    key={seg.id}
                    id={seg.id}
+                   data-segment-id={seg.id}
                    onClick={(e) => {
+                     if (isManualSelectMode) return;
                      e.stopPropagation();
                      toggleSegmentSelection(seg.id);
                    }}
@@ -296,10 +425,16 @@ export const Editor: React.FC<EditorProps> = ({
                      rounded px-0.5 transition-colors duration-75 inline-block
                      ${!isDragMode && 'cursor-pointer'}
                      ${seg.isSelected 
-                        ? 'bg-blue-600 text-white shadow-[0_0_10px_rgba(37,99,235,0.5)]' 
+                        ? seg.isVerticalText
+                          ? 'bg-purple-600 text-white shadow-[0_0_10px_rgba(147,51,234,0.5)]'
+                          : seg.isManualSelection
+                            ? 'bg-orange-600 text-white shadow-[0_0_10px_rgba(234,88,12,0.45)]'
+                          : 'bg-blue-600 text-white shadow-[0_0_10px_rgba(37,99,235,0.5)]'
                         : seg.isTranslated 
                             ? 'text-green-400 hover:bg-slate-800' 
-                            : 'text-yellow-100 hover:bg-slate-700'
+                            : seg.isVerticalText
+                              ? 'text-purple-200 hover:bg-purple-900/30'
+                              : 'text-yellow-100 hover:bg-slate-700'
                      }
                      ${!seg.isTranslated && !seg.isSelected && 'underline decoration-slate-600/50 decoration-dotted'}
                    `}
@@ -308,7 +443,17 @@ export const Editor: React.FC<EditorProps> = ({
                  </span>
                );
              }
-             return <span key={seg.id} className="opacity-70 pointer-events-none">{seg.text}</span>;
+             return (
+               <span
+                 key={seg.id}
+                 data-segment-id={seg.id}
+                 className={isManualSelectMode
+                   ? 'opacity-90 cursor-text'
+                   : 'opacity-70 pointer-events-none'}
+               >
+                 {seg.text}
+               </span>
+             );
            })}
 
            {/* Selection Box Overlay */}
@@ -328,3 +473,34 @@ export const Editor: React.FC<EditorProps> = ({
     </div>
   );
 };
+
+function findSegmentElement(node: Node): HTMLElement | null {
+  const element = node instanceof HTMLElement ? node : node.parentElement;
+  return element?.closest<HTMLElement>('[data-segment-id]') || null;
+}
+
+function textOffsetWithin(element: HTMLElement, node: Node, offset: number): number {
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  try {
+    range.setEnd(node, offset);
+    return Math.max(0, Math.min(range.toString().length, element.textContent?.length || 0));
+  } catch {
+    return 0;
+  }
+}
+
+function caretAtPoint(x: number, y: number): { node: Node; offset: number } | null {
+  const caretPosition = document.caretPositionFromPoint?.(x, y);
+  if (caretPosition) {
+    return { node: caretPosition.offsetNode, offset: caretPosition.offset };
+  }
+
+  const legacyDocument = document as Document & {
+    caretRangeFromPoint?: (clientX: number, clientY: number) => Range | null;
+  };
+  const range = legacyDocument.caretRangeFromPoint?.(x, y);
+  return range
+    ? { node: range.startContainer, offset: range.startOffset }
+    : null;
+}

@@ -8,10 +8,49 @@ import { UsageStats } from './components/UsageStats';
 import { ChangelogModal } from './components/ChangelogModal';
 import { DictionaryModal } from './components/DictionaryModal';
 import { PromptModal } from './components/PromptModal';
-import { ApiKeyModal } from './components/ApiKeyModal';
-import { SelectionRange, ViewMode, TextSegment, ApiUsageStats, DictionaryEntry } from './types';
-import { translateSelection, translateBatch, DEFAULT_SYSTEM_PROMPT } from './services/geminiService';
-import { FileText, Info, Activity, Download, Coins, History, Book, MessageSquareQuote, Key, CheckSquare } from 'lucide-react';
+import { TranslationSettingsModal } from './components/TranslationSettingsModal';
+import {
+  SelectionRange,
+  ViewMode,
+  TextSegment,
+  ApiUsageStats,
+  DictionaryEntry,
+  OllamaRuntimeInfo,
+  TranslationProvider,
+} from './types';
+import {
+  GEMINI_SESSION_KEY,
+  getProviderModelLabel,
+  isProviderReady,
+  normalizeTranslationProvider,
+  TRANSLATION_PROVIDER_STORAGE_KEY,
+  translateSelection,
+  translateBatch,
+  getOllamaRuntimeInfo,
+  resolveStoredSystemPrompt,
+} from './services/translationService';
+import {
+  applyVerticalTranslations,
+  detectVerticalTextGroups,
+  fitTranslationToDisplayWidth,
+  makeVerticalTranslationRequest,
+  VerticalTextGroup,
+} from './services/verticalText';
+import { FileText, Info, Activity, Download, Timer, History, Book, MessageSquareQuote, Server, CheckSquare } from 'lucide-react';
+
+type SmartTranslationUnit =
+  | {
+      kind: 'normal';
+      segmentId: string;
+      sourceText: string;
+      requestText: string;
+    }
+  | {
+      kind: 'vertical';
+      group: VerticalTextGroup;
+      sourceText: string;
+      requestText: string;
+    };
 
 function App() {
   const [content, setContent] = useState<string>("");
@@ -19,6 +58,7 @@ function App() {
   
   const [viewMode, setViewMode] = useState<ViewMode>('smart');
   const [isDragMode, setIsDragMode] = useState(false); // New Drag Mode State
+  const [isManualSelectMode, setIsManualSelectMode] = useState(false);
   const [selection, setSelection] = useState<SelectionRange | null>(null);
   const [segments, setSegments] = useState<TextSegment[]>([]);
   
@@ -29,53 +69,79 @@ function App() {
   const [isChangelogOpen, setIsChangelogOpen] = useState(false);
   const [isDictOpen, setIsDictOpen] = useState(false);
   const [isPromptOpen, setIsPromptOpen] = useState(false);
-  const [isApiKeyOpen, setIsApiKeyOpen] = useState(false);
+  const [isTranslationSettingsOpen, setIsTranslationSettingsOpen] = useState(false);
+  const [ollamaStatus, setOllamaStatus] = useState<OllamaRuntimeInfo | null>(null);
+  const [isCheckingOllama, setIsCheckingOllama] = useState(true);
+  const [translationProvider, setTranslationProvider] = useState<TranslationProvider>(
+    () => normalizeTranslationProvider(localStorage.getItem(TRANSLATION_PROVIDER_STORAGE_KEY)),
+  );
+  const [geminiApiKey, setGeminiApiKey] = useState(
+    () => sessionStorage.getItem(GEMINI_SESSION_KEY) || '',
+  );
   
   const [history, setHistory] = useState<{ prevContent: string; prevSegments: TextSegment[] } | null>(null);
   const [lastTranslated, setLastTranslated] = useState<{ original: string; translated: string } | null>(null);
   
-  // API Key State
-  const [apiKey, setApiKey] = useState<string>(() => {
-    return localStorage.getItem('aat_api_key') || "";
-  });
+  const refreshOllamaStatus = async () => {
+    setIsCheckingOllama(true);
+    const status = await getOllamaRuntimeInfo();
+    setOllamaStatus(status);
+    setIsCheckingOllama(false);
+  };
 
   useEffect(() => {
-    if (apiKey) {
-      localStorage.setItem('aat_api_key', apiKey);
-    } else {
-      localStorage.removeItem('aat_api_key');
-    }
-  }, [apiKey]);
-
-  // 최초 실행 시 API Key가 없으면 자동으로 설정 모달을 띄움
-  useEffect(() => {
-    if (!apiKey) {
-      setIsApiKeyOpen(true);
-    }
+    void refreshOllamaStatus();
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem(TRANSLATION_PROVIDER_STORAGE_KEY, translationProvider);
+  }, [translationProvider]);
+
+  useEffect(() => {
+    if (geminiApiKey) sessionStorage.setItem(GEMINI_SESSION_KEY, geminiApiKey);
+    else sessionStorage.removeItem(GEMINI_SESSION_KEY);
+  }, [geminiApiKey]);
   
   // Dictionary State with Persistence
   const [customDictionary, setCustomDictionary] = useState<DictionaryEntry[]>(() => {
     const saved = localStorage.getItem('aat_custom_dict');
-    return saved ? JSON.parse(saved) : [];
+    if (!saved) return [];
+    try {
+      const parsed = JSON.parse(saved);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
   });
   
-  const [useDefaultDictionary, setUseDefaultDictionary] = useState(true);
+  const [useDefaultDictionary, setUseDefaultDictionary] = useState(
+    () => localStorage.getItem('aat_use_default_dict') !== 'false',
+  );
 
   // Persist Dictionary
   useEffect(() => {
     localStorage.setItem('aat_custom_dict', JSON.stringify(customDictionary));
   }, [customDictionary]);
 
+  useEffect(() => {
+    localStorage.setItem('aat_use_default_dict', String(useDefaultDictionary));
+  }, [useDefaultDictionary]);
+
   // Prompt State
-  const [systemPrompt, setSystemPrompt] = useState<string>(DEFAULT_SYSTEM_PROMPT);
+  const [systemPrompt, setSystemPrompt] = useState<string>(
+    () => resolveStoredSystemPrompt(localStorage.getItem('aat_system_prompt')),
+  );
+
+  useEffect(() => {
+    localStorage.setItem('aat_system_prompt', systemPrompt);
+  }, [systemPrompt]);
 
   // Stats State
   const [apiStats, setApiStats] = useState<ApiUsageStats>({
     requestCount: 0,
     inputTokens: 0,
     outputTokens: 0,
-    totalCost: 0
+    totalDurationMs: 0
   });
 
   const handleFileLoaded = (newContent: string, name: string) => {
@@ -87,14 +153,15 @@ function App() {
     // 내용이 비어있으면 자동으로 편집(raw) 모드로 전환
     setViewMode(newContent.trim() === "" ? 'raw' : 'smart');
     setIsDragMode(false);
+    setIsManualSelectMode(false);
   };
 
-  const updateStats = (usage: { inputTokens: number; outputTokens: number; cost: number; requestCount?: number }) => {
+  const updateStats = (usage: { inputTokens: number; outputTokens: number; durationMs: number; requestCount?: number }) => {
     setApiStats(prev => ({
       requestCount: prev.requestCount + (usage.requestCount || 1),
       inputTokens: prev.inputTokens + usage.inputTokens,
       outputTokens: prev.outputTokens + usage.outputTokens,
-      totalCost: prev.totalCost + usage.cost
+      totalDurationMs: prev.totalDurationMs + usage.durationMs
     }));
   };
 
@@ -126,17 +193,31 @@ function App() {
 
   const handleRawTranslate = async () => {
     if (!selection) return;
+    if (!isProviderReady(
+      translationProvider,
+      geminiApiKey,
+      Boolean(ollamaStatus?.ok && ollamaStatus.modelAvailable),
+    )) {
+      setIsTranslationSettingsOpen(true);
+      alert(
+        translationProvider === 'gemini'
+          ? 'Gemini API 키를 입력한 뒤 번역을 시작하세요.'
+          : 'Ollama 연결과 모델 준비 상태를 먼저 확인하세요.',
+      );
+      return;
+    }
 
     setIsTranslating(true);
     setHistory({ prevContent: content, prevSegments: [] });
 
     try {
       const { text: translatedText, usage } = await translateSelection(
+          translationProvider,
+          geminiApiKey,
           selection.text, 
           customDictionary, 
           useDefaultDictionary,
-          systemPrompt,
-          apiKey
+          systemPrompt
       );
       
       const isUnchanged = translatedText.trim() === selection.text.trim();
@@ -171,68 +252,162 @@ function App() {
   const handleSmartTranslate = async () => {
     const selectedSegments = segments.filter(s => s.isSelected);
     if (selectedSegments.length === 0) return;
+    if (!isProviderReady(
+      translationProvider,
+      geminiApiKey,
+      Boolean(ollamaStatus?.ok && ollamaStatus.modelAvailable),
+    )) {
+      setIsTranslationSettingsOpen(true);
+      alert(
+        translationProvider === 'gemini'
+          ? 'Gemini API 키를 입력한 뒤 번역을 시작하세요.'
+          : 'Ollama 연결과 모델 준비 상태를 먼저 확인하세요.',
+      );
+      return;
+    }
 
     setIsTranslating(true);
     setTranslationProgress({ current: 0, total: 1, percent: 0 });
     setHistory({ prevContent: content, prevSegments: [...segments] });
+    const statsBeforeBatch = apiStats;
 
     try {
-      const textsToTranslate: (string | null)[] = [];
-      let lastSelectedIndex = -1;
-      
-      segments.forEach((s, idx) => {
-        if (s.isSelected) {
-          // 선택된 세그먼트 사이에 큰 공백(5개 이상의 세그먼트 혹은 빈 줄)이 있으면 끊어줌
-          if (lastSelectedIndex !== -1) {
-            const gapSegments = segments.slice(lastSelectedIndex + 1, idx);
-            // 줄바꿈(newline)이 3개 이상 포함되어 있거나, 아주 큰 세그먼트 차이가 나면 끊어줌
-            const newlineCount = gapSegments.reduce((acc, gs) => acc + (gs.text.split('\n').length - 1), 0);
-            const hasLargeGap = newlineCount >= 3 || gapSegments.length > 20;
-            
-            if (hasLargeGap) {
-              textsToTranslate.push(null);
-            }
-          }
-          textsToTranslate.push(s.text);
-          lastSelectedIndex = idx;
-        }
+      const verticalGroups = detectVerticalTextGroups(content, segments);
+      const verticalGroupBySegmentId = new Map<string, VerticalTextGroup>();
+      verticalGroups.forEach((group) => {
+        group.segmentIds.forEach((segmentId) => verticalGroupBySegmentId.set(segmentId, group));
       });
-      
-      const updateSegmentsWithPartial = (translatedTexts: string[]) => {
-        // 성능 최적화: ID 기반 Map을 생성하여 O(1) 조회가 가능하게 함
-        const translationMap = new Map();
-        selectedSegments.forEach((sel, i) => {
-          if (translatedTexts[i] !== undefined) {
-            translationMap.set(sel.id, translatedTexts[i]);
+
+      const textsToTranslate: (string | null)[] = [];
+      const translationUnits: SmartTranslationUnit[] = [];
+      const addedVerticalGroups = new Set<string>();
+      let lastUnitSegmentIndex = -1;
+
+      const addUnit = (unit: SmartTranslationUnit, segmentIndex: number) => {
+        if (lastUnitSegmentIndex !== -1) {
+          const gapSegments = segments.slice(lastUnitSegmentIndex + 1, segmentIndex);
+          const newlineCount = gapSegments.reduce(
+            (count, segment) => count + (segment.text.split('\n').length - 1),
+            0,
+          );
+          if (newlineCount >= 3 || gapSegments.length > 20) {
+            textsToTranslate.push(null);
+          }
+        }
+        translationUnits.push(unit);
+        textsToTranslate.push(unit.requestText);
+        lastUnitSegmentIndex = segmentIndex;
+      };
+
+      segments.forEach((segment, segmentIndex) => {
+        if (!segment.isSelected) return;
+        const verticalGroup = verticalGroupBySegmentId.get(segment.id);
+        if (verticalGroup) {
+          if (addedVerticalGroups.has(verticalGroup.id)) return;
+          addedVerticalGroups.add(verticalGroup.id);
+          addUnit({
+            kind: 'vertical',
+            group: verticalGroup,
+            sourceText: verticalGroup.sourceText,
+            requestText: makeVerticalTranslationRequest(verticalGroup),
+          }, segmentIndex);
+          return;
+        }
+        addUnit({
+          kind: 'normal',
+          segmentId: segment.id,
+          sourceText: segment.text,
+          requestText: segment.text,
+        }, segmentIndex);
+      });
+
+      if (translationUnits.length === 0) {
+        throw new Error('번역할 수 있는 텍스트 그룹을 찾지 못했습니다.');
+      }
+
+      const updateSegmentsWithPartial = (translatedTexts: string[], collectFailures = false) => {
+        const normalTranslationMap = new Map<string, { sourceText: string; translatedText: string }>();
+        const verticalTranslations: Array<{
+          unit: Extract<SmartTranslationUnit, { kind: 'vertical' }>;
+          translatedText: string;
+        }> = [];
+        translationUnits.forEach((unit, index) => {
+          const translatedText = translatedTexts[index];
+          if (
+            unit.kind === 'normal'
+            && translatedText !== undefined
+            && translatedText !== unit.requestText
+          ) {
+            normalTranslationMap.set(unit.segmentId, {
+              sourceText: unit.sourceText,
+              translatedText,
+            });
+          } else if (
+            unit.kind === 'vertical'
+            && translatedText !== undefined
+            && translatedText !== unit.requestText
+            && translatedText.trim() !== unit.sourceText.trim()
+          ) {
+            verticalTranslations.push({ unit, translatedText });
           }
         });
 
-        const newSegments = segments.map(s => {
-          if (translationMap.has(s.id)) {
-            const translatedText = translationMap.get(s.id);
-            const isUnchanged = translatedText.trim() === s.text.trim();
-            
+        const failures: string[] = [];
+        let newSegments = segments.map((segment) => {
+          const translation = normalTranslationMap.get(segment.id);
+          if (translation !== undefined) {
+            const isUnchanged = translation.translatedText.trim() === segment.text.trim();
+            if (isUnchanged) return segment;
+
+            const fitted = fitTranslationToDisplayWidth(segment.text, translation.translatedText);
+            if (collectFailures && fitted.reason) {
+              failures.push(`${translation.sourceText}: ${fitted.reason}`);
+            }
             return {
-              ...s,
-              text: translatedText,
-              isTranslated: !isUnchanged,
-              isSelected: isUnchanged
+              ...segment,
+              text: fitted.text,
+              isTranslated: true,
+              isSelected: false,
             };
           }
-          return s;
+          return segment;
         });
+
+        const verticalResult = applyVerticalTranslations(
+          newSegments,
+          verticalTranslations.map(({ unit, translatedText }) => ({
+            group: unit.group,
+            translation: translatedText,
+          })),
+        );
+        if (!verticalResult.applied) {
+          throw new Error(
+            `세로쓰기 번역을 적용하지 못했습니다: ${verticalResult.reason || '좌표 충돌'}`,
+          );
+        }
+        newSegments = verticalResult.segments;
+        if (collectFailures) {
+          verticalTranslations.forEach(({ unit }, index) => {
+            const reason = verticalResult.items[index]?.reason;
+            if (reason) {
+              failures.push(`${unit.sourceText}: ${reason}`);
+            }
+          });
+        }
 
         setSegments(newSegments);
         const newContent = newSegments.map(s => s.text).join('');
         setContent(newContent);
+        return failures;
       };
 
       const { translations: finalTranslations, usage } = await translateBatch(
+          translationProvider,
+          geminiApiKey,
           textsToTranslate,
           customDictionary, 
           useDefaultDictionary,
           systemPrompt,
-          apiKey,
           (progress) => {
             setTranslationProgress({
               current: progress.completedChunks,
@@ -243,23 +418,33 @@ function App() {
           (partialTranslations, partialUsage) => {
             updateSegmentsWithPartial(partialTranslations);
             // Update stats in real-time too
-            setApiStats(prev => ({
-              requestCount: partialUsage.requestCount,
-              inputTokens: partialUsage.inputTokens,
-              outputTokens: partialUsage.outputTokens,
-              totalCost: partialUsage.totalCost
-            }));
+            setApiStats({
+              requestCount: statsBeforeBatch.requestCount + partialUsage.requestCount,
+              inputTokens: statsBeforeBatch.inputTokens + partialUsage.inputTokens,
+              outputTokens: statsBeforeBatch.outputTokens + partialUsage.outputTokens,
+              totalDurationMs: statsBeforeBatch.totalDurationMs + partialUsage.totalDurationMs
+            });
           }
       );
       
-      updateSegmentsWithPartial(finalTranslations);
-      updateStats(usage);
+      const layoutFailures = updateSegmentsWithPartial(finalTranslations, true);
+      setApiStats({
+        requestCount: statsBeforeBatch.requestCount + usage.requestCount,
+        inputTokens: statsBeforeBatch.inputTokens + usage.inputTokens,
+        outputTokens: statsBeforeBatch.outputTokens + usage.outputTokens,
+        totalDurationMs: statsBeforeBatch.totalDurationMs + usage.durationMs,
+      });
       
-      setLastTranslated({ original: `${selectedSegments.length} items`, translated: "Done" });
+      setLastTranslated({ original: `${translationUnits.length} items`, translated: "Done" });
+      if (layoutFailures.length > 0) {
+        alert(
+          `번역은 모두 적용했지만 ${layoutFailures.length}개 항목에서 위치가 일부 확장됐습니다.\n\n`
+          + layoutFailures.slice(0, 3).join('\n'),
+        );
+      }
 
     } catch (error: any) {
       alert(`일괄 번역 실패: ${error.message || "알 수 없는 오류"}`);
-      console.error(error);
     } finally {
       setIsTranslating(false);
       setTranslationProgress(null);
@@ -269,7 +454,7 @@ function App() {
   const handleSelectAllJapanese = () => {
     startTransition(() => {
       const newSegments = segments.map(s => 
-        (!s.isAutoSelectExcluded && (s.isStrictJapanese || s.isAutoSelected || s.isBoxedDialogue || s.isContextDialogue || s.isArrowBox || s.isVerticalBox || s.isIndentedDialogue || s.isIsolatedDialogue)) ? { ...s, isSelected: true } : s
+        (!s.isAutoSelectExcluded && (s.isManualSelection || s.isStrictJapanese || s.isAutoSelected || s.isBoxedDialogue || s.isContextDialogue || s.isArrowBox || s.isVerticalBox || s.isIndentedDialogue || s.isIsolatedDialogue)) ? { ...s, isSelected: true } : s
       );
       setSegments(newSegments);
     });
@@ -293,6 +478,8 @@ function App() {
     setFileName("");
     setSelection(null);
     setSegments([]);
+    setIsDragMode(false);
+    setIsManualSelectMode(false);
   };
 
   return (
@@ -305,15 +492,20 @@ function App() {
             <div>
                 <h1 className="font-bold text-slate-100 leading-none">AA Translator</h1>
                 <div className="flex items-center gap-2 mt-0.5">
-                   <span className="text-[10px] text-slate-400 font-mono">GEMINI 3.0 FLASH</span>
+                   <span className="text-[10px] text-slate-400 font-mono">
+                     {getProviderModelLabel(
+                       translationProvider,
+                       ollamaStatus?.model,
+                     ).toUpperCase()}
+                   </span>
                    <span className="w-0.5 h-2.5 bg-slate-700"></span>
                    <button 
                       onClick={() => setIsStatsOpen(true)}
                       className="text-[10px] text-green-400 font-mono flex items-center gap-1 hover:text-green-300 transition-colors"
-                      title="예상 비용 보기"
+                      title={`${translationProvider === 'ollama' ? 'Ollama' : 'Gemini'} 사용량 보기`}
                    >
-                      <Coins className="w-3 h-3" />
-                      ${apiStats.totalCost.toFixed(6)} (예상)
+                      <Timer className="w-3 h-3" />
+                      {apiStats.requestCount}회 · {(apiStats.totalDurationMs / 1000).toFixed(1)}초
                    </button>
                 </div>
             </div>
@@ -322,12 +514,20 @@ function App() {
         <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
                 <button
-                  onClick={() => setIsApiKeyOpen(true)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border rounded text-xs transition-colors ${apiKey ? 'border-yellow-600/50 text-yellow-500' : 'border-slate-700 text-slate-300'}`}
-                  title="API Key 설정"
+                  onClick={() => setIsTranslationSettingsOpen(true)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border rounded text-xs transition-colors ${
+                    isProviderReady(
+                      translationProvider,
+                      geminiApiKey,
+                      Boolean(ollamaStatus?.ok && ollamaStatus.modelAvailable),
+                    )
+                      ? 'border-teal-600/50 text-teal-400'
+                      : 'border-yellow-600/50 text-yellow-400'
+                  }`}
+                  title="번역 엔진 및 인증 설정"
                 >
-                  <Key className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Key</span>
+                  <Server className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">{translationProvider === 'ollama' ? 'Ollama' : 'Gemini'}</span>
                 </button>
                 <button
                   onClick={() => setIsDictOpen(true)}
@@ -403,7 +603,13 @@ function App() {
 
       <main className="flex-1 overflow-hidden relative bg-[#1a1b26]">
         {!fileName && !content ? (
-          <FileUpload onFileLoaded={handleFileLoaded} hasApiKey={!!apiKey} onOpenApiKeyModal={() => setIsApiKeyOpen(true)} />
+          <FileUpload
+            onFileLoaded={handleFileLoaded}
+            translationProvider={translationProvider}
+            geminiApiKeyReady={Boolean(geminiApiKey)}
+            ollamaStatus={ollamaStatus}
+            onOpenTranslationSettings={() => setIsTranslationSettingsOpen(true)}
+          />
         ) : (
           <Editor 
             content={content}
@@ -414,6 +620,7 @@ function App() {
             segments={segments}
             onSegmentsChange={setSegments}
             isDragMode={isDragMode}
+            isManualSelectMode={isManualSelectMode}
           />
         )}
       </main>
@@ -427,15 +634,40 @@ function App() {
         lastTranslation={lastTranslated}
         onUndo={handleUndo}
         viewMode={viewMode}
-        onChangeViewMode={setViewMode}
-        smartSelectionCount={segments.filter(s => s.isSelected).length}
+        onChangeViewMode={(mode) => {
+          setViewMode(mode);
+          if (mode !== 'smart') {
+            setIsDragMode(false);
+            setIsManualSelectMode(false);
+          }
+        }}
+        smartSelectionCount={new Set(
+          segments
+            .filter((segment) => segment.isSelected)
+            .map((segment) => segment.verticalGroupId || segment.id),
+        ).size}
         onSmartTranslate={handleSmartTranslate}
         isDragMode={isDragMode}
-        onToggleDragMode={() => setIsDragMode(!isDragMode)}
+        onToggleDragMode={() => {
+          const next = !isDragMode;
+          setIsDragMode(next);
+          if (next) setIsManualSelectMode(false);
+        }}
+        isManualSelectMode={isManualSelectMode}
+        onToggleManualSelectMode={() => {
+          const next = !isManualSelectMode;
+          setIsManualSelectMode(next);
+          if (next) setIsDragMode(false);
+        }}
       />
 
       <SystemReport isOpen={isReportOpen} onClose={() => setIsReportOpen(false)} />
-      <UsageStats isOpen={isStatsOpen} onClose={() => setIsStatsOpen(false)} stats={apiStats} />
+      <UsageStats
+        isOpen={isStatsOpen}
+        onClose={() => setIsStatsOpen(false)}
+        stats={apiStats}
+        provider={translationProvider}
+      />
       <ChangelogModal isOpen={isChangelogOpen} onClose={() => setIsChangelogOpen(false)} />
       <DictionaryModal 
         isOpen={isDictOpen} 
@@ -451,11 +683,26 @@ function App() {
         systemPrompt={systemPrompt}
         setSystemPrompt={setSystemPrompt}
       />
-      <ApiKeyModal
-        isOpen={isApiKeyOpen}
-        onClose={() => setIsApiKeyOpen(false)}
-        apiKey={apiKey}
-        setApiKey={setApiKey}
+      <TranslationSettingsModal
+        isOpen={isTranslationSettingsOpen}
+        onClose={() => setIsTranslationSettingsOpen(false)}
+        status={ollamaStatus}
+        isChecking={isCheckingOllama}
+        onRefresh={() => void refreshOllamaStatus()}
+        provider={translationProvider}
+        geminiApiKey={geminiApiKey}
+        onSave={(provider, apiKey) => {
+          if (provider !== translationProvider) {
+            setApiStats({
+              requestCount: 0,
+              inputTokens: 0,
+              outputTokens: 0,
+              totalDurationMs: 0,
+            });
+          }
+          setTranslationProvider(provider);
+          setGeminiApiKey(apiKey);
+        }}
       />
       
       <div className="fixed bottom-4 right-4 z-40">
@@ -470,14 +717,19 @@ function App() {
                         <span className="font-semibold text-blue-400">선택 모드</span>
                         <p>번역하려는 텍스트를 클릭하여 선택하세요.</p>
                         <p className="mt-1">하단 툴바의 <span className="text-slate-100 bg-slate-700 px-1 rounded">드래그</span> 버튼을 켜면 박스 드래그로 여러 줄을 한 번에 선택할 수 있습니다.</p>
+                        <p className="mt-1"><span className="text-orange-300 bg-slate-700 px-1 rounded">수동</span> 버튼을 켜면 자동 감지에서 빠진 글자만 일반 텍스트처럼 드래그해 주황색 번역 대상으로 추가할 수 있습니다.</p>
                     </div>
                     <div>
                         <span className="font-semibold text-green-400">사전 기능</span>
                         <p>상단의 [사전] 메뉴에서 나만의 번역 규칙을 추가하고 저장/복원할 수 있습니다.</p>
                     </div>
                     <div>
-                        <span className="font-semibold text-yellow-400">API Key</span>
-                        <p>기본 할당량을 초과하거나 개인 계정을 사용하고 싶다면 상단 [Key] 메뉴에서 API Key를 등록하세요.</p>
+                        <span className="font-semibold text-purple-400">세로쓰기</span>
+                        <p>보라색 글자는 말풍선 단위로 선택됩니다. 번역이 슬롯 안에 들어오면 주변 AA 위치를 보존하고, 넘치면 일본어를 남기지 않도록 오른쪽 가장자리의 한 행만 최소한으로 확장합니다.</p>
+                    </div>
+                    <div>
+                        <span className="font-semibold text-teal-400">번역 엔진</span>
+                        <p>상단 엔진 메뉴에서 Ollama Pro 또는 Gemini API 키 모드를 선택할 수 있습니다.</p>
                     </div>
                 </div>
             </div>

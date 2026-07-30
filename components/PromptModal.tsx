@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { X, MessageSquareQuote, RotateCcw, Save } from 'lucide-react';
-import { DEFAULT_SYSTEM_PROMPT } from '../services/geminiService';
+import { DEFAULT_SYSTEM_PROMPT } from '../services/ollamaService';
 
 interface PromptModalProps {
   isOpen: boolean;
