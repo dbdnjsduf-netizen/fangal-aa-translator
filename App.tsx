@@ -367,16 +367,10 @@ function App() {
           }
         });
 
-        const normalResult = applyNormalTranslationUpdates(
-          segments,
-          normalTranslations,
-          collectFailures,
-        );
-        const failures = [...normalResult.layoutFailures];
-        let newSegments = normalResult.segments;
-
+        // Apply coordinate-sensitive vertical cells while the source layout is
+        // still intact. Width-expanding normal translations are applied second.
         const verticalResult = applyVerticalTranslations(
-          newSegments,
+          segments,
           verticalTranslations.map(({ unit, translatedText }) => ({
             group: unit.group,
             translation: translatedText,
@@ -387,7 +381,13 @@ function App() {
             `세로쓰기 번역을 적용하지 못했습니다: ${verticalResult.reason || '좌표 충돌'}`,
           );
         }
-        newSegments = clearCompletedSelections(verticalResult.segments);
+        const normalResult = applyNormalTranslationUpdates(
+          verticalResult.segments,
+          normalTranslations,
+          collectFailures,
+        );
+        const failures = [...normalResult.layoutFailures];
+        const newSegments = clearCompletedSelections(normalResult.segments);
         if (collectFailures) {
           verticalTranslations.forEach(({ unit }, index) => {
             const reason = verticalResult.items[index]?.reason;

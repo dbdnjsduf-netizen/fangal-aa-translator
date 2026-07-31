@@ -307,6 +307,7 @@ export function applyVerticalTranslations(
 ): VerticalBatchApplyResult {
   const segmentById = new Map(segments.map((segment) => [segment.id, segment]));
   const replacements = new Map<string, Map<number, string>>();
+  const wholeSegmentReplacements = new Map<string, string>();
   const items: VerticalBatchApplyItem[] = [];
 
   for (const { group, translation } of assignments) {
@@ -314,16 +315,45 @@ export function applyVerticalTranslations(
     const outputCharacters = Array.from(normalizedTranslation);
     if (outputCharacters.length === 0) outputCharacters.push('　');
 
-    const unsafeToken = group.tokens.find((token) => {
+    const resolvedTokens = group.tokens.map((token, order) => {
       const segment = segmentById.get(token.segmentId);
-      return !segment
-        || token.char.length !== 1
-        || token.displayWidth !== 2
-        || token.segmentOffset < 0
-        || token.segmentOffset >= segment.text.length
-        || segment.text[token.segmentOffset] !== token.char;
+      if (
+        segment
+        && token.char.length === 1
+        && token.displayWidth === 2
+        && token.segmentOffset >= 0
+        && token.segmentOffset < segment.text.length
+        && segment.text[token.segmentOffset] === token.char
+      ) {
+        return {
+          token,
+          segmentId: token.segmentId,
+          segmentOffset: token.segmentOffset,
+          replaceWholeSegment: false,
+        };
+      }
+
+      // Partial-result rendering or an overlapping normal selection may have
+      // already changed the source glyph. Annotated vertical cells retain a
+      // stable group/order identity and an untouched one-character `original`,
+      // so they can still be replaced safely without relying on the old glyph.
+      const metadataMatch = segments.find((candidate) => (
+        candidate.verticalGroupId === group.id
+        && candidate.verticalOrder === order
+        && Array.from(candidate.original).length === 1
+        && candidate.original === token.char
+      ));
+      if (!metadataMatch) return undefined;
+      return {
+        token,
+        segmentId: metadataMatch.id,
+        segmentOffset: 0,
+        replaceWholeSegment: true,
+      };
     });
-    if (unsafeToken) {
+    const unsafeIndex = resolvedTokens.findIndex((resolved) => !resolved);
+    if (unsafeIndex >= 0) {
+      const unsafeToken = group.tokens[unsafeIndex];
       return {
         applied: false,
         segments,
@@ -336,28 +366,45 @@ export function applyVerticalTranslations(
     const overflowAnchorIndex = overflow > 0
       ? group.tokens.reduce((bestIndex, token, index) => {
           const best = group.tokens[bestIndex];
-          return token.displayX > best.displayX
-            || (token.displayX === best.displayX && token.line > best.line)
+          // Prefer the physically lowest text row. On the same row, the
+          // rightmost cell causes the least horizontal displacement.
+          return token.line > best.line
+            || (token.line === best.line && token.displayX > best.displayX)
             ? index
             : bestIndex;
         }, 0)
       : -1;
 
-    for (const [index, token] of group.tokens.entries()) {
-      let replacement = outputCharacters[index]
-        ? toVerticalCell(outputCharacters[index])
+    for (const [index, resolved] of resolvedTokens.entries()) {
+      const { token, segmentId, segmentOffset, replaceWholeSegment } = resolved!;
+      const outputIndex = overflow > 0 && index > overflowAnchorIndex
+        ? index + overflow
+        : index;
+      let replacement = outputCharacters[outputIndex]
+        ? toVerticalCell(outputCharacters[outputIndex])
         : '　';
-      // Put unavoidable overflow at the rightmost/bottommost target cell. This keeps
-      // every other translated cell at its original coordinate and shifts only the
-      // shortest possible suffix on one physical row.
+      // Insert overflow at the lowest available row. Later slots consume output
+      // after the inserted run, preserving the complete Korean reading order.
       if (index === overflowAnchorIndex) {
         replacement += outputCharacters
-          .slice(group.capacity)
+          .slice(index + 1, index + overflow + 1)
           .map(toVerticalCell)
           .join('');
       }
-      const segmentReplacements = replacements.get(token.segmentId) || new Map<number, string>();
-      if (segmentReplacements.has(token.segmentOffset)) {
+      if (replaceWholeSegment) {
+        if (wholeSegmentReplacements.has(segmentId) || replacements.has(segmentId)) {
+          return {
+            applied: false,
+            segments,
+            items,
+            reason: `세로 말풍선들이 ${token.line + 1}행의 같은 문자 슬롯과 겹칩니다.`,
+          };
+        }
+        wholeSegmentReplacements.set(segmentId, replacement);
+        continue;
+      }
+      const segmentReplacements = replacements.get(segmentId) || new Map<number, string>();
+      if (segmentReplacements.has(segmentOffset) || wholeSegmentReplacements.has(segmentId)) {
         return {
           applied: false,
           segments,
@@ -365,20 +412,29 @@ export function applyVerticalTranslations(
           reason: `세로 말풍선들이 ${token.line + 1}행의 같은 문자 슬롯과 겹칩니다.`,
         };
       }
-      segmentReplacements.set(token.segmentOffset, replacement);
-      replacements.set(token.segmentId, segmentReplacements);
+      segmentReplacements.set(segmentOffset, replacement);
+      replacements.set(segmentId, segmentReplacements);
     }
 
     items.push({
       groupId: group.id,
       normalizedTranslation,
       reason: overflow > 0
-        ? `세로 번역이 ${overflow}자를 초과해 오른쪽 가장자리의 한 행만 확장했습니다.`
+        ? `세로 번역이 ${overflow}자를 초과해 가장 아래쪽의 한 행만 확장했습니다.`
         : undefined,
     });
   }
 
   const updated = segments.map((segment) => {
+    const wholeReplacement = wholeSegmentReplacements.get(segment.id);
+    if (wholeReplacement !== undefined) {
+      return {
+        ...segment,
+        text: wholeReplacement,
+        isTranslated: true,
+        isSelected: false,
+      };
+    }
     const segmentReplacements = replacements.get(segment.id);
     if (!segmentReplacements) return segment;
 

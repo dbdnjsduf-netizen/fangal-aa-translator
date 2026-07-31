@@ -82,7 +82,7 @@ test('번역 적용 후 모든 비대상 문자·문자열 길이·표시 폭이
   });
 });
 
-test('슬롯보다 긴 번역도 전부 적용하고 오른쪽 가장자리의 한 행만 확장한다', () => {
+test('슬롯보다 긴 번역도 전부 적용하고 가장 아래쪽의 한 행만 확장한다', () => {
   const segments = makeLineSegments(VERTICAL_SAMPLE);
   const [group] = detectVerticalTextGroups(VERTICAL_SAMPLE, segments);
   const result = applyVerticalTranslation(segments, group, '가나다라마바사아자차');
@@ -98,6 +98,26 @@ test('슬롯보다 긴 번역도 전부 적용하고 오른쪽 가장자리의 �
   );
   assert.equal(widthDeltas.filter((delta) => delta !== 0).length, 1);
   assert.equal(widthDeltas.find((delta) => delta !== 0), 2);
+  assert.equal(widthDeltas[5], 2);
+  assert.match(afterLines[5], /바사/u);
+});
+
+test('원문 글자가 먼저 바뀌어도 세로쓰기 메타데이터로 슬롯을 복구한다', () => {
+  const initial = makeLineSegments(VERTICAL_SAMPLE);
+  const annotated = annotateVerticalTextSegments(VERTICAL_SAMPLE, initial);
+  const [group] = detectVerticalTextGroups(VERTICAL_SAMPLE, annotated);
+  const changedSlotId = group.tokens[0].segmentId;
+  const changed = annotated.map((segment) => (
+    segment.id === changedSlotId
+      ? { ...segment, text: '이미바뀌어버린텍스트', isTranslated: true }
+      : segment
+  ));
+
+  const result = applyVerticalTranslation(changed, group, '여기서약초를모아');
+  assert.equal(result.applied, true);
+  const after = result.segments.map(({ text }) => text).join('');
+  assert.doesNotMatch(after, /이미바뀌어버린/u);
+  assert.doesNotMatch(after, /[ぁ-んァ-ヶ一-龯]/u);
 });
 
 test('일반 스마트 번역도 원문의 표시 폭을 정확히 유지한다', () => {
