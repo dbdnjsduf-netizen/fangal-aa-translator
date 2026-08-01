@@ -764,8 +764,9 @@ function App() {
                         <span className="font-semibold text-blue-400">선택 모드</span>
                         <p>번역하려는 텍스트를 클릭하여 선택하세요.</p>
                         <p className="mt-1">하단 툴바의 <span className="text-slate-100 bg-slate-700 px-1 rounded">드래그</span> 버튼을 켜면 박스 드래그로 여러 줄을 한 번에 선택할 수 있습니다.</p>
-                        <p className="mt-1"><span className="text-orange-300 bg-slate-700 px-1 rounded">수동</span> 버튼을 켜면 자동 감지에서 빠진 글자만 일반 텍스트처럼 드래그해 주황색 번역 대상으로 추가할 수 있습니다.</p>
+                        <p className="mt-1"><span className="text-orange-300 bg-slate-700 px-1 rounded">수동</span> 버튼을 켜면 자동 감지에서 빠진 가로 텍스트 전체를 주황색 박스로 간편하게 드래그해 번역 대상으로 추가할 수 있습니다.</p>
                         <p className="mt-1"><span className="text-fuchsia-300 bg-slate-700 px-1 rounded">세로수동</span> 버튼은 세로 글자 열 전체를 박스로 골라 하나의 자홍색 문장으로 묶습니다. 잘못 나뉜 보라색 그룹도 다시 묶을 수 있습니다.</p>
+                        <p className="mt-1">수동·세로수동 상태에서도 기존 자동 감지 항목을 살짝 클릭하면 해당 일반 문장이나 세로 그룹의 선택을 끄거나 다시 켤 수 있습니다.</p>
                     </div>
                     <div>
                         <span className="font-semibold text-green-400">사전 기능</span>

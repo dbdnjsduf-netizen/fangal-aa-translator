@@ -133,7 +133,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                         ? 'bg-orange-600 text-white hover:bg-orange-500'
                         : 'text-slate-300 hover:text-white hover:bg-slate-800'
                     }`}
-                    title="자동 감지에서 누락된 실제 문자 범위를 직접 선택"
+                    title="누락된 가로 텍스트를 주황색 박스로 드래그해 추가 (기존 항목은 짧게 클릭해 선택 전환)"
                 >
                     <Type className="w-4 h-4" />
                     수동
@@ -145,7 +145,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                         ? 'bg-fuchsia-600 text-white hover:bg-fuchsia-500'
                         : 'text-slate-300 hover:text-white hover:bg-slate-800'
                     }`}
-                    title="누락된 세로쓰기 영역을 박스로 드래그해 한 문장으로 묶기"
+                    title="누락된 세로쓰기를 박스로 묶기 (기존 항목은 짧게 클릭해 선택 전환)"
                 >
                     <Columns3 className="w-4 h-4" />
                     세로수동
@@ -186,7 +186,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                 )}
                 {smartSelectionCount === 0 && !isDragMode && !isManualSelectMode && !isManualVerticalMode && <span className="text-slate-500 text-sm px-4">클릭하여 선택</span>}
                 {smartSelectionCount === 0 && isDragMode && <span className="text-purple-300 text-sm px-4 animate-pulse">영역을 드래그하여 선택...</span>}
-                {smartSelectionCount === 0 && isManualSelectMode && <span className="text-orange-300 text-sm px-4 animate-pulse">누락된 문자를 드래그하세요...</span>}
+                {smartSelectionCount === 0 && isManualSelectMode && <span className="text-orange-300 text-sm px-4 animate-pulse">가로 텍스트 전체를 박스로 드래그하세요...</span>}
                 {smartSelectionCount === 0 && isManualVerticalMode && <span className="text-fuchsia-300 text-sm px-4 animate-pulse">세로쓰기 전체를 박스로 드래그하세요...</span>}
             </>
         )}

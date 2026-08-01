@@ -4,6 +4,7 @@ import {
   applyNormalTranslationUpdates,
   isSegmentTranslationSelectable,
   selectAllTranslatableSegments,
+  toggleSegmentTranslationSelection,
 } from '../services/translationApplication';
 import { TextSegment } from '../types';
 
@@ -70,4 +71,53 @@ test('실제 번역이 적용된 일반 항목은 즉시 선택이 해제된다'
   assert.equal(result.segments[0].text.trim(), '안녕하세요');
   assert.equal(result.segments[0].isTranslated, true);
   assert.equal(result.segments[0].isSelected, false);
+});
+
+test('자동 감지 항목은 짧은 클릭으로 선택을 끄고 다시 켤 수 있다', () => {
+  const source = segment('こんにちは', { id: 'automatic', isSelected: true });
+
+  const deselected = toggleSegmentTranslationSelection([source], source.id);
+  assert.equal(deselected[0].isSelected, false);
+
+  const selected = toggleSegmentTranslationSelection(deselected, source.id);
+  assert.equal(selected[0].isSelected, true);
+});
+
+test('세로쓰기 항목을 클릭하면 같은 그룹 전체가 함께 토글된다', () => {
+  const first = segment('こ', {
+    id: 'vertical-1',
+    isSelected: true,
+    isVerticalText: true,
+    verticalGroupId: 'vertical-group',
+  });
+  const second = segment('ん', {
+    id: 'vertical-2',
+    isSelected: true,
+    isVerticalText: true,
+    verticalGroupId: 'vertical-group',
+  });
+  const unrelated = segment('別', { id: 'unrelated', isSelected: true });
+
+  const result = toggleSegmentTranslationSelection(
+    [first, second, unrelated],
+    second.id,
+  );
+
+  assert.equal(result[0].isSelected, false);
+  assert.equal(result[1].isSelected, false);
+  assert.equal(result[2].isSelected, true);
+});
+
+test('번역 완료 항목은 클릭 토글 대상에서 제외한다', () => {
+  const translated = segment('번역됨', {
+    id: 'translated',
+    isSelected: false,
+    isTranslated: true,
+  });
+  const source = [translated];
+
+  const result = toggleSegmentTranslationSelection(source, translated.id);
+
+  assert.equal(result, source);
+  assert.equal(result[0].isSelected, false);
 });

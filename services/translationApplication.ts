@@ -23,6 +23,28 @@ export function isSegmentTranslationSelectable(segment: TextSegment) {
   return segment.isJapanese && !segment.isTranslated;
 }
 
+export function toggleSegmentTranslationSelection(
+  segments: TextSegment[],
+  segmentId: string,
+) {
+  const target = segments.find((segment) => segment.id === segmentId);
+  if (!target || !isSegmentTranslationSelectable(target)) return segments;
+
+  const nextSelected = !target.isSelected;
+  return segments.map((segment) => {
+    if (
+      target.verticalGroupId
+      && segment.verticalGroupId === target.verticalGroupId
+      && isSegmentTranslationSelectable(segment)
+    ) {
+      return { ...segment, isSelected: nextSelected };
+    }
+    return segment.id === segmentId
+      ? { ...segment, isSelected: nextSelected }
+      : segment;
+  });
+}
+
 export function selectAllTranslatableSegments(segments: TextSegment[]) {
   return segments.map((segment) => {
     if (!isSegmentTranslationSelectable(segment)) {

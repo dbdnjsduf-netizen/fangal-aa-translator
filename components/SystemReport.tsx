@@ -37,8 +37,9 @@ export const SystemReport: React.FC<SystemReportProps> = ({ isOpen, onClose }) =
               <li><strong className="text-purple-300">언어/AA 분리:</strong> 가나·한자 조합과 자연어 형태를 AA 반복 문자·선·기호 밀도와 별도로 평가합니다.</li>
               <li><strong className="text-purple-300">세로쓰기 복원:</strong> 파이프와 꺾쇠 말풍선 경계 트랙을 따라 글자를 열로 묶고 위→아래, 오른쪽→왼쪽 순서로 재구성합니다.</li>
               <li><strong className="text-purple-300">정밀 표시:</strong> 세로쓰기 실제 문자 슬롯만 보라색으로 분리하여 같은 행의 AA 그림을 함께 칠하지 않습니다.</li>
-              <li><strong className="text-orange-300">수동 문자 선택:</strong> 자동 감지에서 빠진 텍스트는 포인터 좌표를 문자 오프셋으로 변환해 지정 범위만 주황색 번역 세그먼트로 분리합니다.</li>
+              <li><strong className="text-orange-300">수동 박스 선택:</strong> 자동 감지에서 빠진 가로 텍스트는 박스 안 문자 중심점만 판정해 지정 범위를 주황색 번역 세그먼트로 분리합니다.</li>
               <li><strong className="text-fuchsia-300">수동 세로 묶음:</strong> 박스 안의 세로 문자를 열 단위로 정렬해 하나의 문장으로 만들며, 기존 자동 세로 그룹도 같은 방식으로 다시 묶을 수 있습니다.</li>
+              <li><strong className="text-blue-300">빠른 선택 전환:</strong> 수동·세로수동 모드에서도 기존 자동 감지 항목을 짧게 클릭하면 해당 문장이나 세로 그룹 전체의 선택을 켜고 끕니다.</li>
               <li><strong className="text-purple-300">위치 우선 적용:</strong> 세로 번역은 먼저 기존 문자 슬롯만 치환하며 다른 문자와 테두리를 수정하지 않습니다.</li>
               <li><strong className="text-purple-300">번역 보장:</strong> 번역문이 원래 영역보다 길어도 원문을 남기지 않고, 오른쪽 가장자리의 한 행만 필요한 만큼 확장합니다.</li>
             </ul>
