@@ -65,6 +65,7 @@ function App() {
   const [viewMode, setViewMode] = useState<ViewMode>('smart');
   const [isDragMode, setIsDragMode] = useState(false); // New Drag Mode State
   const [isManualSelectMode, setIsManualSelectMode] = useState(false);
+  const [isManualVerticalMode, setIsManualVerticalMode] = useState(false);
   const [selection, setSelection] = useState<SelectionRange | null>(null);
   const [segments, setSegments] = useState<TextSegment[]>([]);
   
@@ -166,6 +167,7 @@ function App() {
     setViewMode(newContent.trim() === "" ? 'raw' : 'smart');
     setIsDragMode(false);
     setIsManualSelectMode(false);
+    setIsManualVerticalMode(false);
   };
 
   const updateStats = (usage: { inputTokens: number; outputTokens: number; durationMs: number; requestCount?: number }) => {
@@ -479,6 +481,7 @@ function App() {
     setSegments([]);
     setIsDragMode(false);
     setIsManualSelectMode(false);
+    setIsManualVerticalMode(false);
   };
 
   return (
@@ -620,6 +623,7 @@ function App() {
             onSegmentsChange={setSegments}
             isDragMode={isDragMode}
             isManualSelectMode={isManualSelectMode}
+            isManualVerticalMode={isManualVerticalMode}
           />
         )}
       </main>
@@ -638,6 +642,7 @@ function App() {
           if (mode !== 'smart') {
             setIsDragMode(false);
             setIsManualSelectMode(false);
+            setIsManualVerticalMode(false);
           }
         }}
         smartSelectionCount={new Set(
@@ -652,13 +657,28 @@ function App() {
         onToggleDragMode={() => {
           const next = !isDragMode;
           setIsDragMode(next);
-          if (next) setIsManualSelectMode(false);
+          if (next) {
+            setIsManualSelectMode(false);
+            setIsManualVerticalMode(false);
+          }
         }}
         isManualSelectMode={isManualSelectMode}
         onToggleManualSelectMode={() => {
           const next = !isManualSelectMode;
           setIsManualSelectMode(next);
-          if (next) setIsDragMode(false);
+          if (next) {
+            setIsDragMode(false);
+            setIsManualVerticalMode(false);
+          }
+        }}
+        isManualVerticalMode={isManualVerticalMode}
+        onToggleManualVerticalMode={() => {
+          const next = !isManualVerticalMode;
+          setIsManualVerticalMode(next);
+          if (next) {
+            setIsDragMode(false);
+            setIsManualSelectMode(false);
+          }
         }}
       />
 
@@ -719,6 +739,7 @@ function App() {
                         <p>번역하려는 텍스트를 클릭하여 선택하세요.</p>
                         <p className="mt-1">하단 툴바의 <span className="text-slate-100 bg-slate-700 px-1 rounded">드래그</span> 버튼을 켜면 박스 드래그로 여러 줄을 한 번에 선택할 수 있습니다.</p>
                         <p className="mt-1"><span className="text-orange-300 bg-slate-700 px-1 rounded">수동</span> 버튼을 켜면 자동 감지에서 빠진 글자만 일반 텍스트처럼 드래그해 주황색 번역 대상으로 추가할 수 있습니다.</p>
+                        <p className="mt-1"><span className="text-fuchsia-300 bg-slate-700 px-1 rounded">세로수동</span> 버튼은 세로 글자 열 전체를 박스로 골라 하나의 자홍색 문장으로 묶습니다. 잘못 나뉜 보라색 그룹도 다시 묶을 수 있습니다.</p>
                     </div>
                     <div>
                         <span className="font-semibold text-green-400">사전 기능</span>

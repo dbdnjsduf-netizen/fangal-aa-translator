@@ -97,7 +97,12 @@ function makeManualSegment(
     isSelected: true,
     isTranslated: false,
     isVerticalText: false,
+    isManualVerticalSelection: false,
     verticalGroupId: undefined,
     verticalOrder: undefined,
+    verticalSourceLine: undefined,
+    verticalSourceIndex: undefined,
+    verticalDisplayX: undefined,
+    verticalDisplayWidth: undefined,
   };
 }

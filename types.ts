@@ -30,8 +30,13 @@ export interface TextSegment {
   isVerticalBox?: boolean;
   isVerticalText?: boolean;
   isManualSelection?: boolean;
+  isManualVerticalSelection?: boolean;
   verticalGroupId?: string;
   verticalOrder?: number;
+  verticalSourceLine?: number;
+  verticalSourceIndex?: number;
+  verticalDisplayX?: number;
+  verticalDisplayWidth?: number;
   isIndentedDialogue?: boolean;
   isIsolatedDialogue?: boolean;
   isAutoSelectExcluded?: boolean;

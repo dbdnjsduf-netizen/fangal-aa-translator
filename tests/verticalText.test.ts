@@ -214,6 +214,87 @@ test('인접한 여러 말풍선의 초과 번역을 원본 좌표에서 원자�
   assert.doesNotMatch(after, /[ぁ-んァ-ヶ一-龯]/u);
 });
 
+test('행마다 테두리가 달라지는 자유형 말풍선의 세로 대사를 감지한다', () => {
+  const sample = [
+    '＞　　　ギ　　　＜',
+    "'⌒)　　ャ　　　(",
+    '/　　　ア　　　　(',
+    "'⌒)　　ア　　　(",
+    '/　　　ア　　　　(',
+    "'⌒)　　ッ　　　(",
+    '/　　　！　　　　(',
+  ].join('\n');
+  const groups = detectVerticalTextGroups(sample, makeLineSegments(sample));
+  assert.deepEqual(groups.map(({ sourceText }) => sourceText), ['ギャアアアッ！']);
+});
+
+test('가까운 두 자유형 세로 열을 서로 섞지 않는다', () => {
+  const sample = [
+    '{　　　チ　}',
+    '{　　　ュ　}',
+    '{　　　ン　}',
+    '{　　　チ　}',
+    '{　コ　ュ　}',
+    '{　ラ　ン　}',
+    '{　ァ　だ　}',
+    '{　ッ　　　}',
+    '{　！　　　}',
+  ].join('\n');
+  const groups = detectVerticalTextGroups(sample, makeLineSegments(sample));
+  assert.deepEqual(
+    groups.map(({ sourceText }) => sourceText).sort(),
+    ['コラァッ！', 'チュンチュンだ'].sort(),
+  );
+});
+
+test('실제 1화에서 빠졌던 자유형 세로 대사 유형을 감지한다', () => {
+  const phrases = [
+    'ちゅんちゅんちゅんっ！',
+    'いったい何事っ！？',
+    '何かあったのかっ！？',
+    'この野郎っ！',
+  ];
+  const sample = phrases.flatMap((phrase, phraseIndex) => [
+    ...Array.from(phrase).map((character, lineIndex) => (
+      `${lineIndex % 2 === 0 ? '／' : '('}${'　'.repeat(3 + (lineIndex % 3))}${character}${'　'.repeat(2)}${lineIndex % 2 === 0 ? '＼' : ')'}`
+    )),
+    ...(phraseIndex < phrases.length - 1 ? ['', '', '', ''] : []),
+  ]).join('\n');
+
+  const sources = detectVerticalTextGroups(sample, makeLineSegments(sample))
+    .map(({ sourceText }) => sourceText);
+  for (const phrase of phrases) assert.ok(sources.includes(phrase), `${phrase} 감지 누락`);
+});
+
+test('AA 골격과 작은 가나 조각은 자유형 세로 대사로 승격하지 않는다', () => {
+  const sample = [
+    '／　　二　　＼',
+    '(　　　二　　)',
+    '／　　：　　＼',
+    '(　　　ュ　　)',
+    '／　　ン　　＼',
+    '(　　　チ　　)',
+  ].join('\n');
+  assert.equal(detectVerticalTextGroups(sample, makeLineSegments(sample)).length, 0);
+});
+
+test('AA에도 쓰이는 二·人·ハ 문자를 실제 자유형 대사에서 누락하지 않는다', () => {
+  const sample = [
+    '／　　　二　　＼',
+    '(　　　　人　　)',
+    '／　　　は　　＼',
+    '(　　　　ハ　　)',
+    '／　　　ズ　　＼',
+    '(　　　　レ　　)',
+    '／　　　だ　　＼',
+    '(　　　　！　　)',
+  ].join('\n');
+  assert.deepEqual(
+    detectVerticalTextGroups(sample, makeLineSegments(sample)).map(({ sourceText }) => sourceText),
+    ['二人はハズレだ！'],
+  );
+});
+
 function makeLineSegments(content: string): TextSegment[] {
   const result: TextSegment[] = [];
   const lines = content.split('\n');

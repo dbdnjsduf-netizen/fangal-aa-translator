@@ -3,10 +3,12 @@ import { TextSegment } from '../types';
 // Digits and a small set of in-sentence marks are context tokens, not enough
 // to establish a vertical group by themselves. Once Japanese text establishes
 // the group, however, dropping them changes meanings such as １５歳 or 後５年.
-const VERTICAL_SOURCE_CHAR = /[ぁ-んァ-ヶ一-龯々〆ヵヶー！？。、…「」『』（）［］【】│┃0-9０-９:：・･]/;
+const VERTICAL_SOURCE_CHAR = /[ぁ-んァ-ヶ一-龯々〆ヵヶー！？。、…「」『』（）［］【】│┃0-9０-９:：・･\uff66-\uff9f]/;
 const PIPE_BOUNDARY = /[|｜]/;
 const LEFT_ARROW_BOUNDARY = /[>＞]/;
 const RIGHT_ARROW_BOUNDARY = /[<＜]/;
+const LOOSE_VERTICAL_SOURCE_CHAR = /[ぁ-んァ-ヶ一-龯々〆ヵヶー！？。、…│┃\uff66-\uff9f]/;
+const LOOSE_BUBBLE_BOUNDARY = /[<>＜＞()（）／＼\\/⌒'`｀{}｛｝]/u;
 const TRACK_CENTER_TOLERANCE = 18;
 const TRACK_WIDTH_TOLERANCE = 5;
 const COLUMN_TOLERANCE = 2;
@@ -129,6 +131,7 @@ export function detectVerticalTextGroups(
   content: string,
   segments: TextSegment[],
 ): VerticalTextGroup[] {
+  const manualGroups = buildManualVerticalTextGroups(segments);
   const rawGroups = detectRawVerticalGroups(content);
   const segmentRanges = buildSegmentRanges(segments);
   const mappedGroups: VerticalTextGroup[] = [];
@@ -140,7 +143,7 @@ export function detectVerticalTextGroups(
       const range = ranges.find(({ start, end }) => (
         token.stringIndex >= start && token.stringIndex < end
       ));
-      if (!range) continue;
+      if (!range || range.segment.isManualVerticalSelection) continue;
 
       const segmentOffset = token.stringIndex - range.start;
       if (range.segment.text[segmentOffset] !== token.char) continue;
@@ -176,10 +179,62 @@ export function detectVerticalTextGroups(
     || left.left - right.left
   ));
 
-  return mappedGroups.map((group, index) => ({
+  const automaticGroups = mappedGroups.map((group, index) => ({
     ...group,
     id: `vertical-${group.top}-${Math.round(group.left)}-${Math.round(group.right)}-${index}`,
   }));
+  return [...automaticGroups, ...manualGroups].sort((left, right) => (
+    left.top - right.top
+    || right.right - left.right
+    || left.left - right.left
+  ));
+}
+
+function buildManualVerticalTextGroups(segments: TextSegment[]): VerticalTextGroup[] {
+  const byGroupId = new Map<string, TextSegment[]>();
+  for (const segment of segments) {
+    if (
+      !segment.isManualVerticalSelection
+      || !segment.verticalGroupId
+      || segment.verticalOrder === undefined
+      || segment.verticalSourceLine === undefined
+      || segment.verticalSourceIndex === undefined
+      || segment.verticalDisplayX === undefined
+      || segment.verticalDisplayWidth === undefined
+    ) continue;
+    const existing = byGroupId.get(segment.verticalGroupId) || [];
+    existing.push(segment);
+    byGroupId.set(segment.verticalGroupId, existing);
+  }
+
+  const result: VerticalTextGroup[] = [];
+  for (const [groupId, groupSegments] of byGroupId) {
+    const ordered = [...groupSegments].sort(
+      (left, right) => (left.verticalOrder || 0) - (right.verticalOrder || 0),
+    );
+    if (ordered.length < 2) continue;
+    const tokens: VerticalTextToken[] = ordered.map((segment) => ({
+      char: segment.original,
+      line: segment.verticalSourceLine!,
+      stringIndex: segment.verticalSourceIndex!,
+      displayX: segment.verticalDisplayX!,
+      displayWidth: segment.verticalDisplayWidth!,
+      segmentId: segment.id,
+      segmentOffset: 0,
+    }));
+    result.push({
+      id: groupId,
+      sourceText: tokens.map(({ char }) => normalizeSourceCharacter(char)).join(''),
+      capacity: tokens.length,
+      top: Math.min(...tokens.map(({ line }) => line)),
+      bottom: Math.max(...tokens.map(({ line }) => line)),
+      left: Math.min(...tokens.map(({ displayX }) => displayX)),
+      right: Math.max(...tokens.map(({ displayX, displayWidth }) => displayX + displayWidth)),
+      segmentIds: ordered.map(({ id }) => id),
+      tokens,
+    });
+  }
+  return result;
 }
 
 export function annotateVerticalTextSegments(
@@ -654,7 +709,118 @@ export function detectRawVerticalGroups(content: string): RawVerticalGroup[] {
     });
   }
 
-  return groups;
+  const claimedTokens = new Set(
+    groups.flatMap(({ tokens }) => tokens.map(({ line, stringIndex }) => `${line}:${stringIndex}`)),
+  );
+  return [
+    ...groups,
+    ...detectLooseVerticalGroups(lines, claimedTokens),
+  ];
+}
+
+function detectLooseVerticalGroups(lines: string[], claimedTokens: Set<string>): RawVerticalGroup[] {
+  const rows: CandidateToken[][] = [];
+
+  lines.forEach((line, lineIndex) => {
+    const glyphs = scanLine(line);
+    const sourceGlyphs = glyphs.filter(({ char, stringIndex }) => (
+      LOOSE_VERTICAL_SOURCE_CHAR.test(char)
+      && !claimedTokens.has(`${lineIndex}:${stringIndex}`)
+    ));
+    rows[lineIndex] = sourceGlyphs
+      .filter((glyph) => !sourceGlyphs.some((other) => (
+        other !== glyph
+        && Math.abs(other.displayX - glyph.displayX) <= 2
+      )))
+      .filter((glyph) => hasLooseBubbleBoundary(glyphs, glyph.displayX))
+      .map((glyph) => ({
+        ...glyph,
+        line: lineIndex,
+        left: glyph.displayX - 2,
+        right: glyph.displayX + glyph.displayWidth + 2,
+        boundaryKind: 'arrow' as const,
+      }));
+  });
+
+  const tracks: Array<{ tokens: CandidateToken[]; lastLine: number; lastX: number }> = [];
+  rows.forEach((row, line) => {
+    const active = tracks.filter(({ lastLine }) => line - lastLine <= 3);
+    const used = new Set<typeof tracks[number]>();
+    for (const token of [...row].sort((left, right) => (
+      looseTokenPriority(right.char) - looseTokenPriority(left.char)
+      || right.displayX - left.displayX
+    ))) {
+      const maximumDistance = looseTokenPriority(token.char) > 0 ? 18 : 6;
+      const nearest = active
+        .filter((track) => (
+          !used.has(track) && Math.abs(token.displayX - track.lastX) <= maximumDistance
+        ))
+        .sort((left, right) => (
+          Math.abs(token.displayX - left.lastX) - Math.abs(token.displayX - right.lastX)
+        ))[0];
+      if (nearest) {
+        nearest.tokens.push(token);
+        nearest.lastLine = line;
+        nearest.lastX = token.displayX;
+        used.add(nearest);
+      } else if (looseTokenPriority(token.char) > 0) {
+        tracks.push({ tokens: [token], lastLine: line, lastX: token.displayX });
+      }
+    }
+  });
+
+  return tracks
+    .map(({ tokens }) => trimLooseTrack(tokens))
+    .filter((tokens) => tokens.length >= 4 && isLikelyLooseVerticalGroup(tokens))
+    .map((tokens) => ({
+      top: Math.min(...tokens.map(({ line }) => line)),
+      bottom: Math.max(...tokens.map(({ line }) => line)),
+      left: Math.min(...tokens.map(({ displayX }) => displayX)),
+      right: Math.max(...tokens.map(({ displayX, displayWidth }) => displayX + displayWidth)),
+      tokens,
+    }));
+}
+
+function hasLooseBubbleBoundary(glyphs: RawGlyph[], x: number) {
+  return glyphs.some(({ char, displayX }) => (
+    LOOSE_BUBBLE_BOUNDARY.test(char)
+    && Math.abs(displayX - x) <= 80
+  ));
+}
+
+function trimLooseTrack(tokens: CandidateToken[]) {
+  let start = 0;
+  let end = tokens.length;
+  const removableEdge = /^[。、…ー│┃]$/u;
+  while (start < end && removableEdge.test(normalizeSourceCharacter(tokens[start].char))) start += 1;
+  while (end > start && removableEdge.test(normalizeSourceCharacter(tokens[end - 1].char))) end -= 1;
+  return tokens.slice(start, end);
+}
+
+function looseTokenPriority(character: string) {
+  return /^[ー！？。、…│┃\uff70]$/u.test(character) ? 0 : 1;
+}
+
+function isLikelyLooseVerticalGroup(tokens: CandidateToken[]) {
+  const source = tokens.map(({ char }) => normalizeSourceCharacter(char)).join('');
+  if (/^[ぁぃぅぇぉゃゅょァィゥェォャュョッｯ]/u.test(source)) {
+    return false;
+  }
+  const hiragana = Array.from(source.matchAll(/[ぁ-ん]/gu), ({ 0: character }) => character);
+  const strongHiragana = hiragana.filter((character) => !/[っぅ]/u.test(character));
+  const katakanaRuns = source.match(/[ァ-ヶー]{4,}/gu) || [];
+  const cjk = Array.from(source.matchAll(/[一-龯々〆ヵヶ]/gu));
+  const hasTerminalPunctuation = /[！？]$/u.test(source);
+  const hasKatakanaWord = katakanaRuns.some((run) => (
+    new Set(Array.from(run).filter((character) => character !== 'ー')).size >= 3
+  ));
+  return hasTerminalPunctuation
+    ? (
+      (hiragana.length >= 3 && new Set(strongHiragana).size >= 2)
+      || hasKatakanaWord
+      || (hiragana.length >= 2 && cjk.length >= 2)
+    )
+    : hasKatakanaWord && hiragana.length >= 1 && /[ぁ-ん]$/u.test(source);
 }
 
 function scanLine(line: string): RawGlyph[] {
@@ -741,7 +907,15 @@ function isLikelyVerticalGroup(tokens: CandidateToken[], columns: Column[]): boo
   ) return false;
 
   const source = tokens.map(({ char }) => normalizeSourceCharacter(char)).join('');
-  if (VERTICAL_AA_ONLY.test(source)) return false;
+  if (VERTICAL_AA_ONLY.test(source) || /^[ー│┃]/u.test(source)) return false;
+
+  const semanticCharacterCount = Array.from(
+    source.matchAll(/[ぁ-んァ-ヶ一-龯々〆ヵヶ]/gu),
+  ).length;
+  const contextOnlyCount = Array.from(
+    source.matchAll(/[0-9０-９:：・･！？。、…「」『』（）［］【】]/gu),
+  ).length;
+  if (contextOnlyCount > semanticCharacterCount) return false;
 
   const hiragana = Array.from(source.matchAll(/[ぁ-ん]/gu), ({ 0: character }) => character);
   const strongHiragana = hiragana.filter((character) => !/[っぅ]/u.test(character));
@@ -765,6 +939,7 @@ function isLikelyVerticalGroup(tokens: CandidateToken[], columns: Column[]): boo
 }
 
 function clearVerticalMetadata(segment: TextSegment): TextSegment {
+  if (segment.isManualVerticalSelection) return segment;
   return {
     ...segment,
     isVerticalBox: false,
@@ -775,7 +950,7 @@ function clearVerticalMetadata(segment: TextSegment): TextSegment {
 }
 
 function containsJapaneseScript(text: string): boolean {
-  return /[ぁ-んァ-ヶ一-龯々〆ヵヶ]/u.test(text);
+  return /[ぁ-んァ-ヶ一-龯々〆ヵヶ\uff66-\uff9f]/u.test(text);
 }
 
 function buildSegmentRanges(segments: TextSegment[]) {
@@ -796,7 +971,8 @@ function buildSegmentRanges(segments: TextSegment[]) {
 }
 
 function normalizeSourceCharacter(character: string): string {
-  return character === '│' || character === '┃' ? 'ー' : character;
+  if (character === '│' || character === '┃') return 'ー';
+  return /[\uff66-\uff9f]/u.test(character) ? character.normalize('NFKC') : character;
 }
 
 function isCombiningCodePoint(codePoint: number): boolean {

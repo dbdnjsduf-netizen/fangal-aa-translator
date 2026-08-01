@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Wand2, X, Loader2, RotateCcw, CheckSquare, ScanSearch, Type, MousePointer2, Eye } from 'lucide-react';
+import { Wand2, X, Loader2, RotateCcw, ScanSearch, Type, MousePointer2, Eye, Columns3 } from 'lucide-react';
 import { SelectionRange, ViewMode } from '../types';
 
 interface ToolbarProps {
@@ -21,6 +21,8 @@ interface ToolbarProps {
   onToggleDragMode?: () => void;
   isManualSelectMode?: boolean;
   onToggleManualSelectMode?: () => void;
+  isManualVerticalMode?: boolean;
+  onToggleManualVerticalMode?: () => void;
 }
 
 export const Toolbar: React.FC<ToolbarProps> = ({ 
@@ -39,6 +41,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onToggleDragMode,
   isManualSelectMode,
   onToggleManualSelectMode,
+  isManualVerticalMode,
+  onToggleManualVerticalMode,
 }) => {
   
   return (
@@ -134,6 +138,18 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                     <Type className="w-4 h-4" />
                     수동
                 </button>
+                <button
+                    onClick={onToggleManualVerticalMode}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
+                      isManualVerticalMode
+                        ? 'bg-fuchsia-600 text-white hover:bg-fuchsia-500'
+                        : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                    }`}
+                    title="누락된 세로쓰기 영역을 박스로 드래그해 한 문장으로 묶기"
+                >
+                    <Columns3 className="w-4 h-4" />
+                    세로수동
+                </button>
 
                 {smartSelectionCount > 0 && (
                     <>
@@ -168,9 +184,10 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                         </button>
                     </>
                 )}
-                {smartSelectionCount === 0 && !isDragMode && !isManualSelectMode && <span className="text-slate-500 text-sm px-4">클릭하여 선택</span>}
+                {smartSelectionCount === 0 && !isDragMode && !isManualSelectMode && !isManualVerticalMode && <span className="text-slate-500 text-sm px-4">클릭하여 선택</span>}
                 {smartSelectionCount === 0 && isDragMode && <span className="text-purple-300 text-sm px-4 animate-pulse">영역을 드래그하여 선택...</span>}
                 {smartSelectionCount === 0 && isManualSelectMode && <span className="text-orange-300 text-sm px-4 animate-pulse">누락된 문자를 드래그하세요...</span>}
+                {smartSelectionCount === 0 && isManualVerticalMode && <span className="text-fuchsia-300 text-sm px-4 animate-pulse">세로쓰기 전체를 박스로 드래그하세요...</span>}
             </>
         )}
 

@@ -1,7 +1,7 @@
 {
   "name": "aa-translator-dual",
   "private": true,
-  "version": "3.0.3",
+  "version": "3.1.0",
   "type": "module",
   "engines": {
     "node": ">=18.18"

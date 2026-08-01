@@ -6,6 +6,11 @@ import {
   applyManualSelectionRanges,
   ManualSelectionRange,
 } from '../services/manualSelection';
+import {
+  applyManualVerticalSelection,
+  isManualVerticalSourceCharacter,
+  ManualVerticalCharacterRange,
+} from '../services/manualVerticalSelection';
 import { isSegmentTranslationSelectable } from '../services/translationApplication';
 
 interface EditorProps {
@@ -18,6 +23,7 @@ interface EditorProps {
   onSegmentsChange: (segments: TextSegment[]) => void;
   isDragMode?: boolean;
   isManualSelectMode?: boolean;
+  isManualVerticalMode?: boolean;
 }
 
 export const Editor: React.FC<EditorProps> = ({ 
@@ -30,6 +36,7 @@ export const Editor: React.FC<EditorProps> = ({
   onSegmentsChange,
   isDragMode = false,
   isManualSelectMode = false,
+  isManualVerticalMode = false,
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -183,6 +190,72 @@ export const Editor: React.FC<EditorProps> = ({
     browserSelection.removeAllRanges();
   };
 
+  const captureManualVerticalBox = (x1: number, y1: number, x2: number, y2: number) => {
+    if (!isManualVerticalMode || viewMode !== 'smart') return;
+    const container = containerRef.current;
+    if (!container) return;
+    const containerRect = container.getBoundingClientRect();
+    const segmentById = new Map<string, TextSegment>(
+      segments.map((segment) => [segment.id, segment]),
+    );
+    const ranges: ManualVerticalCharacterRange[] = [];
+
+    for (const element of container.querySelectorAll<HTMLElement>('[data-segment-id]')) {
+      const segmentId = element.dataset.segmentId;
+      const segment = segmentId ? segmentById.get(segmentId) : undefined;
+      if (!segmentId || !segment || segment.isTranslated) continue;
+
+      const elementRect = element.getBoundingClientRect();
+      const elementLeft = elementRect.left - containerRect.left + container.scrollLeft;
+      const elementTop = elementRect.top - containerRect.top + container.scrollTop;
+      const elementRight = elementLeft + elementRect.width;
+      const elementBottom = elementTop + elementRect.height;
+      if (elementRight < x1 || elementLeft > x2 || elementBottom < y1 || elementTop > y2) {
+        continue;
+      }
+
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      let textNode = walker.nextNode();
+      let elementTextOffset = 0;
+      while (textNode) {
+        const nodeText = textNode.textContent || '';
+        let nodeOffset = 0;
+        while (nodeOffset < nodeText.length) {
+          const codePoint = nodeText.codePointAt(nodeOffset);
+          if (codePoint === undefined) break;
+          const character = String.fromCodePoint(codePoint);
+          const nextOffset = nodeOffset + character.length;
+          if (isManualVerticalSourceCharacter(character)) {
+            const characterRange = document.createRange();
+            characterRange.setStart(textNode, nodeOffset);
+            characterRange.setEnd(textNode, nextOffset);
+            const characterRect = characterRange.getBoundingClientRect();
+            const centerX = characterRect.left - containerRect.left
+              + container.scrollLeft + (characterRect.width / 2);
+            const centerY = characterRect.top - containerRect.top
+              + container.scrollTop + (characterRect.height / 2);
+            if (centerX >= x1 && centerX <= x2 && centerY >= y1 && centerY <= y2) {
+              ranges.push({
+                segmentId,
+                start: elementTextOffset + nodeOffset,
+                end: elementTextOffset + nextOffset,
+              });
+            }
+          }
+          nodeOffset = nextOffset;
+        }
+        elementTextOffset += nodeText.length;
+        textNode = walker.nextNode();
+      }
+    }
+
+    const nextSegments = applyManualVerticalSelection(segments, ranges);
+    if (nextSegments !== segments) {
+      onSegmentsChange(nextSegments);
+      onSelectionChange(null);
+    }
+  };
+
   const handleWheel = (e: React.WheelEvent) => {
     if (e.ctrlKey) {
       e.preventDefault();
@@ -208,7 +281,7 @@ export const Editor: React.FC<EditorProps> = ({
       );
       return;
     }
-    if (!isDragMode) return;
+    if (!isDragMode && !isManualVerticalMode) return;
     
     // Prevent default browser actions (text selection etc)
     e.preventDefault();
@@ -296,7 +369,7 @@ export const Editor: React.FC<EditorProps> = ({
     const dist = Math.sqrt(Math.pow(dragCurrent.x - dragStart.x, 2) + Math.pow(dragCurrent.y - dragStart.y, 2));
     const isClick = dist < 5; 
 
-    if (isClick) {
+    if (isClick && !isManualVerticalMode) {
         // Handle click toggle in drag mode
         const target = document.elementFromPoint(e.clientX, e.clientY);
         if (target instanceof HTMLElement && target.id) {
@@ -305,6 +378,8 @@ export const Editor: React.FC<EditorProps> = ({
                 toggleSegmentSelection(target.id);
             }
         }
+    } else if (isManualVerticalMode) {
+        captureManualVerticalBox(x1, y1, x2, y2);
     } else {
         // Find intersecting segments
         const intersectedSegments = segments.map(seg => {
@@ -407,7 +482,7 @@ export const Editor: React.FC<EditorProps> = ({
           ref={containerRef}
           className={`w-full h-full bg-[#1a1b26] text-[#a9b1d6] p-4 overflow-auto whitespace-pre font-aa leading-tight relative ${
             isManualSelectMode ? 'select-text cursor-text' : 'select-none'
-          } ${isDragMode ? 'cursor-crosshair touch-none' : ''}`}
+          } ${isDragMode || isManualVerticalMode ? 'cursor-crosshair touch-none' : ''}`}
           style={{ fontSize: `${fontSize}px` }}
           onWheel={handleWheel}
           onPointerDown={handlePointerDown}
@@ -422,22 +497,26 @@ export const Editor: React.FC<EditorProps> = ({
                    id={seg.id}
                    data-segment-id={seg.id}
                    onClick={(e) => {
-                     if (isManualSelectMode) return;
+                     if (isManualSelectMode || isManualVerticalMode) return;
                      e.stopPropagation();
                      toggleSegmentSelection(seg.id);
                    }}
                    className={`
                      rounded px-0.5 transition-colors duration-75 inline-block
-                     ${!isDragMode && isSegmentTranslationSelectable(seg) ? 'cursor-pointer' : 'cursor-default'}
+                     ${!isDragMode && !isManualVerticalMode && isSegmentTranslationSelectable(seg) ? 'cursor-pointer' : 'cursor-default'}
                      ${seg.isSelected 
-                        ? seg.isVerticalText
+                        ? seg.isManualVerticalSelection
+                          ? 'bg-fuchsia-600 text-white shadow-[0_0_10px_rgba(192,38,211,0.55)]'
+                          : seg.isVerticalText
                           ? 'bg-purple-600 text-white shadow-[0_0_10px_rgba(147,51,234,0.5)]'
                           : seg.isManualSelection
                             ? 'bg-orange-600 text-white shadow-[0_0_10px_rgba(234,88,12,0.45)]'
                           : 'bg-blue-600 text-white shadow-[0_0_10px_rgba(37,99,235,0.5)]'
                         : seg.isTranslated 
                             ? 'text-green-400 hover:bg-slate-800' 
-                            : seg.isVerticalText
+                            : seg.isManualVerticalSelection
+                              ? 'text-fuchsia-200 hover:bg-fuchsia-900/30'
+                              : seg.isVerticalText
                               ? 'text-purple-200 hover:bg-purple-900/30'
                               : 'text-yellow-100 hover:bg-slate-700'
                      }
@@ -464,7 +543,11 @@ export const Editor: React.FC<EditorProps> = ({
            {/* Selection Box Overlay */}
            {isDragging && dragStart && dragCurrent && (
              <div 
-               className="absolute border border-blue-400 bg-blue-500/20 pointer-events-none z-20"
+               className={`absolute pointer-events-none z-20 ${
+                 isManualVerticalMode
+                   ? 'border border-fuchsia-400 bg-fuchsia-500/20'
+                   : 'border border-blue-400 bg-blue-500/20'
+               }`}
                style={{
                  left: Math.min(dragStart.x, dragCurrent.x),
                  top: Math.min(dragStart.y, dragCurrent.y),
