@@ -15,6 +15,16 @@ interface Version {
 
 const changelogData: Version[] = [
   {
+    version: "3.5.0",
+    date: "2026.08.01",
+    changes: [
+      "상단 텍스트 다운로드 옆에 PNG/JPG 이미지 ZIP 다운로드 추가",
+      "AA 뷰어와 같은 스마트 빈줄 분할, 너비 자동 최적화, 좌측 공백 제거 옵션 제공",
+      "Saitamaar 글꼴 로딩 후 페이지를 그려 화면과 이미지의 AA 배치를 일치",
+      "페이지 높이와 실제 여백 설정을 반영하고 파일명_001.png 형식으로 ZIP 구성"
+    ]
+  },
+  {
     version: "3.4.0",
     date: "2026.08.01",
     changes: [

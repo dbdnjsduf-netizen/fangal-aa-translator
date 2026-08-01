@@ -24,6 +24,8 @@ interface EditorProps {
   viewMode: ViewMode;
   segments: TextSegment[];
   onSegmentsChange: (segments: TextSegment[]) => void;
+  fontSize: number;
+  onFontSizeChange: React.Dispatch<React.SetStateAction<number>>;
   isDragMode?: boolean;
   isManualSelectMode?: boolean;
   isManualVerticalMode?: boolean;
@@ -37,13 +39,14 @@ export const Editor: React.FC<EditorProps> = ({
   viewMode,
   segments,
   onSegmentsChange,
+  fontSize,
+  onFontSizeChange,
   isDragMode = false,
   isManualSelectMode = false,
   isManualVerticalMode = false,
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [fontSize, setFontSize] = useState(16);
   const aaLineHeight = Math.floor(fontSize * 1.125);
 
   // Web Worker for segmentation
@@ -269,7 +272,7 @@ export const Editor: React.FC<EditorProps> = ({
   const handleWheel = (e: React.WheelEvent) => {
     if (e.ctrlKey) {
       e.preventDefault();
-      setFontSize(prev => Math.min(Math.max(10, prev - Math.sign(e.deltaY)), 32));
+      onFontSizeChange(prev => Math.min(Math.max(10, prev - Math.sign(e.deltaY)), 32));
     }
   };
 
@@ -427,9 +430,9 @@ export const Editor: React.FC<EditorProps> = ({
     return (
        <div className="relative w-full h-full flex flex-col">
          <div className="absolute top-2 right-4 z-10 flex gap-2 bg-black/10 backdrop-blur p-1 rounded-lg border border-black/10">
-            <button onClick={() => setFontSize(f => Math.max(10, f - 1))} className="px-2 py-1 text-xs text-slate-700 hover:text-black hover:bg-white/50 rounded">A-</button>
+            <button onClick={() => onFontSizeChange(f => Math.max(10, f - 1))} className="px-2 py-1 text-xs text-slate-700 hover:text-black hover:bg-white/50 rounded">A-</button>
             <span className="px-2 py-1 text-xs text-slate-700 font-mono">{fontSize}px</span>
-            <button onClick={() => setFontSize(f => Math.min(32, f + 1))} className="px-2 py-1 text-xs text-slate-700 hover:text-black hover:bg-white/50 rounded">A+</button>
+            <button onClick={() => onFontSizeChange(f => Math.min(32, f + 1))} className="px-2 py-1 text-xs text-slate-700 hover:text-black hover:bg-white/50 rounded">A+</button>
          </div>
          <div
             className="w-full h-full p-4 overflow-auto whitespace-pre font-aa select-text text-[#2e2e2e]"
@@ -450,9 +453,9 @@ export const Editor: React.FC<EditorProps> = ({
     <div className="relative w-full h-full flex flex-col">
       {/* Font Controls */}
       <div className="absolute top-2 right-4 z-10 flex gap-2 bg-slate-800/80 backdrop-blur p-1 rounded-lg border border-slate-700">
-        <button onClick={() => setFontSize(f => Math.max(10, f - 1))} className="px-2 py-1 text-xs text-slate-300 hover:text-white hover:bg-slate-700 rounded">A-</button>
+        <button onClick={() => onFontSizeChange(f => Math.max(10, f - 1))} className="px-2 py-1 text-xs text-slate-300 hover:text-white hover:bg-slate-700 rounded">A-</button>
         <span className="px-2 py-1 text-xs text-slate-400">{fontSize}px</span>
-        <button onClick={() => setFontSize(f => Math.min(32, f + 1))} className="px-2 py-1 text-xs text-slate-300 hover:text-white hover:bg-slate-700 rounded">A+</button>
+        <button onClick={() => onFontSizeChange(f => Math.min(32, f + 1))} className="px-2 py-1 text-xs text-slate-300 hover:text-white hover:bg-slate-700 rounded">A+</button>
       </div>
 
       {viewMode === 'raw' ? (

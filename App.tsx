@@ -9,6 +9,7 @@ import { ChangelogModal } from './components/ChangelogModal';
 import { DictionaryModal } from './components/DictionaryModal';
 import { PromptModal } from './components/PromptModal';
 import { TranslationSettingsModal } from './components/TranslationSettingsModal';
+import { ImageExportModal } from './components/ImageExportModal';
 import {
   SelectionRange,
   ViewMode,
@@ -45,7 +46,7 @@ import {
   NormalTranslationUpdate,
   selectAllTranslatableSegments,
 } from './services/translationApplication';
-import { FileText, Info, Activity, Download, Timer, History, Book, MessageSquareQuote, Server, CheckSquare } from 'lucide-react';
+import { FileText, Info, Activity, Download, Image as ImageIcon, Timer, History, Book, MessageSquareQuote, Server, CheckSquare } from 'lucide-react';
 
 type SmartTranslationUnit =
   | {
@@ -80,6 +81,8 @@ function App() {
   const [isDictOpen, setIsDictOpen] = useState(false);
   const [isPromptOpen, setIsPromptOpen] = useState(false);
   const [isTranslationSettingsOpen, setIsTranslationSettingsOpen] = useState(false);
+  const [isImageExportOpen, setIsImageExportOpen] = useState(false);
+  const [fontSize, setFontSize] = useState(16);
   const [ollamaStatus, setOllamaStatus] = useState<OllamaRuntimeInfo | null>(null);
   const [isCheckingOllama, setIsCheckingOllama] = useState(true);
   const [ollamaModel, setOllamaModel] = useState(
@@ -632,6 +635,17 @@ function App() {
 
             {(content || fileName) && (
                 <button
+                    onClick={() => setIsImageExportOpen(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-xs font-medium transition-colors shadow-sm"
+                    title="AA를 여러 이미지로 나누어 ZIP 다운로드"
+                >
+                    <ImageIcon className="w-3.5 h-3.5" />
+                    <span>이미지 다운로드</span>
+                </button>
+            )}
+
+            {(content || fileName) && (
+                <button
                     onClick={handleDownload}
                     className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-medium transition-colors shadow-sm"
                     title="번역된 파일 다운로드"
@@ -675,6 +689,8 @@ function App() {
             viewMode={viewMode}
             segments={segments}
             onSegmentsChange={setSegments}
+            fontSize={fontSize}
+            onFontSizeChange={setFontSize}
             isDragMode={isDragMode}
             isManualSelectMode={isManualSelectMode}
             isManualVerticalMode={isManualVerticalMode}
@@ -787,6 +803,13 @@ function App() {
           setGeminiApiKey(apiKey);
           void refreshOllamaStatus(nextOllamaModel);
         }}
+      />
+      <ImageExportModal
+        isOpen={isImageExportOpen}
+        onClose={() => setIsImageExportOpen(false)}
+        content={content}
+        fileName={fileName || 'translation.txt'}
+        fontSize={fontSize}
       />
       
       <div className="fixed bottom-4 right-4 z-40">
