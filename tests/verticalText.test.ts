@@ -120,6 +120,47 @@ test('원문 글자가 먼저 바뀌어도 세로쓰기 메타데이터로 슬�
   assert.doesNotMatch(after, /[ぁ-んァ-ヶ一-龯]/u);
 });
 
+test('앞쪽 번역으로 열 좌표가 이동해도 반각 세로 슬롯을 현재 위치에서 복구한다', () => {
+  const sample = [
+    '|　ギ　|',
+    '|　ャ　|',
+    '|　ア　|',
+    '|　ｯ　|',
+    '|　！　|',
+  ].join('\n');
+  const annotated = annotateVerticalTextSegments(sample, makeLineSegments(sample));
+  const shifted = annotated.map((segment) => (
+    /^seg-\d+-0$/u.test(segment.id)
+      ? { ...segment, text: `AA${segment.text}`, isTranslated: true }
+      : segment
+  ));
+  const shiftedContent = shifted.map(({ text }) => text).join('');
+  const [shiftedGroup] = detectVerticalTextGroups(shiftedContent, shifted);
+  assert.ok(shiftedGroup);
+  assert.equal(shiftedGroup.sourceText, 'ギャアッ！');
+
+  const result = applyVerticalTranslation(shifted, shiftedGroup, '으아악!');
+  assert.equal(result.applied, true, result.reason);
+  assert.doesNotMatch(result.segments.map(({ text }) => text).join(''), /[ギャアｯ]/u);
+});
+
+test('부분 결과가 세로 셀 표시를 먼저 바꿔도 원본 세그먼트 ID로 복구한다', () => {
+  const annotated = annotateVerticalTextSegments(VERTICAL_SAMPLE, makeLineSegments(VERTICAL_SAMPLE));
+  const [group] = detectVerticalTextGroups(VERTICAL_SAMPLE, annotated);
+  const changedToken = group.tokens[3];
+  const partiallyRendered = annotated.map((segment) => (
+    segment.id === changedToken.segmentId
+      ? { ...segment, text: '선반영된텍스트', isTranslated: true }
+      : segment
+  ));
+
+  const result = applyVerticalTranslation(partiallyRendered, group, '여기서약초를모아');
+  assert.equal(result.applied, true, result.reason);
+  const after = result.segments.map(({ text }) => text).join('');
+  assert.doesNotMatch(after, /선반영된텍스트/u);
+  assert.doesNotMatch(after, /[ぁ-んァ-ヶ一-龯]/u);
+});
+
 test('일반 스마트 번역도 원문의 표시 폭을 정확히 유지한다', () => {
   const result = fitTranslationToDisplayWidth('こんにちは', '안녕');
   assert.equal(result.applied, true);
