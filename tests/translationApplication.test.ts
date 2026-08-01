@@ -122,22 +122,28 @@ test('번역 완료 항목은 클릭 토글 대상에서 제외한다', () => {
   assert.equal(result[0].isSelected, false);
 });
 
-test('폭을 넘는 번역은 바로 왼쪽의 빈 칸을 먼저 사용한다', () => {
+test('오른쪽에 밀려날 내용이 있을 때만 왼쪽 빈 칸을 사용한다', () => {
   const padding = segment('AA   ', {
     id: 'padding',
     isJapanese: false,
     isStrictJapanese: false,
   });
   const source = segment('短い', { id: 'source' });
+  const aa = segment('|AA', {
+    id: 'aa',
+    isJapanese: false,
+    isStrictJapanese: false,
+  });
 
   const result = applyNormalTranslationUpdates(
-    [padding, source],
+    [padding, source, aa],
     [{ segmentId: source.id, sourceText: source.text, translatedText: '긴번역' }],
     true,
   );
 
   assert.equal(result.segments[0].text, 'AA ');
   assert.equal(result.segments[1].text, '긴번역');
+  assert.equal(result.segments[2].text, '|AA');
   assert.deepEqual(result.layoutFailures, []);
 });
 
@@ -148,9 +154,14 @@ test('왼쪽 공백이 부족하면 남은 초과 폭만 경고한다', () => {
     isStrictJapanese: false,
   });
   const source = segment('短い', { id: 'source' });
+  const aa = segment('|AA', {
+    id: 'aa',
+    isJapanese: false,
+    isStrictJapanese: false,
+  });
 
   const result = applyNormalTranslationUpdates(
-    [padding, source],
+    [padding, source, aa],
     [{ segmentId: source.id, sourceText: source.text, translatedText: '아주긴번역' }],
     true,
   );
@@ -161,7 +172,7 @@ test('왼쪽 공백이 부족하면 남은 초과 폭만 경고한다', () => {
   assert.match(result.layoutFailures[0], /아직 5칸 초과/);
 });
 
-test('왼쪽 공백 탐색은 줄바꿈이나 AA 문자를 넘지 않는다', () => {
+test('오른쪽이 줄 끝이면 왼쪽 공백을 건드리지 않고 확장한다', () => {
   const previousLine = segment('   |\n', {
     id: 'previous-line',
     isJapanese: false,
@@ -176,5 +187,30 @@ test('왼쪽 공백 탐색은 줄바꿈이나 AA 문자를 넘지 않는다', ()
   );
 
   assert.equal(result.segments[0].text, '   |\n');
-  assert.match(result.layoutFailures[0], /2칸 초과/);
+  assert.deepEqual(result.layoutFailures, []);
+});
+
+test('오른쪽 인접 공백으로 폭을 확보하면 좌우 AA 위치를 유지한다', () => {
+  const leftAa = segment('|', {
+    id: 'left-aa',
+    isJapanese: false,
+    isStrictJapanese: false,
+  });
+  const source = segment('短い', { id: 'source' });
+  const rightPadding = segment('  |AA', {
+    id: 'right-padding',
+    isJapanese: false,
+    isStrictJapanese: false,
+  });
+
+  const result = applyNormalTranslationUpdates(
+    [leftAa, source, rightPadding],
+    [{ segmentId: source.id, sourceText: source.text, translatedText: '긴번역' }],
+    true,
+  );
+
+  assert.equal(result.segments[0].text, '|');
+  assert.equal(result.segments[1].text, '긴번역');
+  assert.equal(result.segments[2].text, '|AA');
+  assert.deepEqual(result.layoutFailures, []);
 });

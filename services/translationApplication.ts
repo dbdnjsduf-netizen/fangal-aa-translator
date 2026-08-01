@@ -113,6 +113,71 @@ function consumeAdjacentLeftWhitespace(
   return requestedWidth - remainingWidth;
 }
 
+function consumeAdjacentRightWhitespace(
+  segments: TextSegment[],
+  targetIndex: number,
+  requestedWidth: number,
+) {
+  let remainingWidth = requestedWidth;
+
+  for (let index = targetIndex + 1; index < segments.length; index += 1) {
+    const segment = segments[index];
+    let text = segment.text;
+    let changed = false;
+
+    while (text.length > 0 && remainingWidth > 0) {
+      const leadingCharacter = text[0];
+      if (leadingCharacter === ' ') {
+        text = text.slice(1);
+        remainingWidth -= 1;
+        changed = true;
+        continue;
+      }
+      if (leadingCharacter === '　') {
+        if (remainingWidth >= 2) {
+          text = text.slice(1);
+          remainingWidth -= 2;
+        } else {
+          text = ` ${text.slice(1)}`;
+          remainingWidth -= 1;
+        }
+        changed = true;
+        continue;
+      }
+      break;
+    }
+
+    if (changed) {
+      segments[index] = { ...segment, text };
+    }
+
+    if (remainingWidth === 0) {
+      return { consumedWidth: requestedWidth, blockedByContent: false };
+    }
+    if (text.length === 0) continue;
+
+    // 줄바꿈은 현재 줄의 끝이므로 남은 번역 폭이 오른쪽으로 늘어나도
+    // 다른 AA나 텍스트의 가로 위치에는 영향을 주지 않는다.
+    if (text[0] === '\r' || text[0] === '\n') {
+      return {
+        consumedWidth: requestedWidth - remainingWidth,
+        blockedByContent: false,
+      };
+    }
+
+    return {
+      consumedWidth: requestedWidth - remainingWidth,
+      blockedByContent: true,
+    };
+  }
+
+  // 파일 끝 역시 오른쪽에 밀려날 내용이 없다.
+  return {
+    consumedWidth: requestedWidth - remainingWidth,
+    blockedByContent: false,
+  };
+}
+
 export function applyNormalTranslationUpdates(
   segments: TextSegment[],
   updates: NormalTranslationUpdate[],
@@ -138,17 +203,26 @@ export function applyNormalTranslationUpdates(
     }
 
     const fitted = fitTranslationToDisplayWidth(segment.text, update.translatedText);
-    const consumedLeftWidth = fitted.overflowWidth
-      ? consumeAdjacentLeftWhitespace(nextSegments, index, fitted.overflowWidth)
+    const overflowWidth = fitted.overflowWidth || 0;
+    const rightSpace = overflowWidth > 0
+      ? consumeAdjacentRightWhitespace(nextSegments, index, overflowWidth)
+      : { consumedWidth: 0, blockedByContent: false };
+    const rightCollisionWidth = rightSpace.blockedByContent
+      ? overflowWidth - rightSpace.consumedWidth
       : 0;
-    const remainingOverflow = (fitted.overflowWidth || 0) - consumedLeftWidth;
+    const consumedLeftWidth = rightCollisionWidth > 0
+      ? consumeAdjacentLeftWhitespace(nextSegments, index, rightCollisionWidth)
+      : 0;
+    const remainingOverflow = rightCollisionWidth - consumedLeftWidth;
 
     if (finalize && remainingOverflow > 0) {
-      const leftSpaceDetail = consumedLeftWidth > 0
-        ? `왼쪽 공백 ${consumedLeftWidth}칸을 먼저 사용했지만 `
-        : '';
+      const usedSpaces = [
+        rightSpace.consumedWidth > 0 ? `오른쪽 공백 ${rightSpace.consumedWidth}칸` : '',
+        consumedLeftWidth > 0 ? `왼쪽 공백 ${consumedLeftWidth}칸` : '',
+      ].filter(Boolean).join('과 ');
+      const spaceDetail = usedSpaces ? `${usedSpaces}을 사용했지만 ` : '';
       layoutFailures.push(
-        `${update.sourceText}: ${leftSpaceDetail}번역 폭이 아직 ${remainingOverflow}칸 초과되어 오른쪽 내용을 밀어냈습니다.`,
+        `${update.sourceText}: ${spaceDetail}번역 폭이 아직 ${remainingOverflow}칸 초과되어 오른쪽 내용을 밀어냈습니다.`,
       );
     }
     nextSegments[index] = {
