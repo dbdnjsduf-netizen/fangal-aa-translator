@@ -121,3 +121,60 @@ test('번역 완료 항목은 클릭 토글 대상에서 제외한다', () => {
   assert.equal(result, source);
   assert.equal(result[0].isSelected, false);
 });
+
+test('폭을 넘는 번역은 바로 왼쪽의 빈 칸을 먼저 사용한다', () => {
+  const padding = segment('AA   ', {
+    id: 'padding',
+    isJapanese: false,
+    isStrictJapanese: false,
+  });
+  const source = segment('短い', { id: 'source' });
+
+  const result = applyNormalTranslationUpdates(
+    [padding, source],
+    [{ segmentId: source.id, sourceText: source.text, translatedText: '긴번역' }],
+    true,
+  );
+
+  assert.equal(result.segments[0].text, 'AA ');
+  assert.equal(result.segments[1].text, '긴번역');
+  assert.deepEqual(result.layoutFailures, []);
+});
+
+test('왼쪽 공백이 부족하면 남은 초과 폭만 경고한다', () => {
+  const padding = segment('AA| ', {
+    id: 'padding',
+    isJapanese: false,
+    isStrictJapanese: false,
+  });
+  const source = segment('短い', { id: 'source' });
+
+  const result = applyNormalTranslationUpdates(
+    [padding, source],
+    [{ segmentId: source.id, sourceText: source.text, translatedText: '아주긴번역' }],
+    true,
+  );
+
+  assert.equal(result.segments[0].text, 'AA|');
+  assert.equal(result.segments[1].text, '아주긴번역');
+  assert.match(result.layoutFailures[0], /왼쪽 공백 1칸/);
+  assert.match(result.layoutFailures[0], /아직 5칸 초과/);
+});
+
+test('왼쪽 공백 탐색은 줄바꿈이나 AA 문자를 넘지 않는다', () => {
+  const previousLine = segment('   |\n', {
+    id: 'previous-line',
+    isJapanese: false,
+    isStrictJapanese: false,
+  });
+  const source = segment('短い', { id: 'source' });
+
+  const result = applyNormalTranslationUpdates(
+    [previousLine, source],
+    [{ segmentId: source.id, sourceText: source.text, translatedText: '긴번역' }],
+    true,
+  );
+
+  assert.equal(result.segments[0].text, '   |\n');
+  assert.match(result.layoutFailures[0], /2칸 초과/);
+});

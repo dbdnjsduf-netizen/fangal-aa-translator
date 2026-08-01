@@ -67,6 +67,7 @@ export interface FixedWidthTextResult {
   applied: boolean;
   text: string;
   reason?: string;
+  overflowWidth?: number;
 }
 
 interface RawGlyph {
@@ -349,10 +350,12 @@ export function fitTranslationToDisplayWidth(
 
   const translatedWidth = getDisplayWidth(text);
   if (translatedWidth > availableWidth) {
+    const overflowWidth = translatedWidth - availableWidth;
     return {
       applied: true,
       text,
-      reason: `번역 폭이 ${translatedWidth - availableWidth}칸 초과되어 오른쪽 내용을 밀어냈습니다.`,
+      reason: `번역 폭이 ${overflowWidth}칸 초과되어 오른쪽 내용을 밀어냈습니다.`,
+      overflowWidth,
     };
   }
 
