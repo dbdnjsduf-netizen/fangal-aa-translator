@@ -166,7 +166,7 @@ if (isDevelopment) {
 
 app.listen(port, appHost, () => {
   const displayedHost = appHost === '0.0.0.0' ? 'localhost' : appHost;
-  console.log(`[AA Translator] http://${displayedHost}:${port}`);
+  console.log(`[Fangal AA Translator] http://${displayedHost}:${port}`);
   console.log(
     `[Ollama] ${ollamaModel} via ${
       isDirectCloudHost(ollamaHost) ? 'Ollama Cloud API' : describeOllamaTarget(ollamaHost)

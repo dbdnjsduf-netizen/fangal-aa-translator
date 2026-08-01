@@ -1,6 +1,6 @@
 #!/bin/bash
 echo "============================================"
-echo "  AA Translator (Ollama / Gemini) 시작 중..."
+echo "  Fangal AA Translator (Ollama / Gemini) 시작 중..."
 echo "============================================"
 echo ""
 

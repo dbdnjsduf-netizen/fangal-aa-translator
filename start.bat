@@ -3,7 +3,7 @@ setlocal
 cd /d "%~dp0"
 
 echo ============================================
-echo   AA Translator (Ollama / Gemini) 시작 중...
+echo   Fangal AA Translator (Ollama / Gemini) 시작 중...
 echo ============================================
 
 where node >nul 2>&1

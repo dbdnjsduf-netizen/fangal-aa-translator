@@ -1,5 +1,5 @@
 {
-  "name": "AA Translator",
+  "name": "Fangal AA Translator",
   "description": "Ollama Pro와 Gemini API를 선택할 수 있는 일본어 AA 한국어 번역기",
   "requestFramePermissions": []
 }

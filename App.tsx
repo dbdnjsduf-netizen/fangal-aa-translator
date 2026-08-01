@@ -492,7 +492,7 @@ function App() {
                 <FileText className="w-5 h-5 text-white" />
             </div>
             <div>
-                <h1 className="font-bold text-slate-100 leading-none">AA Translator</h1>
+                <h1 className="font-bold text-slate-100 leading-none">Fangal AA Translator</h1>
                 <div className="flex items-center gap-2 mt-0.5">
                    <span className="text-[10px] text-slate-400 font-mono">
                      {getProviderModelLabel(

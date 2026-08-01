@@ -1,4 +1,4 @@
-# AA Translator
+# Fangal AA Translator
 
 일본어 아스키 아트(AA/Shift-JIS Art) 텍스트를 한국어로 번역하면서 그림과 대사 위치를
 최대한 보존하는 로컬 웹 앱입니다. 실행 중 상단의 **번역 엔진** 메뉴에서 다음 두 모드를
@@ -29,8 +29,8 @@
 - Gemini 모드를 쓸 경우 본인의 Gemini API 키
 
 ```bash
-git clone https://github.com/w08119737-prog/d4caatrans3.git
-cd d4caatrans3
+git clone https://github.com/dbdnjsduf-netizen/fangal-aa-translator.git
+cd fangal-aa-translator
 npm install
 npm run dev
 ```
