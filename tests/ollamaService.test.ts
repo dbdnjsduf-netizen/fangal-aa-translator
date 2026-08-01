@@ -117,7 +117,9 @@ test('항목 수가 틀린 큰 응답은 자동 분할하고 성공한 앞부분
     assert.equal(url, '/api/chat');
     const request = JSON.parse(String(init?.body)) as {
       messages: Array<{ role: string; content: string }>;
+      model?: string;
     };
+    assert.equal(request.model, 'translategemma:4b');
     const protectedPrompt = request.messages.find(({ role }) => role === 'system')?.content || '';
     assert.match(protectedPrompt, /NON-NEGOTIABLE OUTPUT CONTRACT/);
     assert.match(protectedPrompt, /TRANSLATION STYLE:\nTranslate\./);
@@ -147,6 +149,7 @@ test('항목 수가 틀린 큰 응답은 자동 분할하고 성공한 앞부분
       'Translate.',
       undefined,
       (items) => partialSnapshots.push([...items]),
+      'translategemma:4b',
     );
     assert.deepEqual(result.translations, ['가', '나', '다', '라']);
     assert.deepEqual(chatChunkSizes, [4, 2, 2]);

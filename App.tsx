@@ -20,9 +20,12 @@ import {
 } from './types';
 import {
   GEMINI_SESSION_KEY,
+  GEMINI_MODEL_STORAGE_KEY,
+  OLLAMA_MODEL_STORAGE_KEY,
   getProviderModelLabel,
   isProviderReady,
   normalizeTranslationProvider,
+  normalizeGeminiModel,
   TRANSLATION_PROVIDER_STORAGE_KEY,
   translateSelection,
   translateBatch,
@@ -79,6 +82,12 @@ function App() {
   const [isTranslationSettingsOpen, setIsTranslationSettingsOpen] = useState(false);
   const [ollamaStatus, setOllamaStatus] = useState<OllamaRuntimeInfo | null>(null);
   const [isCheckingOllama, setIsCheckingOllama] = useState(true);
+  const [ollamaModel, setOllamaModel] = useState(
+    () => localStorage.getItem(OLLAMA_MODEL_STORAGE_KEY) || '',
+  );
+  const [geminiModel, setGeminiModel] = useState(
+    () => normalizeGeminiModel(localStorage.getItem(GEMINI_MODEL_STORAGE_KEY)),
+  );
   const [translationProvider, setTranslationProvider] = useState<TranslationProvider>(
     () => normalizeTranslationProvider(localStorage.getItem(TRANSLATION_PROVIDER_STORAGE_KEY)),
   );
@@ -89,10 +98,18 @@ function App() {
   const [history, setHistory] = useState<{ prevContent: string; prevSegments: TextSegment[] } | null>(null);
   const [lastTranslated, setLastTranslated] = useState<{ original: string; translated: string } | null>(null);
   
-  const refreshOllamaStatus = async () => {
+  const activeOllamaModel = ollamaModel || ollamaStatus?.model || 'gemma4:31b-cloud';
+  const ollamaReady = Boolean(
+    ollamaStatus?.ok
+    && ollamaStatus.modelAvailable
+    && ollamaStatus.model === activeOllamaModel
+  );
+
+  const refreshOllamaStatus = async (model = ollamaModel || undefined) => {
     setIsCheckingOllama(true);
-    const status = await getOllamaRuntimeInfo();
+    const status = await getOllamaRuntimeInfo(model);
     setOllamaStatus(status);
+    if (status.model) setOllamaModel((current) => current || status.model);
     setIsCheckingOllama(false);
   };
 
@@ -108,6 +125,14 @@ function App() {
     if (geminiApiKey) sessionStorage.setItem(GEMINI_SESSION_KEY, geminiApiKey);
     else sessionStorage.removeItem(GEMINI_SESSION_KEY);
   }, [geminiApiKey]);
+
+  useEffect(() => {
+    if (ollamaModel) localStorage.setItem(OLLAMA_MODEL_STORAGE_KEY, ollamaModel);
+  }, [ollamaModel]);
+
+  useEffect(() => {
+    localStorage.setItem(GEMINI_MODEL_STORAGE_KEY, geminiModel);
+  }, [geminiModel]);
   
   // Dictionary State with Persistence
   const [customDictionary, setCustomDictionary] = useState<DictionaryEntry[]>(() => {
@@ -210,7 +235,7 @@ function App() {
     if (!isProviderReady(
       translationProvider,
       geminiApiKey,
-      Boolean(ollamaStatus?.ok && ollamaStatus.modelAvailable),
+      ollamaReady,
     )) {
       setIsTranslationSettingsOpen(true);
       alert(
@@ -231,7 +256,8 @@ function App() {
           selection.text, 
           customDictionary, 
           useDefaultDictionary,
-          systemPrompt
+          systemPrompt,
+          translationProvider === 'gemini' ? geminiModel : activeOllamaModel,
       );
       
       const isUnchanged = translatedText.trim() === selection.text.trim();
@@ -271,7 +297,7 @@ function App() {
     if (!isProviderReady(
       translationProvider,
       geminiApiKey,
-      Boolean(ollamaStatus?.ok && ollamaStatus.modelAvailable),
+      ollamaReady,
     )) {
       setIsTranslationSettingsOpen(true);
       alert(
@@ -429,7 +455,8 @@ function App() {
               outputTokens: statsBeforeBatch.outputTokens + partialUsage.outputTokens,
               totalDurationMs: statsBeforeBatch.totalDurationMs + partialUsage.totalDurationMs
             });
-          }
+          },
+          translationProvider === 'gemini' ? geminiModel : activeOllamaModel,
       );
 
       const failedTranslationIndices = new Set<number>();
@@ -521,9 +548,10 @@ function App() {
                 <h1 className="font-bold text-slate-100 leading-none">Fangal AA Translator</h1>
                 <div className="flex items-center gap-2 mt-0.5">
                    <span className="text-[10px] text-slate-400 font-mono">
-                     {getProviderModelLabel(
-                       translationProvider,
-                       ollamaStatus?.model,
+                      {getProviderModelLabel(
+                        translationProvider,
+                        activeOllamaModel,
+                        geminiModel,
                      ).toUpperCase()}
                    </span>
                    <span className="w-0.5 h-2.5 bg-slate-700"></span>
@@ -547,7 +575,7 @@ function App() {
                     isProviderReady(
                       translationProvider,
                       geminiApiKey,
-                      Boolean(ollamaStatus?.ok && ollamaStatus.modelAvailable),
+                      ollamaReady,
                     )
                       ? 'border-teal-600/50 text-teal-400'
                       : 'border-yellow-600/50 text-yellow-400'
@@ -735,11 +763,17 @@ function App() {
         onClose={() => setIsTranslationSettingsOpen(false)}
         status={ollamaStatus}
         isChecking={isCheckingOllama}
-        onRefresh={() => void refreshOllamaStatus()}
+        onRefresh={(model) => void refreshOllamaStatus(model)}
         provider={translationProvider}
+        ollamaModel={activeOllamaModel}
+        geminiModel={geminiModel}
         geminiApiKey={geminiApiKey}
-        onSave={(provider, apiKey) => {
-          if (provider !== translationProvider) {
+        onSave={(provider, apiKey, nextOllamaModel, nextGeminiModel) => {
+          if (
+            provider !== translationProvider
+            || nextOllamaModel !== activeOllamaModel
+            || nextGeminiModel !== geminiModel
+          ) {
             setApiStats({
               requestCount: 0,
               inputTokens: 0,
@@ -748,7 +782,10 @@ function App() {
             });
           }
           setTranslationProvider(provider);
+          setOllamaModel(nextOllamaModel);
+          setGeminiModel(nextGeminiModel);
           setGeminiApiKey(apiKey);
+          void refreshOllamaStatus(nextOllamaModel);
         }}
       />
       

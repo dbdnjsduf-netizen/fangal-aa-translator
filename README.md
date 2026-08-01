@@ -4,10 +4,10 @@
 최대한 보존하는 로컬 웹 앱입니다. 실행 중 상단의 **번역 엔진** 메뉴에서 다음 두 모드를
 선택할 수 있습니다.
 
-- **Ollama Pro**: 로그인한 Ollama의 `gemma4:31b-cloud` 구독 할당량 또는 서버에 설정한
-  Ollama Cloud API 키를 사용합니다.
-- **Gemini API**: 사용자가 입력한 Google API 키로 안정 버전 `gemini-3.6-flash`를 직접
-  호출합니다.
+- **Ollama**: 로그인한 Ollama의 `gemma4:31b-cloud` 구독 할당량 또는 로컬
+  `translategemma:4b` 모델을 선택해 사용합니다.
+- **Gemini API**: 사용자가 입력한 Google API 키로 `gemini-3.6-flash`,
+  `gemini-3.1-flash-lite`, `gemini-2.5-flash-lite` 중 하나를 직접 호출합니다.
 
 ## 주요 기능
 
@@ -55,6 +55,9 @@ npm start
 ```bash
 ollama signin
 ollama pull gemma4:31b-cloud
+
+# 구독 할당량 없이 로컬 TranslateGemma 4B를 사용할 경우
+ollama pull translategemma:4b
 ```
 
 프로젝트 루트에서 `.env.example`을 `.env`로 복사한 뒤 기본값을 그대로 사용할 수
@@ -97,7 +100,7 @@ Google Gemini API로 직접 전송되고 앱 서버 로그에는 키가 기록�
 
 | 항목 | Ollama | Gemini |
 |---|---:|---:|
-| 기본 모델 | `gemma4:31b-cloud` | `gemini-3.6-flash` |
+| 선택 모델 | `gemma4:31b-cloud`, `translategemma:4b` | `gemini-3.6-flash`, `gemini-3.1-flash-lite`, `gemini-2.5-flash-lite` |
 | 목표 청크 | 2,400자 / 50항목 | 2,800자 / 50항목 |
 | 강제 상한 | 3,200자 / 64항목 | 3,600자 / 64항목 |
 | 동시 워커 | 최대 3 | 최대 2 |
@@ -146,7 +149,7 @@ npm run check
 | 변수 | 기본값 | 설명 |
 |---|---|---|
 | `OLLAMA_HOST` | `http://127.0.0.1:11434` | 로컬 또는 Cloud Ollama 주소 |
-| `OLLAMA_MODEL` | `gemma4:31b-cloud` | 번역 모델 |
+| `OLLAMA_MODEL` | `gemma4:31b-cloud` | 서버 기본 모델. UI에서는 이 모델 또는 `translategemma:4b` 선택 |
 | `OLLAMA_API_KEY` | 없음 | 직접 Cloud 연결 시에만 사용 |
 | `OLLAMA_NUM_CTX` | `32768` | 컨텍스트 크기 |
 | `OLLAMA_NUM_PREDICT` | `8192` | 최대 생성 토큰 |
@@ -167,7 +170,7 @@ npm run check
 ## 문제 해결
 
 - **Ollama 연결 실패**: Ollama 앱 실행, `ollama signin`, `OLLAMA_HOST`를 확인합니다.
-- **Ollama 모델 없음**: `ollama pull gemma4:31b-cloud`를 실행합니다.
+- **Ollama 모델 없음**: 설정에서 선택한 모델명으로 `ollama pull <모델명>`을 실행합니다.
 - **Gemini 401/403**: 입력한 키와 해당 Google 프로젝트의 Gemini API 권한을 확인합니다.
 - **429 요청 한도**: 계정 쿼터를 확인하고 잠시 후 다시 시도합니다.
 - **번역 항목 수 불일치**: 앱이 자동으로 청크를 분할해 복구합니다. 끝까지 실패한

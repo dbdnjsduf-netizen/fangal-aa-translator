@@ -55,7 +55,8 @@ export const SystemReport: React.FC<SystemReportProps> = ({ isOpen, onClose }) =
               <p>전략: <span className="text-blue-300">문맥 보존 동적 청킹</span></p>
               <p>Ollama: <span className="text-blue-300">목표 50항목 · 최대 3개 동적 워커</span></p>
               <p>Gemini: <span className="text-blue-300">목표 50항목 · 최대 2개 동적 워커</span></p>
-              <p>모델: <span className="text-purple-300">gemma4:31b-cloud / gemini-3.6-flash</span></p>
+              <p>Ollama: <span className="text-purple-300">gemma4:31b-cloud / translategemma:4b</span></p>
+              <p>Gemini: <span className="text-purple-300">3.6 Flash / 3.1 Flash-Lite / 2.5 Flash-Lite</span></p>
             </div>
             <p className="mt-2 text-sm">
               API 오버헤드를 줄이고 컨텍스트 윈도우(Context Window) 활용을 극대화하기 위해 다음과 같은 전략을 사용합니다:

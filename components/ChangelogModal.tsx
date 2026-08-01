@@ -15,6 +15,16 @@ interface Version {
 
 const changelogData: Version[] = [
   {
+    version: "3.4.0",
+    date: "2026.08.01",
+    changes: [
+      "Ollama 설정에 구독형 gemma4:31b-cloud와 로컬 translategemma:4b 모델 선택 추가",
+      "Gemini 설정에 안정 버전 3.1 Flash-Lite와 2.5 Flash-Lite 선택 추가",
+      "선택 모델을 브라우저에 기억하고 단일·일괄·자동 분할·격리 재시도 요청 전체에 동일하게 적용",
+      "Ollama 프록시에서 허용 모델만 전달하고 선택 모델별 설치 여부와 연결 상태를 개별 확인"
+    ]
+  },
+  {
     version: "3.3.0",
     date: "2026.08.01",
     changes: [

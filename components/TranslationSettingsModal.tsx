@@ -11,17 +11,27 @@ import {
   X,
 } from 'lucide-react';
 import { OllamaRuntimeInfo, TranslationProvider } from '../types';
-import { GEMINI_MODEL } from '../services/geminiService';
+import {
+  GEMINI_MODELS,
+  GeminiModel,
+} from '../services/geminiService';
 
 interface TranslationSettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   status: OllamaRuntimeInfo | null;
   isChecking: boolean;
-  onRefresh: () => void;
+  onRefresh: (ollamaModel: string) => void;
   provider: TranslationProvider;
+  ollamaModel: string;
+  geminiModel: GeminiModel;
   geminiApiKey: string;
-  onSave: (provider: TranslationProvider, geminiApiKey: string) => void;
+  onSave: (
+    provider: TranslationProvider,
+    geminiApiKey: string,
+    ollamaModel: string,
+    geminiModel: GeminiModel,
+  ) => void;
 }
 
 export const TranslationSettingsModal: React.FC<TranslationSettingsModalProps> = ({
@@ -31,25 +41,39 @@ export const TranslationSettingsModal: React.FC<TranslationSettingsModalProps> =
   isChecking,
   onRefresh,
   provider,
+  ollamaModel,
+  geminiModel,
   geminiApiKey,
   onSave,
 }) => {
   const [draftProvider, setDraftProvider] = useState<TranslationProvider>(provider);
+  const [draftOllamaModel, setDraftOllamaModel] = useState(ollamaModel);
+  const [draftGeminiModel, setDraftGeminiModel] = useState<GeminiModel>(geminiModel);
   const [draftApiKey, setDraftApiKey] = useState(geminiApiKey);
   const [showApiKey, setShowApiKey] = useState(false);
 
   useEffect(() => {
     if (!isOpen) return;
     setDraftProvider(provider);
+    setDraftOllamaModel(ollamaModel);
+    setDraftGeminiModel(geminiModel);
     setDraftApiKey(geminiApiKey);
     setShowApiKey(false);
-  }, [geminiApiKey, isOpen, provider]);
+  }, [geminiApiKey, geminiModel, isOpen, ollamaModel, provider]);
 
   if (!isOpen) return null;
 
-  const ready = Boolean(status?.ok && status.modelAvailable);
+  const ready = Boolean(
+    status?.ok
+    && status.modelAvailable
+    && status.model === draftOllamaModel
+  );
   const geminiReady = draftApiKey.trim().length > 0;
   const canSave = draftProvider === 'ollama' || geminiReady;
+  const handleCancel = () => {
+    if (status?.model !== ollamaModel) onRefresh(ollamaModel);
+    onClose();
+  };
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
@@ -59,7 +83,7 @@ export const TranslationSettingsModal: React.FC<TranslationSettingsModalProps> =
             <Server className="w-5 h-5 text-teal-400" />
             번역 엔진 설정
           </h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-white">
+          <button onClick={handleCancel} className="text-slate-400 hover:text-white">
             <X className="w-6 h-6" />
           </button>
         </div>
@@ -77,9 +101,9 @@ export const TranslationSettingsModal: React.FC<TranslationSettingsModalProps> =
             >
               <p className="font-semibold text-teal-300 flex items-center gap-2">
                 <Server className="w-4 h-4" />
-                Ollama Pro
+                Ollama
               </p>
-              <p className="text-xs text-slate-400 mt-1">로컬 Ollama 로그인 세션 또는 서버의 Cloud 키 사용</p>
+              <p className="text-xs text-slate-400 mt-1">Ollama Pro Cloud 또는 로컬 TranslateGemma 선택</p>
             </button>
             <button
               type="button"
@@ -100,6 +124,28 @@ export const TranslationSettingsModal: React.FC<TranslationSettingsModalProps> =
 
           {draftProvider === 'ollama' ? (
             <>
+              <div className="space-y-2">
+                <label htmlFor="ollama-model" className="text-sm font-medium text-slate-200">
+                  Ollama 모델
+                </label>
+                <select
+                  id="ollama-model"
+                  value={draftOllamaModel}
+                  onChange={(event) => setDraftOllamaModel(event.target.value)}
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-teal-500"
+                >
+                  <option value={status?.defaultModel || ollamaModel}>
+                    Gemma 4 31B · Ollama Pro ({status?.defaultModel || ollamaModel})
+                  </option>
+                  <option value="translategemma:4b">
+                    TranslateGemma 4B · 로컬 (translategemma:4b)
+                  </option>
+                </select>
+                <p className="text-xs text-slate-500">
+                  로컬 모델은 Ollama가 실행 중이고 해당 모델을 내려받은 경우에만 사용됩니다.
+                </p>
+              </div>
+
               <div className={`p-4 rounded-xl border ${ready ? 'bg-green-900/20 border-green-500/30' : 'bg-yellow-900/20 border-yellow-500/30'}`}>
                 <div className="flex items-start gap-3">
                   {ready
@@ -116,7 +162,7 @@ export const TranslationSettingsModal: React.FC<TranslationSettingsModalProps> =
 
               <dl className="grid grid-cols-[110px_1fr] gap-y-3 text-sm bg-slate-950 p-4 rounded-xl border border-slate-800">
                 <dt className="text-slate-500">모델</dt>
-                <dd className="text-purple-300 font-mono break-all">{status?.model || 'gemma4:31b-cloud'}</dd>
+                <dd className="text-purple-300 font-mono break-all">{draftOllamaModel}</dd>
                 <dt className="text-slate-500">연결 방식</dt>
                 <dd className="text-slate-300">
                   {status?.mode === 'direct-cloud' ? 'Ollama Cloud API 직접 연결' : '로컬 Ollama → Pro Cloud'}
@@ -128,12 +174,12 @@ export const TranslationSettingsModal: React.FC<TranslationSettingsModalProps> =
               <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700 text-sm text-slate-400 space-y-3">
                 <p className="font-semibold text-slate-200 flex items-center gap-2">
                   <Terminal className="w-4 h-4" />
-                  Pro 구독 할당량으로 실행
+                  Ollama 모델 준비
                 </p>
                 <ol className="list-decimal list-inside space-y-1.5">
                   <li>Ollama 앱을 설치하고 실행합니다.</li>
-                  <li><code className="text-teal-300">ollama signin</code>으로 Pro 계정에 로그인합니다.</li>
-                  <li><code className="text-teal-300">ollama pull gemma4:31b-cloud</code>를 한 번 실행합니다.</li>
+                  <li>Pro 모델은 <code className="text-teal-300">ollama signin</code>으로 계정에 로그인합니다.</li>
+                  <li><code className="text-teal-300">ollama pull {draftOllamaModel}</code>을 한 번 실행합니다.</li>
                   <li>이 창에서 연결 상태를 다시 확인합니다.</li>
                 </ol>
                 <p className="text-xs text-slate-500">
@@ -143,6 +189,22 @@ export const TranslationSettingsModal: React.FC<TranslationSettingsModalProps> =
             </>
           ) : (
             <>
+              <div className="space-y-2">
+                <label htmlFor="gemini-model" className="text-sm font-medium text-slate-200">
+                  Gemini 모델
+                </label>
+                <select
+                  id="gemini-model"
+                  value={draftGeminiModel}
+                  onChange={(event) => setDraftGeminiModel(event.target.value as GeminiModel)}
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-blue-500"
+                >
+                  {GEMINI_MODELS.map((model) => (
+                    <option key={model.id} value={model.id}>{model.label}</option>
+                  ))}
+                </select>
+              </div>
+
               <div className={`p-4 rounded-xl border ${
                 geminiReady
                   ? 'bg-green-900/20 border-green-500/30'
@@ -157,7 +219,7 @@ export const TranslationSettingsModal: React.FC<TranslationSettingsModalProps> =
                       {geminiReady ? 'API 키 입력 완료' : 'API 키가 필요합니다'}
                     </p>
                     <p className="text-sm text-slate-400 mt-1">
-                      모델: <code className="text-blue-300">{GEMINI_MODEL}</code>
+                      모델: <code className="text-blue-300">{draftGeminiModel}</code>
                     </p>
                   </div>
                 </div>
@@ -218,7 +280,7 @@ export const TranslationSettingsModal: React.FC<TranslationSettingsModalProps> =
         <div className="p-4 border-t border-slate-800 flex justify-end gap-3">
           {draftProvider === 'ollama' && (
             <button
-              onClick={onRefresh}
+              onClick={() => onRefresh(draftOllamaModel)}
               disabled={isChecking}
               className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-white rounded-lg text-sm"
             >
@@ -226,12 +288,17 @@ export const TranslationSettingsModal: React.FC<TranslationSettingsModalProps> =
               연결 확인
             </button>
           )}
-          <button onClick={onClose} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-sm">
+          <button onClick={handleCancel} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-sm">
             취소
           </button>
           <button
             onClick={() => {
-              onSave(draftProvider, draftApiKey.trim());
+              onSave(
+                draftProvider,
+                draftApiKey.trim(),
+                draftOllamaModel,
+                draftGeminiModel,
+              );
               onClose();
             }}
             disabled={!canSave}
