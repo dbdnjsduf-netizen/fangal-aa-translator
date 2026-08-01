@@ -6,13 +6,23 @@
     <title>Fangal AA Translator</title>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
     <style>
+      @font-face {
+        font-family: 'Saitamaar';
+        font-style: normal;
+        font-weight: normal;
+        src:
+          url(https://clickin.github.io/SaitamaarFont/webfonts/Saitamaar-Regular.woff2) format('woff2'),
+          url(https://clickin.github.io/SaitamaarFont/ttf/Saitamaar-Regular.ttf) format('truetype');
+      }
+
       body {
         font-family: 'Noto Sans KR', sans-serif;
       }
-      /* AA Specific Font Stack for better alignment */
+      /* Match d4c-aa-viewer's AA rendering stack. */
       .font-aa {
-        font-family: 'MS PGothic', 'IPAMonaPGothic', 'Monapo', 'Mona', 'Saitamaar', monospace;
-        line-height: 1.1; 
+        font-family: Saitamaar, 'MS PGothic', 'TextAA', 'IPAMonaPGothic', 'Monapo', 'Mona', monospace;
+        font-style: normal;
+        font-weight: normal;
       }
     </style>
   </head>

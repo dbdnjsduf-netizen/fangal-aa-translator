@@ -44,6 +44,7 @@ export const Editor: React.FC<EditorProps> = ({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [fontSize, setFontSize] = useState(16);
+  const aaLineHeight = Math.floor(fontSize * 1.125);
 
   // Web Worker for segmentation
   const workerRef = useRef<Worker | null>(null);
@@ -431,9 +432,10 @@ export const Editor: React.FC<EditorProps> = ({
             <button onClick={() => setFontSize(f => Math.min(32, f + 1))} className="px-2 py-1 text-xs text-slate-700 hover:text-black hover:bg-white/50 rounded">A+</button>
          </div>
          <div
-            className="w-full h-full p-4 overflow-auto whitespace-pre font-aa leading-tight select-text text-[#2e2e2e]"
+            className="w-full h-full p-4 overflow-auto whitespace-pre font-aa select-text text-[#2e2e2e]"
             style={{ 
                 fontSize: `${fontSize}px`,
+                lineHeight: `${aaLineHeight}px`,
                 backgroundColor: getViewerBackgroundColor()
             }}
             onWheel={handleWheel}
@@ -463,18 +465,18 @@ export const Editor: React.FC<EditorProps> = ({
           onKeyUp={handleSelect}
           onWheel={handleWheel}
           spellCheck={false}
-          className="w-full h-full bg-[#1a1b26] text-[#a9b1d6] p-4 resize-none focus:outline-none font-aa scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent leading-tight"
-          style={{ fontSize: `${fontSize}px` }}
+          className="w-full h-full bg-[#1a1b26] text-[#a9b1d6] p-4 resize-none focus:outline-none font-aa scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent"
+          style={{ fontSize: `${fontSize}px`, lineHeight: `${aaLineHeight}px` }}
         />
       ) : (
         <div 
           ref={containerRef}
-          className={`w-full h-full bg-[#1a1b26] text-[#a9b1d6] p-4 overflow-auto whitespace-pre font-aa leading-tight relative select-none ${
+          className={`w-full h-full bg-[#1a1b26] text-[#a9b1d6] p-4 overflow-auto whitespace-pre font-aa relative select-none ${
             isDragMode || isManualSelectMode || isManualVerticalMode
               ? 'cursor-crosshair touch-none'
               : ''
           }`}
-          style={{ fontSize: `${fontSize}px` }}
+          style={{ fontSize: `${fontSize}px`, lineHeight: `${aaLineHeight}px` }}
           onWheel={handleWheel}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
@@ -494,7 +496,7 @@ export const Editor: React.FC<EditorProps> = ({
                      toggleSegmentSelection(seg.id);
                    }}
                    className={`
-                     rounded px-0.5 transition-colors duration-75 inline-block
+                     rounded transition-colors duration-75
                      ${!isDragMode && !isManualSelectMode && !isManualVerticalMode && isSegmentTranslationSelectable(seg) ? 'cursor-pointer' : 'cursor-default'}
                      ${seg.isSelected 
                         ? seg.isManualVerticalSelection
