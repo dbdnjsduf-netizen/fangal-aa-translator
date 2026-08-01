@@ -255,6 +255,51 @@ test('인접한 여러 말풍선의 초과 번역을 원본 좌표에서 원자�
   assert.doesNotMatch(after, /[ぁ-んァ-ヶ一-龯]/u);
 });
 
+test('한 세로 그룹의 슬롯이 손상돼도 다른 말풍선은 계속 적용한다', () => {
+  const sample = [
+    '|　そ　|　|　こ　|',
+    '|　れ　|　|　こ　|',
+    '|　な　|　|　で　|',
+    '|　ら　|　|　は　|',
+  ].join('\n');
+  const annotated = annotateVerticalTextSegments(sample, makeLineSegments(sample));
+  const groups = detectVerticalTextGroups(sample, annotated);
+  const failedGroup = groups.find(({ sourceText }) => sourceText === 'ここでは')!;
+  const healthyGroup = groups.find(({ sourceText }) => sourceText === 'それなら')!;
+  const brokenId = failedGroup.tokens[0].segmentId;
+  const damaged = annotated.map((segment) => (
+    segment.id === brokenId
+      ? {
+          ...segment,
+          text: '손상',
+          original: '손상',
+          verticalGroupId: undefined,
+          verticalOrder: undefined,
+          verticalSourceLine: undefined,
+          verticalSourceIndex: undefined,
+        }
+      : segment
+  ));
+
+  const result = applyVerticalTranslations(damaged, [
+    { group: failedGroup, translation: '여기서는' },
+    { group: healthyGroup, translation: '그렇다면' },
+  ]);
+  assert.equal(result.applied, false);
+  assert.equal(result.items[0].applied, false);
+  assert.equal(result.items[1].applied, true);
+  assert.ok(
+    result.segments
+      .filter(({ id }) => healthyGroup.segmentIds.includes(id))
+      .every(({ isTranslated }) => isTranslated),
+  );
+  assert.ok(
+    result.segments
+      .filter(({ id }) => failedGroup.segmentIds.includes(id) && id !== brokenId)
+      .every(({ isTranslated }) => !isTranslated),
+  );
+});
+
 test('행마다 테두리가 달라지는 자유형 말풍선의 세로 대사를 감지한다', () => {
   const sample = [
     '＞　　　ギ　　　＜',

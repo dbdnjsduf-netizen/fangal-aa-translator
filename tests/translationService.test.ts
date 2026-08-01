@@ -169,3 +169,59 @@ test('Gemini도 일본어가 남은 항목만 구조화 응답으로 다시 번�
     }
   }
 });
+
+test('Gemini도 일부 청크 실패 시 정상 항목을 반환하고 실패 항목만 남긴다', async () => {
+  const previousFetch = globalThis.fetch;
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const inputs = [
+    ...Array.from({ length: 64 }, (_, index) => `原文${index}`),
+    '失敗',
+  ];
+
+  Object.defineProperty(globalThis, 'window', {
+    value: globalThis,
+    writable: true,
+    configurable: true,
+  });
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body));
+    const prompt = String(body.contents[0].parts[0].text);
+    const chunk = JSON.parse(prompt.split('INPUT_JSON:\n')[1]) as string[];
+    if (chunk.includes('失敗')) {
+      return new Response(JSON.stringify({ error: { message: 'Gemini 단일 청크 실패' } }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify({
+      candidates: [{
+        content: { parts: [{ text: JSON.stringify(chunk.map((_, index) => `번역${index}`)) }] },
+        finishReason: 'STOP',
+      }],
+      usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5 },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    const result = await translateBatchWithGemini(
+      inputs,
+      'TEST_ONLY_NOT_A_REAL_KEY',
+      [],
+      false,
+      'Translate.',
+    );
+    assert.equal(result.translations[0], '번역0');
+    assert.equal(result.translations[64], '失敗');
+    assert.deepEqual(result.failures[0].itemIndices, [64]);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousWindow) {
+      Object.defineProperty(globalThis, 'window', previousWindow);
+    } else {
+      Reflect.deleteProperty(globalThis, 'window');
+    }
+  }
+});

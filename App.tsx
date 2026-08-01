@@ -341,13 +341,18 @@ function App() {
         throw new Error('번역할 수 있는 텍스트 그룹을 찾지 못했습니다.');
       }
 
-      const updateSegmentsWithPartial = (translatedTexts: string[], collectFailures = false) => {
+      const updateSegmentsWithPartial = (
+        translatedTexts: string[],
+        collectFailures = false,
+        failedTranslationIndices = new Set<number>(),
+      ) => {
         const normalTranslations: NormalTranslationUpdate[] = [];
         const verticalTranslations: Array<{
           unit: Extract<SmartTranslationUnit, { kind: 'vertical' }>;
           translatedText: string;
         }> = [];
         translationUnits.forEach((unit, index) => {
+          if (failedTranslationIndices.has(index)) return;
           const translatedText = translatedTexts[index];
           if (
             unit.kind === 'normal'
@@ -378,34 +383,30 @@ function App() {
             translation: translatedText,
           })),
         );
-        if (!verticalResult.applied) {
-          throw new Error(
-            `세로쓰기 번역을 적용하지 못했습니다: ${verticalResult.reason || '좌표 충돌'}`,
-          );
-        }
         const normalResult = applyNormalTranslationUpdates(
           verticalResult.segments,
           normalTranslations,
           collectFailures,
         );
-        const failures = [...normalResult.layoutFailures];
+        const layoutWarnings = [...normalResult.layoutFailures];
+        const skippedVertical: string[] = [];
         const newSegments = clearCompletedSelections(normalResult.segments);
-        if (collectFailures) {
-          verticalTranslations.forEach(({ unit }, index) => {
-            const reason = verticalResult.items[index]?.reason;
-            if (reason) {
-              failures.push(`${unit.sourceText}: ${reason}`);
-            }
-          });
-        }
+        verticalTranslations.forEach(({ unit }, index) => {
+          const item = verticalResult.items[index];
+          if (!item?.applied) {
+            skippedVertical.push(`${unit.sourceText}: ${item?.reason || '좌표를 복구하지 못했습니다.'}`);
+          } else if (collectFailures && item.reason) {
+            layoutWarnings.push(`${unit.sourceText}: ${item.reason}`);
+          }
+        });
 
         setSegments(newSegments);
         const newContent = newSegments.map(s => s.text).join('');
         setContent(newContent);
-        return failures;
+        return { layoutWarnings, skippedVertical };
       };
 
-      const { translations: finalTranslations, usage } = await translateBatch(
+      const { translations: finalTranslations, usage, failures: batchFailures } = await translateBatch(
           translationProvider,
           geminiApiKey,
           textsToTranslate,
@@ -430,8 +431,16 @@ function App() {
             });
           }
       );
-      
-      const layoutFailures = updateSegmentsWithPartial(finalTranslations, true);
+
+      const failedTranslationIndices = new Set<number>();
+      batchFailures.forEach(({ itemIndices }) => {
+        itemIndices.forEach((index) => failedTranslationIndices.add(index));
+      });
+      const { layoutWarnings, skippedVertical } = updateSegmentsWithPartial(
+        finalTranslations,
+        true,
+        failedTranslationIndices,
+      );
       setApiStats({
         requestCount: statsBeforeBatch.requestCount + usage.requestCount,
         inputTokens: statsBeforeBatch.inputTokens + usage.inputTokens,
@@ -439,11 +448,28 @@ function App() {
         totalDurationMs: statsBeforeBatch.totalDurationMs + usage.durationMs,
       });
       
-      setLastTranslated({ original: `${translationUnits.length} items`, translated: "Done" });
-      if (layoutFailures.length > 0) {
+      const skippedCount = failedTranslationIndices.size + skippedVertical.length;
+      const appliedCount = Math.max(0, translationUnits.length - skippedCount);
+      setLastTranslated({
+        original: `${appliedCount}/${translationUnits.length} items`,
+        translated: skippedCount > 0 ? 'Partial' : 'Done',
+      });
+      if (skippedCount > 0) {
+        const skippedDetails = [
+          ...batchFailures.map((failure) => (
+            `${failure.chunkIndex + 1}번 청크(${failure.itemCount}개): ${failure.message}`
+          )),
+          ...skippedVertical,
+        ];
         alert(
-          `번역은 모두 적용했지만 ${layoutFailures.length}개 항목에서 위치가 일부 확장됐습니다.\n\n`
-          + layoutFailures.slice(0, 3).join('\n'),
+          `일괄 번역 부분 완료: ${appliedCount}개는 적용했고 ${skippedCount}개는 건너뛰어 선택 상태로 남겼습니다.\n`
+          + '남은 항목만 다시 번역하거나 세로수동으로 다시 묶어 재시도하세요.\n\n'
+          + skippedDetails.slice(0, 5).join('\n'),
+        );
+      } else if (layoutWarnings.length > 0) {
+        alert(
+          `번역은 모두 적용했지만 ${layoutWarnings.length}개 항목에서 위치가 일부 확장됐습니다.\n\n`
+          + layoutWarnings.slice(0, 3).join('\n'),
         );
       }
 

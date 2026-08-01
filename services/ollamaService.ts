@@ -99,6 +99,15 @@ export interface TranslationResponseData {
 export interface BatchTranslationResult {
   translations: string[];
   usage: Usage;
+  failures: BatchTranslationFailure[];
+}
+
+export interface BatchTranslationFailure {
+  chunkIndex: number;
+  startIndex: number;
+  itemCount: number;
+  itemIndices: number[];
+  message: string;
 }
 
 export interface TranslationProgress {
@@ -161,11 +170,14 @@ export async function translateBatch(
     return {
       translations: [],
       usage: { inputTokens: 0, outputTokens: 0, requestCount: 0, durationMs: 0 },
+      failures: [],
     };
   }
 
   const results = chunks.map((chunk) => [...chunk]);
-  const failures: Error[] = [];
+  const chunkStarts = getChunkStartIndices(chunks);
+  const completedItems = chunks.map(() => new Set<number>());
+  const failures: BatchTranslationFailure[] = [];
   const usage = { inputTokens: 0, outputTokens: 0, requestCount: 0, durationMs: 0 };
   let nextChunkIndex = 0;
   let completedChunks = 0;
@@ -191,6 +203,12 @@ export async function translateBatch(
               recoveredTranslations.length,
               ...recoveredTranslations,
             );
+            recoveredTranslations.forEach((translation, recoveredIndex) => {
+              const localIndex = offset + recoveredIndex;
+              if (translation.trim() !== chunks[index][localIndex]?.trim()) {
+                completedItems[index].add(localIndex);
+              }
+            });
             onPartialResult?.(results.flat(), {
               requestCount: usage.requestCount,
               inputTokens: usage.inputTokens,
@@ -200,6 +218,7 @@ export async function translateBatch(
           },
         );
         results[index] = result.translations;
+        result.translations.forEach((_, itemIndex) => completedItems[index].add(itemIndex));
         usage.requestCount += result.usage.requestCount;
         usage.inputTokens += result.usage.inputTokens;
         usage.outputTokens += result.usage.outputTokens;
@@ -219,7 +238,17 @@ export async function translateBatch(
           outputTokens: usage.outputTokens,
           totalDurationMs: usage.durationMs,
         });
-        failures.push(error instanceof Error ? error : new Error(String(error)));
+        const resolvedError = error instanceof Error ? error : new Error(String(error));
+        const itemIndices = chunks[index]
+          .map((_, itemIndex) => chunkStarts[index] + itemIndex)
+          .filter((_, itemIndex) => !completedItems[index].has(itemIndex));
+        failures.push({
+          chunkIndex: index,
+          startIndex: itemIndices[0] ?? chunkStarts[index],
+          itemCount: itemIndices.length,
+          itemIndices,
+          message: resolvedError.message,
+        });
       } finally {
         completedChunks += 1;
         onProgress?.({
@@ -233,12 +262,22 @@ export async function translateBatch(
 
   await Promise.all(Array.from({ length: concurrency }, () => worker()));
 
-  if (failures.length > 0) {
-    const firstFailure = failures[0].message;
+  const completedItemCount = completedItems.reduce((sum, items) => sum + items.size, 0);
+  if (completedItemCount === 0 && failures.length > 0) {
+    const firstFailure = failures[0]?.message || '모든 요청이 실패했습니다.';
     throw new Error(`${failures.length}개 번역 청크가 실패했습니다. ${firstFailure}`);
   }
 
-  return { translations: results.flat(), usage };
+  return { translations: results.flat(), usage, failures };
+}
+
+function getChunkStartIndices(chunks: string[][]) {
+  let offset = 0;
+  return chunks.map((chunk) => {
+    const start = offset;
+    offset += chunk.length;
+    return start;
+  });
 }
 
 export interface ChunkLimits {

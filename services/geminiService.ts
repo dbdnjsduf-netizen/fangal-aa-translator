@@ -1,5 +1,6 @@
 import { ApiUsageStats, DictionaryEntry } from '../types';
 import {
+  BatchTranslationFailure,
   BatchTranslationResult,
   buildTranslationRetryCorrection,
   buildTranslationPrompt,
@@ -101,11 +102,14 @@ export async function translateBatch(
     return {
       translations: [],
       usage: emptyUsage(),
+      failures: [],
     };
   }
 
   const results = chunks.map((chunk) => [...chunk]);
-  const failures: Error[] = [];
+  const chunkStarts = getChunkStartIndices(chunks);
+  const completedItems = chunks.map(() => new Set<number>());
+  const failures: BatchTranslationFailure[] = [];
   const usage = emptyUsage();
   let nextChunkIndex = 0;
   let completedChunks = 0;
@@ -137,16 +141,33 @@ export async function translateBatch(
               recoveredTranslations.length,
               ...recoveredTranslations,
             );
+            recoveredTranslations.forEach((translation, recoveredIndex) => {
+              const localIndex = offset + recoveredIndex;
+              if (translation.trim() !== chunks[index][localIndex]?.trim()) {
+                completedItems[index].add(localIndex);
+              }
+            });
             emitPartial();
           },
         );
         results[index] = result.translations;
+        result.translations.forEach((_, itemIndex) => completedItems[index].add(itemIndex));
         mergeUsage(usage, result.usage);
         emitPartial();
       } catch (error) {
         mergeUsage(usage, getErrorUsage(error));
         emitPartial();
-        failures.push(error instanceof Error ? error : new Error(String(error)));
+        const resolvedError = error instanceof Error ? error : new Error(String(error));
+        const itemIndices = chunks[index]
+          .map((_, itemIndex) => chunkStarts[index] + itemIndex)
+          .filter((_, itemIndex) => !completedItems[index].has(itemIndex));
+        failures.push({
+          chunkIndex: index,
+          startIndex: itemIndices[0] ?? chunkStarts[index],
+          itemCount: itemIndices.length,
+          itemIndices,
+          message: resolvedError.message,
+        });
       } finally {
         completedChunks += 1;
         onProgress?.({
@@ -160,13 +181,23 @@ export async function translateBatch(
 
   await Promise.all(Array.from({ length: concurrency }, () => worker()));
 
-  if (failures.length > 0) {
+  const completedItemCount = completedItems.reduce((sum, items) => sum + items.size, 0);
+  if (completedItemCount === 0 && failures.length > 0) {
     throw new Error(
-      `${failures.length}개 Gemini 번역 청크가 실패했습니다. ${failures[0].message}`,
+      `${failures.length}개 Gemini 번역 청크가 실패했습니다. ${failures[0]?.message || '모든 요청이 실패했습니다.'}`,
     );
   }
 
-  return { translations: results.flat(), usage };
+  return { translations: results.flat(), usage, failures };
+}
+
+function getChunkStartIndices(chunks: string[][]) {
+  let offset = 0;
+  return chunks.map((chunk) => {
+    const start = offset;
+    offset += chunk.length;
+    return start;
+  });
 }
 
 async function translateChunk(

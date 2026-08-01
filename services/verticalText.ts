@@ -50,6 +50,7 @@ export interface VerticalTranslationAssignment {
 }
 
 export interface VerticalBatchApplyItem {
+  applied: boolean;
   groupId: string;
   normalizedTranslation: string;
   reason?: string;
@@ -369,10 +370,10 @@ export function applyVerticalTranslation(
   const result = applyVerticalTranslations(segments, [{ group, translation }]);
   const item = result.items[0];
   return {
-    applied: result.applied,
+    applied: item?.applied ?? false,
     segments: result.segments,
     normalizedTranslation: item?.normalizedTranslation || '',
-    reason: result.reason || item?.reason,
+    reason: item?.reason || result.reason,
   };
 }
 
@@ -389,6 +390,8 @@ export function applyVerticalTranslations(
     const normalizedTranslation = normalizeVerticalTranslation(translation);
     const outputCharacters = Array.from(normalizedTranslation);
     if (outputCharacters.length === 0) outputCharacters.push('　');
+    const groupReplacements = new Map<string, Map<number, string>>();
+    const groupWholeReplacements = new Map<string, string>();
 
     const resolvedTokens = group.tokens.map((token, order) => {
       const segment = segmentById.get(token.segmentId);
@@ -466,12 +469,13 @@ export function applyVerticalTranslations(
     const unsafeIndex = resolvedTokens.findIndex((resolved) => !resolved);
     if (unsafeIndex >= 0) {
       const unsafeToken = group.tokens[unsafeIndex];
-      return {
+      items.push({
         applied: false,
-        segments,
-        items,
-        reason: `원문 슬롯(${unsafeToken.line + 1}행, '${normalizeSourceCharacter(unsafeToken.char)}')을 복구하지 못했습니다. 번역 중 원문이 직접 편집되었을 수 있으므로 해당 말풍선을 세로수동으로 다시 묶어 재시도하세요.`,
-      };
+        groupId: group.id,
+        normalizedTranslation,
+        reason: `원문 슬롯(${unsafeToken.line + 1}행, '${normalizeSourceCharacter(unsafeToken.char)}')을 복구하지 못했습니다. 해당 말풍선을 세로수동으로 다시 묶어 재시도하세요.`,
+      });
+      continue;
     }
 
     const overflow = Math.max(0, outputCharacters.length - group.capacity);
@@ -487,6 +491,7 @@ export function applyVerticalTranslations(
         }, 0)
       : -1;
 
+    let groupFailure: string | undefined;
     for (const [index, resolved] of resolvedTokens.entries()) {
       const { token, segmentId, segmentOffset, replaceWholeSegment } = resolved!;
       const outputIndex = overflow > 0 && index > overflowAnchorIndex
@@ -504,31 +509,54 @@ export function applyVerticalTranslations(
           .join('');
       }
       if (replaceWholeSegment) {
-        if (wholeSegmentReplacements.has(segmentId) || replacements.has(segmentId)) {
-          return {
-            applied: false,
-            segments,
-            items,
-            reason: `세로 말풍선들이 ${token.line + 1}행의 같은 문자 슬롯과 겹칩니다.`,
-          };
+        if (
+          wholeSegmentReplacements.has(segmentId)
+          || replacements.has(segmentId)
+          || groupWholeReplacements.has(segmentId)
+          || groupReplacements.has(segmentId)
+        ) {
+          groupFailure = `세로 말풍선들이 ${token.line + 1}행의 같은 문자 슬롯과 겹칩니다.`;
+          break;
         }
-        wholeSegmentReplacements.set(segmentId, replacement);
+        groupWholeReplacements.set(segmentId, replacement);
         continue;
       }
-      const segmentReplacements = replacements.get(segmentId) || new Map<number, string>();
-      if (segmentReplacements.has(segmentOffset) || wholeSegmentReplacements.has(segmentId)) {
-        return {
-          applied: false,
-          segments,
-          items,
-          reason: `세로 말풍선들이 ${token.line + 1}행의 같은 문자 슬롯과 겹칩니다.`,
-        };
+      const existingReplacements = replacements.get(segmentId);
+      const segmentReplacements = groupReplacements.get(segmentId) || new Map<number, string>();
+      if (
+        existingReplacements?.has(segmentOffset)
+        || segmentReplacements.has(segmentOffset)
+        || wholeSegmentReplacements.has(segmentId)
+        || groupWholeReplacements.has(segmentId)
+      ) {
+        groupFailure = `세로 말풍선들이 ${token.line + 1}행의 같은 문자 슬롯과 겹칩니다.`;
+        break;
       }
       segmentReplacements.set(segmentOffset, replacement);
-      replacements.set(segmentId, segmentReplacements);
+      groupReplacements.set(segmentId, segmentReplacements);
+    }
+
+    if (groupFailure) {
+      items.push({
+        applied: false,
+        groupId: group.id,
+        normalizedTranslation,
+        reason: groupFailure,
+      });
+      continue;
+    }
+
+    for (const [segmentId, replacement] of groupWholeReplacements) {
+      wholeSegmentReplacements.set(segmentId, replacement);
+    }
+    for (const [segmentId, pending] of groupReplacements) {
+      const committed = replacements.get(segmentId) || new Map<number, string>();
+      for (const [offset, replacement] of pending) committed.set(offset, replacement);
+      replacements.set(segmentId, committed);
     }
 
     items.push({
+      applied: true,
       groupId: group.id,
       normalizedTranslation,
       reason: overflow > 0
@@ -564,10 +592,14 @@ export function applyVerticalTranslations(
     };
   });
 
+  const failedItems = items.filter(({ applied }) => !applied);
   return {
-    applied: true,
+    applied: failedItems.length === 0,
     segments: updated,
     items,
+    reason: failedItems.length > 0
+      ? `${failedItems.length}개 세로쓰기 그룹을 건너뛰고 나머지를 적용했습니다.`
+      : undefined,
   };
 }
 

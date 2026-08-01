@@ -63,6 +63,7 @@ export const SystemReport: React.FC<SystemReportProps> = ({ isOpen, onClose }) =
               <li><strong className="text-slate-200">원자적 그룹화 (Atomic Grouping):</strong> 문장은 분할 불가능한 최소 단위로 취급됩니다. 시스템은 <strong>절대로 문장을 중간에 자르지 않으며</strong>, 현재 배치에 들어가지 않으면 다음 배치로 넘깁니다.</li>
               <li><strong className="text-slate-200">엔진별 동적 채우기:</strong> Ollama는 목표 2,400자/50항목, Gemini는 목표 2,800자/50항목으로 나눠 각 모델의 응답 안정성과 처리량을 함께 유지합니다.</li>
               <li><strong className="text-slate-200">신뢰성:</strong> JSON 인덱스 수를 엄격히 검증하며, 항목 수가 맞지 않으면 청크를 문맥 경계에서 자동 분할해 한 항목 단위까지 복구합니다.</li>
+              <li><strong className="text-slate-200">오류 격리:</strong> 일부 청크나 세로 그룹만 실패하면 정상 항목은 확정 적용하고 실패 항목만 선택 상태로 남겨 다음 재시도 대상으로 유지합니다.</li>
               <li><strong className="text-slate-200">일시 오류:</strong> 429/5xx/네트워크 오류는 지수 백오프와 지터를 적용해 자동 재시도합니다.</li>
             </ul>
           </section>
