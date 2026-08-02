@@ -59,7 +59,9 @@ import {
 } from './services/selectionExclusions';
 import {
   addManualRegexRule,
+  applyManualRegexRules,
   deserializeManualRegexRules,
+  getAddedManualRegexRules,
   getManualRegexTarget,
   MANUAL_REGEX_STORAGE_KEY,
 } from './services/manualRegex';
@@ -288,7 +290,15 @@ function App() {
       manualRegexRules,
     );
     if (nextRules === manualRegexRules) return;
-    handleManualRegexRulesChange(nextRules);
+    const addedRules = getAddedManualRegexRules(manualRegexRules, nextRules);
+    setManualRegexRules(nextRules);
+    // Adding a rule is an incremental operation. Keep every current segment
+    // and selection, and only select new matches instead of re-running the
+    // worker as if the entire file had just been reopened.
+    setSegments((current) => applySelectionExclusions(
+      applyManualRegexRules(current, addedRules),
+      selectionExclusions,
+    ));
   };
 
   const handleManualRegexSelection = (segmentId: string) => {

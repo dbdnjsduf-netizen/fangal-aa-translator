@@ -5,6 +5,7 @@ import {
   applyManualRegexRules,
   deserializeManualRegexRules,
   escapeRegexLiteral,
+  getAddedManualRegexRules,
   normalizeManualRegexRules,
 } from '../services/manualRegex';
 import { ManualRegexRules, TextSegment } from '../types';
@@ -116,4 +117,38 @@ test('같은 원문이 자동 선택과 금지 목록에 모두 있으면 금지
   });
   assert.equal(excluded.isSelected, false);
   assert.equal(excluded.isUserExcluded, true);
+});
+
+test('이미 선택된 큰 세그먼트에 규칙을 추가해도 분할하거나 선택을 해제하지 않는다', () => {
+  const source = segment('selected', '앞 勇者 뒤', {
+    isJapanese: true,
+    isSelected: true,
+    isAutoSelected: true,
+  });
+  const result = applyManualRegexRules([source], rulesFor('勇者'));
+  assert.equal(result.length, 1);
+  assert.strictEqual(result[0], source);
+  assert.equal(result[0].isSelected, true);
+});
+
+test('새 규칙만 증분 적용해 기존에 직접 해제한 정규식 선택은 건드리지 않는다', () => {
+  const previous = rulesFor('以前');
+  const next = addManualRegexRule(
+    previous,
+    { kind: 'normal', sourceText: '新規' },
+    'new-rule',
+    2,
+  );
+  const added = getAddedManualRegexRules(previous, next);
+  const result = applyManualRegexRules([
+    segment('old', '以前', {
+      isJapanese: true,
+      isManualRegexSelection: true,
+      isSelected: false,
+    }),
+    segment('new', '新規'),
+  ], added);
+  assert.equal(added.entries.length, 1);
+  assert.equal(result.find(({ id }) => id === 'old')?.isSelected, false);
+  assert.equal(result.find(({ text }) => text === '新規')?.isSelected, true);
 });

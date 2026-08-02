@@ -73,6 +73,20 @@ export function addManualRegexRule(
   };
 }
 
+export function getAddedManualRegexRules(
+  previous: ManualRegexRules,
+  next: ManualRegexRules,
+): ManualRegexRules {
+  const previousKeys = new Set(
+    previous.entries.map(({ kind, sourceText }) => `${kind}\u0000${sourceText}`),
+  );
+  return {
+    entries: next.entries.filter(({ kind, sourceText }) => (
+      !previousKeys.has(`${kind}\u0000${sourceText}`)
+    )),
+  };
+}
+
 export function getManualRegexTarget(
   segments: TextSegment[],
   segmentId: string,
@@ -140,7 +154,10 @@ export function applyManualRegexRules(
   if (normalTexts.length === 0) return withVerticalSelections;
   const ranges: ManualSelectionRange[] = [];
   for (const segment of withVerticalSelections) {
-    if (segment.isTranslated || segment.verticalGroupId) continue;
+    // A selected segment already belongs to the current translation batch.
+    // Splitting it merely to add a persistent rule would disturb the user's
+    // current selection layout without adding another translation target.
+    if (segment.isTranslated || segment.isSelected || segment.verticalGroupId) continue;
     ranges.push(...findLiteralRanges(segment, normalTexts));
   }
   if (ranges.length === 0) return withVerticalSelections;
