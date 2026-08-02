@@ -8,6 +8,15 @@ interface ChangelogModalProps {
 
 const changelogData = [
   {
+    version: '1.6.0',
+    title: '반복 오인식 금지 목록',
+    changes: [
+      '선택된 일반 문장 또는 세로쓰기 덩어리를 금지하기 버튼으로 저장',
+      '완전히 같은 반복 원문을 현재 파일과 이후 파일의 전체 선택에서 자동 제외',
+      '금지항목 관리에서 개별 삭제, 전체 삭제와 JSON 백업·복원 지원',
+    ],
+  },
+  {
     version: '1.5.1',
     title: '이미지 ZIP 다운로드와 쉬운 설치',
     changes: [

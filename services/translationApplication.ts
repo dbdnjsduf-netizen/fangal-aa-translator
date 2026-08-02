@@ -51,6 +51,7 @@ export function selectAllTranslatableSegments(segments: TextSegment[]) {
       return segment.isSelected ? { ...segment, isSelected: false } : segment;
     }
     const shouldSelect = !segment.isAutoSelectExcluded
+      && !segment.isUserExcluded
       && AUTOMATIC_SELECTION_FLAGS.some((flag) => Boolean(segment[flag]));
     return shouldSelect && !segment.isSelected
       ? { ...segment, isSelected: true }
