@@ -1,10 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  chooseImageEncodingConcurrency,
   countCommonLeadingWhitespace,
   paginateImageLines,
   stripFileExtension,
 } from '../services/imageExport';
+
+test('보통 크기 이미지는 두 장씩 인코딩하고 큰 이미지는 메모리를 위해 직렬 처리한다', () => {
+  assert.equal(chooseImageEncodingConcurrency([1_800_000, 1_700_000], 8), 2);
+  assert.equal(chooseImageEncodingConcurrency([4_000_001, 1_000_000], 8), 1);
+  assert.equal(chooseImageEncodingConcurrency([1_800_000, 1_700_000], 2), 1);
+  assert.equal(chooseImageEncodingConcurrency([1_800_000], 8), 1);
+});
 
 test('페이지마다 공통으로 존재하는 좌측 공백만 제거 대상으로 계산한다', () => {
   assert.equal(countCommonLeadingWhitespace(['    AA', '  BB', '', '   CC']), 2);
