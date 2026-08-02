@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Ban, Wand2, X, Loader2, RotateCcw, ScanSearch, Type, MousePointer2, Eye, Columns3 } from 'lucide-react';
+import { Ban, Braces, Wand2, X, Loader2, RotateCcw, ScanSearch, Type, MousePointer2, Eye, Columns3 } from 'lucide-react';
 import { SelectionRange, ViewMode } from '../types';
 
 interface ToolbarProps {
@@ -25,6 +25,9 @@ interface ToolbarProps {
   onToggleManualVerticalMode?: () => void;
   isBanMode?: boolean;
   onToggleBanMode?: () => void;
+  isManualRegexMode?: boolean;
+  onToggleManualRegexMode?: () => void;
+  isLightMode?: boolean;
 }
 
 export const Toolbar: React.FC<ToolbarProps> = ({ 
@@ -47,20 +50,28 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onToggleManualVerticalMode,
   isBanMode,
   onToggleBanMode,
+  isManualRegexMode,
+  onToggleManualRegexMode,
+  isLightMode = false,
 }) => {
+  const inactiveModeButtonClass = isLightMode
+    ? 'text-slate-700 hover:text-black hover:bg-slate-100'
+    : 'text-slate-300 hover:text-white hover:bg-slate-800';
   
   return (
-    <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-3 w-full max-w-5xl px-4 pointer-events-none">
+    <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-3 w-full max-w-6xl px-4 pointer-events-none">
       
-      <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700 shadow-2xl rounded-2xl p-2 flex items-center gap-2 pointer-events-auto animate-in slide-in-from-bottom-5 duration-300">
+      <div className={`backdrop-blur-md border shadow-2xl rounded-2xl p-2 flex items-center gap-2 pointer-events-auto animate-in slide-in-from-bottom-5 duration-300 ${
+        isLightMode ? 'bg-white/90 border-slate-300' : 'bg-slate-900/90 border-slate-700'
+      }`}>
         
-        <div className="flex bg-slate-800 rounded-xl p-1 mr-2">
+        <div className={`flex rounded-xl p-1 mr-2 ${isLightMode ? 'bg-slate-100' : 'bg-slate-800'}`}>
             <button
                 onClick={() => onChangeViewMode('raw')}
                 className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
                     viewMode === 'raw' 
                     ? 'bg-slate-600 text-white shadow' 
-                    : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                    : isLightMode ? 'text-slate-600 hover:text-black hover:bg-white' : 'text-slate-400 hover:text-white hover:bg-slate-700'
                 }`}
                 title="텍스트 편집 모드"
             >
@@ -72,7 +83,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                 className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
                     viewMode === 'smart' 
                     ? 'bg-blue-600 text-white shadow' 
-                    : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                    : isLightMode ? 'text-slate-600 hover:text-black hover:bg-white' : 'text-slate-400 hover:text-white hover:bg-slate-700'
                 }`}
                 title="자동 감지 번역 모드"
             >
@@ -84,7 +95,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                 className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
                     viewMode === 'viewer' 
                     ? 'bg-green-600 text-white shadow' 
-                    : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                    : isLightMode ? 'text-slate-600 hover:text-black hover:bg-white' : 'text-slate-400 hover:text-white hover:bg-slate-700'
                 }`}
                 title="읽기 전용 뷰어 모드 (Light Mode)"
             >
@@ -135,7 +146,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                     className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
                       isManualSelectMode
                         ? 'bg-orange-600 text-white hover:bg-orange-500'
-                        : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                        : inactiveModeButtonClass
                     }`}
                     title="누락된 가로 텍스트를 주황색 박스로 드래그해 추가 (기존 항목은 짧게 클릭해 선택 전환)"
                 >
@@ -147,7 +158,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                     className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
                       isManualVerticalMode
                         ? 'bg-fuchsia-600 text-white hover:bg-fuchsia-500'
-                        : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                        : inactiveModeButtonClass
                     }`}
                     title="누락된 세로쓰기를 박스로 묶기 (기존 항목은 짧게 클릭해 선택 전환)"
                 >
@@ -159,12 +170,24 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                     className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
                       isBanMode
                         ? 'bg-red-700 text-white hover:bg-red-600'
-                        : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                        : inactiveModeButtonClass
                     }`}
                     title="선택된 항목을 클릭해 같은 원문을 모두 자동 선택 금지 목록에 저장"
                 >
                     <Ban className="w-4 h-4" />
                     금지하기
+                </button>
+                <button
+                    onClick={onToggleManualRegexMode}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
+                      isManualRegexMode
+                        ? 'bg-cyan-600 text-white hover:bg-cyan-500'
+                        : inactiveModeButtonClass
+                    }`}
+                    title="텍스트를 박스로 지정해 같은 원문을 현재·이후 파일에서 자동 선택"
+                >
+                    <Braces className="w-4 h-4" />
+                    수동정규식
                 </button>
 
                 {smartSelectionCount > 0 && (
@@ -200,11 +223,12 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                         </button>
                     </>
                 )}
-                {smartSelectionCount === 0 && !isDragMode && !isManualSelectMode && !isManualVerticalMode && !isBanMode && <span className="text-slate-500 text-sm px-4">클릭하여 선택</span>}
+                {smartSelectionCount === 0 && !isDragMode && !isManualSelectMode && !isManualVerticalMode && !isBanMode && !isManualRegexMode && <span className="text-slate-500 text-sm px-4">클릭하여 선택</span>}
                 {smartSelectionCount === 0 && isDragMode && <span className="text-purple-300 text-sm px-4 animate-pulse">영역을 드래그하여 선택...</span>}
                 {smartSelectionCount === 0 && isManualSelectMode && <span className="text-orange-300 text-sm px-4 animate-pulse">가로 텍스트 전체를 박스로 드래그하세요...</span>}
                 {smartSelectionCount === 0 && isManualVerticalMode && <span className="text-fuchsia-300 text-sm px-4 animate-pulse">세로쓰기 전체를 박스로 드래그하세요...</span>}
                 {smartSelectionCount === 0 && isBanMode && <span className="text-red-300 text-sm px-4 animate-pulse">먼저 금지할 항목을 선택하세요...</span>}
+                {smartSelectionCount === 0 && isManualRegexMode && <span className="text-cyan-500 text-sm px-4 animate-pulse">자동 선택할 텍스트를 박스로 드래그하세요...</span>}
             </>
         )}
 

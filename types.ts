@@ -30,6 +30,7 @@ export interface TextSegment {
   isVerticalBox?: boolean;
   isVerticalText?: boolean;
   isManualSelection?: boolean;
+  isManualRegexSelection?: boolean;
   isManualVerticalSelection?: boolean;
   verticalGroupId?: string;
   verticalOrder?: number;
@@ -72,6 +73,20 @@ export interface ExactSelectionExclusionRule {
 export interface SelectionExclusionRules {
   exact: ExactSelectionExclusionRule[];
 }
+
+export interface ManualRegexRule {
+  id: string;
+  kind: SelectionExclusionKind;
+  sourceText: string;
+  pattern: string;
+  createdAt: number;
+}
+
+export interface ManualRegexRules {
+  entries: ManualRegexRule[];
+}
+
+export type AppTheme = 'dark' | 'light';
 
 export type TranslationProvider = 'ollama' | 'gemini';
 

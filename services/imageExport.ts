@@ -12,6 +12,17 @@ export interface ImagePaginationOptions {
   removeLeadingWhitespace: boolean;
 }
 
+const MAX_PIXELS_FOR_PARALLEL_ENCODING = 4_000_000;
+
+export function chooseImageEncodingConcurrency(
+  pagePixelCounts: number[],
+  hardwareConcurrency = 2,
+) {
+  if (pagePixelCounts.length < 2 || hardwareConcurrency < 4) return 1;
+  const largestPage = Math.max(0, ...pagePixelCounts);
+  return largestPage <= MAX_PIXELS_FOR_PARALLEL_ENCODING ? 2 : 1;
+}
+
 function isEmptyLine(line: string | undefined) {
   return line === undefined ? false : line.trim().length === 0;
 }

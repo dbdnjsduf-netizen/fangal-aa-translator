@@ -20,38 +20,52 @@ const AUTOMATIC_FLAGS: Array<keyof TextSegment> = [
 export function applyManualSelectionRanges(
   segments: TextSegment[],
   ranges: ManualSelectionRange[],
+  selectionKind: 'manual' | 'regex' = 'manual',
 ): TextSegment[] {
-  const rangeBySegmentId = new Map(
-    ranges.map((range) => [range.segmentId, range]),
-  );
+  const rangesBySegmentId = new Map<string, ManualSelectionRange[]>();
+  for (const range of ranges) {
+    const existing = rangesBySegmentId.get(range.segmentId) || [];
+    existing.push(range);
+    rangesBySegmentId.set(range.segmentId, existing);
+  }
   const result: TextSegment[] = [];
 
   for (const segment of segments) {
-    const requested = rangeBySegmentId.get(segment.id);
-    if (!requested) {
+    const requestedRanges = rangesBySegmentId.get(segment.id);
+    if (!requestedRanges || segment.isTranslated) {
+      result.push(segment);
+      continue;
+    }
+    const normalized = mergeRanges(requestedRanges, segment.text);
+    if (normalized.length === 0) {
       result.push(segment);
       continue;
     }
 
-    const start = Math.max(0, Math.min(requested.start, segment.text.length));
-    const end = Math.max(start, Math.min(requested.end, segment.text.length));
-    const selectedText = segment.text.slice(start, end);
-    if (start === end || selectedText.trim().length === 0 || segment.isTranslated) {
-      result.push(segment);
+    if (
+      normalized.length === 1
+      && normalized[0].start === 0
+      && normalized[0].end === segment.text.length
+      && segment.isJapanese
+    ) {
+      result.push({
+        ...segment,
+        isSelected: true,
+        isManualRegexSelection: selectionKind === 'regex' || undefined,
+      });
       continue;
     }
 
-    if (start === 0 && end === segment.text.length && segment.isJapanese) {
-      result.push({ ...segment, isSelected: true });
-      continue;
-    }
-
-    if (start > 0) {
-      result.push(sliceSegment(segment, 0, start, 'before'));
-    }
-    result.push(makeManualSegment(segment, start, end));
-    if (end < segment.text.length) {
-      result.push(sliceSegment(segment, end, segment.text.length, 'after'));
+    let cursor = 0;
+    normalized.forEach(({ start, end }, index) => {
+      if (start > cursor) {
+        result.push(sliceSegment(segment, cursor, start, `before-${index}`));
+      }
+      result.push(makeManualSegment(segment, start, end, selectionKind));
+      cursor = end;
+    });
+    if (cursor < segment.text.length) {
+      result.push(sliceSegment(segment, cursor, segment.text.length, 'after'));
     }
   }
 
@@ -83,8 +97,9 @@ function makeManualSegment(
   segment: TextSegment,
   start: number,
   end: number,
+  selectionKind: 'manual' | 'regex',
 ): TextSegment {
-  const selected = sliceSegment(segment, start, end, 'manual');
+  const selected = sliceSegment(segment, start, end, selectionKind);
   const clearedFlags = Object.fromEntries(
     AUTOMATIC_FLAGS.map((flag) => [flag, false]),
   ) as Partial<TextSegment>;
@@ -92,7 +107,8 @@ function makeManualSegment(
     ...selected,
     ...clearedFlags,
     isJapanese: true,
-    isManualSelection: true,
+    isManualSelection: selectionKind === 'manual',
+    isManualRegexSelection: selectionKind === 'regex' || undefined,
     isAutoSelectExcluded: false,
     isSelected: true,
     isTranslated: false,
@@ -105,4 +121,25 @@ function makeManualSegment(
     verticalDisplayX: undefined,
     verticalDisplayWidth: undefined,
   };
+}
+
+function mergeRanges(ranges: ManualSelectionRange[], text: string) {
+  const normalized = ranges
+    .map(({ start, end }) => ({
+      start: Math.max(0, Math.min(start, text.length)),
+      end: Math.max(0, Math.min(end, text.length)),
+    }))
+    .map(({ start, end }) => ({ start: Math.min(start, end), end: Math.max(start, end) }))
+    .filter(({ start, end }) => start < end && text.slice(start, end).trim().length > 0)
+    .sort((left, right) => left.start - right.start || left.end - right.end);
+  const merged: Array<{ start: number; end: number }> = [];
+  for (const range of normalized) {
+    const previous = merged.at(-1);
+    if (previous && range.start < previous.end) {
+      previous.end = Math.max(previous.end, range.end);
+    } else {
+      merged.push({ ...range });
+    }
+  }
+  return merged;
 }

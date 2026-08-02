@@ -11,6 +11,7 @@ import { PromptModal } from './components/PromptModal';
 import { TranslationSettingsModal } from './components/TranslationSettingsModal';
 import { ImageExportModal } from './components/ImageExportModal';
 import { SelectionExclusionModal } from './components/SelectionExclusionModal';
+import { ManualRegexModal } from './components/ManualRegexModal';
 import {
   SelectionRange,
   ViewMode,
@@ -19,6 +20,7 @@ import {
   DictionaryEntry,
   OllamaRuntimeInfo,
   SelectionExclusionRules,
+  ManualRegexRules,
   TranslationProvider,
 } from './types';
 import {
@@ -55,7 +57,14 @@ import {
   getSelectionExclusionTarget,
   SELECTION_EXCLUSIONS_STORAGE_KEY,
 } from './services/selectionExclusions';
-import { Ban, FileText, Info, Activity, Download, Image as ImageIcon, Timer, History, Book, MessageSquareQuote, Server, CheckSquare } from 'lucide-react';
+import {
+  addManualRegexRule,
+  deserializeManualRegexRules,
+  getManualRegexTarget,
+  MANUAL_REGEX_STORAGE_KEY,
+} from './services/manualRegex';
+import { APP_THEME_STORAGE_KEY, normalizeAppTheme } from './services/appTheme';
+import { Ban, Braces, FileText, Info, Activity, Download, Image as ImageIcon, Timer, History, Book, MessageSquareQuote, Server, CheckSquare, Moon, Sun } from 'lucide-react';
 
 type SmartTranslationUnit =
   | {
@@ -80,6 +89,7 @@ function App() {
   const [isManualSelectMode, setIsManualSelectMode] = useState(false);
   const [isManualVerticalMode, setIsManualVerticalMode] = useState(false);
   const [isBanMode, setIsBanMode] = useState(false);
+  const [isManualRegexMode, setIsManualRegexMode] = useState(false);
   const [selection, setSelection] = useState<SelectionRange | null>(null);
   const [segments, setSegments] = useState<TextSegment[]>([]);
   
@@ -91,6 +101,7 @@ function App() {
   const [isDictOpen, setIsDictOpen] = useState(false);
   const [isPromptOpen, setIsPromptOpen] = useState(false);
   const [isSelectionExclusionOpen, setIsSelectionExclusionOpen] = useState(false);
+  const [isManualRegexOpen, setIsManualRegexOpen] = useState(false);
   const [isTranslationSettingsOpen, setIsTranslationSettingsOpen] = useState(false);
   const [isImageExportOpen, setIsImageExportOpen] = useState(false);
   const [fontSize, setFontSize] = useState(16);
@@ -108,11 +119,17 @@ function App() {
   const [geminiApiKey, setGeminiApiKey] = useState(
     () => sessionStorage.getItem(GEMINI_SESSION_KEY) || '',
   );
+  const [appTheme, setAppTheme] = useState(
+    () => normalizeAppTheme(localStorage.getItem(APP_THEME_STORAGE_KEY)),
+  );
 
   const [selectionExclusions, setSelectionExclusions] = useState<SelectionExclusionRules>(
     () => deserializeSelectionExclusions(
       localStorage.getItem(SELECTION_EXCLUSIONS_STORAGE_KEY),
     ),
+  );
+  const [manualRegexRules, setManualRegexRules] = useState<ManualRegexRules>(
+    () => deserializeManualRegexRules(localStorage.getItem(MANUAL_REGEX_STORAGE_KEY)),
   );
   
   const [history, setHistory] = useState<{ prevContent: string; prevSegments: TextSegment[] } | null>(null);
@@ -160,6 +177,14 @@ function App() {
       JSON.stringify(selectionExclusions),
     );
   }, [selectionExclusions]);
+
+  useEffect(() => {
+    localStorage.setItem(MANUAL_REGEX_STORAGE_KEY, JSON.stringify(manualRegexRules));
+  }, [manualRegexRules]);
+
+  useEffect(() => {
+    localStorage.setItem(APP_THEME_STORAGE_KEY, appTheme);
+  }, [appTheme]);
   
   // Dictionary State with Persistence
   const [customDictionary, setCustomDictionary] = useState<DictionaryEntry[]>(() => {
@@ -221,6 +246,7 @@ function App() {
     setIsManualSelectMode(false);
     setIsManualVerticalMode(false);
     setIsBanMode(false);
+    setIsManualRegexMode(false);
   };
 
   const handleSelectionExclusionsChange = (nextRules: SelectionExclusionRules) => {
@@ -241,6 +267,40 @@ function App() {
       makePersistentRuleId(),
     );
     handleSelectionExclusionsChange(nextRules);
+  };
+
+  const handleManualRegexRulesChange = (nextRules: ManualRegexRules) => {
+    setManualRegexRules(nextRules);
+    // Re-segment from the source so deleting or changing a rule also removes
+    // any slices that the old rule created.
+    setSegments([]);
+  };
+
+  const addManualRegexTargets = (
+    targets: Array<{ kind: 'normal' | 'vertical'; sourceText: string }>,
+  ) => {
+    const nextRules = targets.reduce(
+      (rules, target) => addManualRegexRule(
+        rules,
+        target,
+        makePersistentRuleId('regex'),
+      ),
+      manualRegexRules,
+    );
+    if (nextRules === manualRegexRules) return;
+    handleManualRegexRulesChange(nextRules);
+  };
+
+  const handleManualRegexSelection = (segmentId: string) => {
+    const target = getManualRegexTarget(segments, segmentId);
+    if (target) addManualRegexTargets([target]);
+  };
+
+  const handleManualRegexTexts = (sourceTexts: string[]) => {
+    addManualRegexTargets(sourceTexts.map((sourceText) => ({
+      kind: 'normal' as const,
+      sourceText,
+    })));
   };
 
   const updateStats = (usage: { inputTokens: number; outputTokens: number; durationMs: number; requestCount?: number }) => {
@@ -584,17 +644,27 @@ function App() {
     setIsManualSelectMode(false);
     setIsManualVerticalMode(false);
     setIsBanMode(false);
+    setIsManualRegexMode(false);
   };
 
+  const isLightMode = appTheme === 'light';
+  const headerControlClass = `flex items-center gap-1.5 px-3 py-1.5 border rounded text-xs transition-colors ${
+    isLightMode
+      ? 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700'
+      : 'bg-slate-900 hover:bg-slate-800 border-slate-700 text-slate-300'
+  }`;
+
   return (
-    <div className="flex flex-col h-screen w-full">
-      <header className="h-14 bg-slate-950 border-b border-slate-800 flex items-center justify-between px-6 shrink-0 z-20">
+    <div className={`flex flex-col h-screen w-full ${isLightMode ? 'bg-[#fafafa] text-slate-800' : 'bg-[#1a1b26] text-slate-200'}`}>
+      <header className={`h-14 border-b flex items-center justify-between px-6 shrink-0 z-20 ${
+        isLightMode ? 'bg-white border-slate-200' : 'bg-slate-950 border-slate-800'
+      }`}>
         <div className="flex items-center gap-3">
             <div className="bg-blue-600 p-1.5 rounded-lg">
                 <FileText className="w-5 h-5 text-white" />
             </div>
             <div>
-                <h1 className="font-bold text-slate-100 leading-none">Fangal AA Translator</h1>
+                <h1 className={`font-bold leading-none ${isLightMode ? 'text-slate-900' : 'text-slate-100'}`}>Fangal AA Translator</h1>
                 <div className="flex items-center gap-2 mt-0.5">
                    <span className="text-[10px] text-slate-400 font-mono">
                       {getProviderModelLabel(
@@ -620,7 +690,7 @@ function App() {
             <div className="flex items-center gap-2">
                 <button
                   onClick={() => setIsTranslationSettingsOpen(true)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border rounded text-xs transition-colors ${
+                  className={`${headerControlClass} ${
                     isProviderReady(
                       translationProvider,
                       geminiApiKey,
@@ -636,7 +706,7 @@ function App() {
                 </button>
                 <button
                   onClick={() => setIsDictOpen(true)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded text-xs text-slate-300 transition-colors"
+                  className={headerControlClass}
                   title="번역 사전 설정"
                 >
                   <Book className="w-3.5 h-3.5" />
@@ -644,7 +714,7 @@ function App() {
                 </button>
                 <button
                   onClick={() => setIsPromptOpen(true)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded text-xs text-slate-300 transition-colors"
+                  className={headerControlClass}
                   title="번역 프롬프트 설정"
                 >
                   <MessageSquareQuote className="w-3.5 h-3.5" />
@@ -652,15 +722,23 @@ function App() {
                 </button>
                 <button
                   onClick={() => setIsSelectionExclusionOpen(true)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded text-xs text-slate-300 transition-colors"
+                  className={headerControlClass}
                   title="자동 선택에서 제외하도록 저장한 항목 관리"
                 >
                   <Ban className="w-3.5 h-3.5" />
                   <span className="hidden sm:inline">금지항목 관리</span>
                 </button>
                 <button
+                  onClick={() => setIsManualRegexOpen(true)}
+                  className={headerControlClass}
+                  title="반복 원문을 자동 선택하도록 저장한 수동 정규식 관리"
+                >
+                  <Braces className="w-3.5 h-3.5 text-cyan-500" />
+                  <span className="hidden xl:inline">수동정규식 관리</span>
+                </button>
+                <button
                   onClick={() => setIsReportOpen(true)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded text-xs text-slate-300 transition-colors"
+                  className={headerControlClass}
                   title="시스템 로직 보기"
                 >
                   <Activity className="w-3.5 h-3.5" />
@@ -668,11 +746,20 @@ function App() {
                 </button>
                 <button
                   onClick={() => setIsChangelogOpen(true)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded text-xs text-slate-300 transition-colors"
+                  className={headerControlClass}
                   title="업데이트 내역 보기"
                 >
                   <History className="w-3.5 h-3.5" />
                   <span className="hidden sm:inline">History</span>
+                </button>
+                <button
+                  onClick={() => setAppTheme(isLightMode ? 'dark' : 'light')}
+                  className={headerControlClass}
+                  title={isLightMode ? '다크 모드로 전환' : '화이트 모드로 전환'}
+                  aria-label={isLightMode ? '다크 모드로 전환' : '화이트 모드로 전환'}
+                >
+                  {isLightMode ? <Moon className="w-3.5 h-3.5" /> : <Sun className="w-3.5 h-3.5" />}
+                  <span className="hidden xl:inline">{isLightMode ? '다크' : '화이트'}</span>
                 </button>
             </div>
 
@@ -725,7 +812,7 @@ function App() {
         </div>
       </header>
 
-      <main className="flex-1 overflow-hidden relative bg-[#1a1b26]">
+      <main className={`flex-1 overflow-hidden relative ${isLightMode ? 'bg-[#fafafa]' : 'bg-[#1a1b26]'}`}>
         {!fileName && !content ? (
           <FileUpload
             onFileLoaded={handleFileLoaded}
@@ -749,8 +836,13 @@ function App() {
             isManualSelectMode={isManualSelectMode}
             isManualVerticalMode={isManualVerticalMode}
             isBanMode={isBanMode}
+            isManualRegexMode={isManualRegexMode}
             onBanSelection={handleBanSelection}
+            onManualRegexSelection={handleManualRegexSelection}
+            onManualRegexTexts={handleManualRegexTexts}
             selectionExclusions={selectionExclusions}
+            manualRegexRules={manualRegexRules}
+            isLightMode={isLightMode}
           />
         )}
       </main>
@@ -771,6 +863,7 @@ function App() {
             setIsManualSelectMode(false);
             setIsManualVerticalMode(false);
             setIsBanMode(false);
+            setIsManualRegexMode(false);
           }
         }}
         smartSelectionCount={new Set(
@@ -789,6 +882,7 @@ function App() {
             setIsManualSelectMode(false);
             setIsManualVerticalMode(false);
             setIsBanMode(false);
+            setIsManualRegexMode(false);
           }
         }}
         isManualSelectMode={isManualSelectMode}
@@ -799,6 +893,7 @@ function App() {
             setIsDragMode(false);
             setIsManualVerticalMode(false);
             setIsBanMode(false);
+            setIsManualRegexMode(false);
           }
         }}
         isManualVerticalMode={isManualVerticalMode}
@@ -809,6 +904,7 @@ function App() {
             setIsDragMode(false);
             setIsManualSelectMode(false);
             setIsBanMode(false);
+            setIsManualRegexMode(false);
           }
         }}
         isBanMode={isBanMode}
@@ -819,8 +915,21 @@ function App() {
             setIsDragMode(false);
             setIsManualSelectMode(false);
             setIsManualVerticalMode(false);
+            setIsManualRegexMode(false);
           }
         }}
+        isManualRegexMode={isManualRegexMode}
+        onToggleManualRegexMode={() => {
+          const next = !isManualRegexMode;
+          setIsManualRegexMode(next);
+          if (next) {
+            setIsDragMode(false);
+            setIsManualSelectMode(false);
+            setIsManualVerticalMode(false);
+            setIsBanMode(false);
+          }
+        }}
+        isLightMode={isLightMode}
       />
 
       <SystemReport isOpen={isReportOpen} onClose={() => setIsReportOpen(false)} />
@@ -881,6 +990,12 @@ function App() {
         rules={selectionExclusions}
         onChange={handleSelectionExclusionsChange}
       />
+      <ManualRegexModal
+        isOpen={isManualRegexOpen}
+        onClose={() => setIsManualRegexOpen(false)}
+        rules={manualRegexRules}
+        onChange={handleManualRegexRulesChange}
+      />
       <ImageExportModal
         isOpen={isImageExportOpen}
         onClose={() => setIsImageExportOpen(false)}
@@ -905,6 +1020,7 @@ function App() {
                         <p className="mt-1"><span className="text-fuchsia-300 bg-slate-700 px-1 rounded">세로수동</span> 버튼은 세로 글자 열 전체를 박스로 골라 하나의 자홍색 문장으로 묶습니다. 잘못 나뉜 보라색 그룹도 다시 묶을 수 있습니다.</p>
                         <p className="mt-1">수동·세로수동 상태에서도 기존 자동 감지 항목을 살짝 클릭하면 해당 일반 문장이나 세로 그룹의 선택을 끄거나 다시 켤 수 있습니다.</p>
                         <p className="mt-1"><span className="text-red-300 bg-slate-700 px-1 rounded">금지하기</span>를 켜고 선택 항목을 누르면 완전히 같은 반복 원문을 모두 해제하고 다음 파일에서도 제외합니다.</p>
+                        <p className="mt-1"><span className="text-cyan-300 bg-slate-700 px-1 rounded">수동정규식</span>을 켜고 텍스트를 박스로 고르면 같은 원문을 현재·이후 파일에서 자동 선택합니다.</p>
                     </div>
                     <div>
                         <span className="font-semibold text-green-400">사전 기능</span>
@@ -913,6 +1029,10 @@ function App() {
                     <div>
                         <span className="font-semibold text-red-400">금지항목 관리</span>
                         <p>실수로 금지한 항목은 상단 메뉴에서 개별 삭제하거나 목록을 JSON으로 백업·복원할 수 있습니다.</p>
+                    </div>
+                    <div>
+                        <span className="font-semibold text-cyan-400">수동정규식 관리</span>
+                        <p>반복 자동 선택 규칙을 삭제하거나 JSON으로 백업·복원할 수 있습니다. 금지 목록과 겹치면 금지가 우선합니다.</p>
                     </div>
                     <div>
                         <span className="font-semibold text-purple-400">세로쓰기</span>
@@ -930,10 +1050,10 @@ function App() {
   );
 }
 
-function makePersistentRuleId() {
+function makePersistentRuleId(prefix = 'exact') {
   return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-    ? `exact-${crypto.randomUUID()}`
-    : `exact-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    ? `${prefix}-${crypto.randomUUID()}`
+    : `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 export default App;

@@ -8,6 +8,16 @@ interface ChangelogModalProps {
 
 const changelogData = [
   {
+    version: '1.7.0',
+    title: '화이트 모드와 반복 원문 자동 선택',
+    changes: [
+      '상단에서 AA 작업 화면의 화이트·다크 모드를 즉시 전환하고 설정 유지',
+      '수동정규식으로 박스 지정한 원문을 현재·이후 파일에서 자동 선택',
+      '수동정규식 관리에서 삭제와 JSON 백업·복원 지원',
+      '이미지 ZIP 저장의 캔버스 재사용과 안전한 병렬 인코딩으로 속도 개선',
+    ],
+  },
+  {
     version: '1.6.0',
     title: '반복 오인식 금지 목록',
     changes: [

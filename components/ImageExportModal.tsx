@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import JSZip from 'jszip';
 import {
   AlignLeft,
@@ -10,7 +10,12 @@ import {
   Scissors,
   X,
 } from 'lucide-react';
-import { paginateImageLines, stripFileExtension } from '../services/imageExport';
+import {
+  chooseImageEncodingConcurrency,
+  ImagePageSlice,
+  paginateImageLines,
+  stripFileExtension,
+} from '../services/imageExport';
 
 interface ImageExportModalProps {
   isOpen: boolean;
@@ -22,6 +27,43 @@ interface ImageExportModalProps {
 
 const AA_FONT_FAMILY = 'Saitamaar, "MS PGothic", "TextAA", "IPAMonaPGothic", "Monapo", "Mona", monospace';
 const MAX_CANVAS_SIZE = 16_384;
+const fontReadyPromises = new Map<string, Promise<void>>();
+
+interface ImagePageLayout {
+  page: ImagePageSlice;
+  width: number;
+  height: number;
+}
+
+function ensureFontReady(font: string) {
+  const cached = fontReadyPromises.get(font);
+  if (cached) return cached;
+  const promise = (async () => {
+    await document.fonts.load(font);
+    await document.fonts.ready;
+  })().catch((error) => {
+    fontReadyPromises.delete(font);
+    throw error;
+  });
+  fontReadyPromises.set(font, promise);
+  return promise;
+}
+
+function canvasToBlob(
+  canvas: HTMLCanvasElement,
+  mimeType: string,
+  quality?: number,
+) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (result) => (result
+        ? resolve(result)
+        : reject(new Error('이미지 변환에 실패했습니다.'))),
+      mimeType,
+      quality,
+    );
+  });
+}
 
 function downloadBlob(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob);
@@ -55,7 +97,7 @@ export const ImageExportModal: React.FC<ImageExportModalProps> = ({
   const [removeLeadingWhitespace, setRemoveLeadingWhitespace] = useState(true);
   const [format, setFormat] = useState<'png' | 'jpg'>('png');
 
-  const lines = content.split(/\r\n|\n|\r/u);
+  const lines = useMemo(() => content.split(/\r\n|\n|\r/u), [content]);
   const font = `${fontSize}px ${AA_FONT_FAMILY}`;
 
   useEffect(() => {
@@ -67,8 +109,7 @@ export const ImageExportModal: React.FC<ImageExportModalProps> = ({
     setErrorText('');
 
     void (async () => {
-      await document.fonts.load(font);
-      await document.fonts.ready;
+      await ensureFontReady(font);
       const canvas = document.createElement('canvas');
       const context = canvas.getContext('2d');
       if (!context || !active) return;
@@ -95,8 +136,7 @@ export const ImageExportModal: React.FC<ImageExportModalProps> = ({
     setStatusText('Saitamaar 글꼴 준비 중...');
 
     try {
-      await document.fonts.load(font);
-      await document.fonts.ready;
+      await ensureFontReady(font);
 
       const safePageHeight = Math.max(128, Math.min(MAX_CANVAS_SIZE, pageHeight));
       const rowHeight = Math.floor(fontSize * 1.125);
@@ -111,63 +151,107 @@ export const ImageExportModal: React.FC<ImageExportModalProps> = ({
         smartSplit,
         removeLeadingWhitespace,
       });
-      const zip = new JSZip();
-      const canvas = document.createElement('canvas');
-      const context = canvas.getContext('2d', { alpha: false });
-      if (!context) throw new Error('브라우저에서 이미지 캔버스를 만들 수 없습니다.');
-
-      const baseName = stripFileExtension(fileName);
-      for (let pageIndex = 0; pageIndex < pages.length; pageIndex += 1) {
-        const page = pages[pageIndex];
-        const renderedLines = page.lines.map((line) => (
-          removeLeadingWhitespace ? line.slice(page.leadingWhitespaceCount) : line
-        ));
-        context.font = font;
-        const maximumTextWidth = renderedLines.reduce(
-          (maximum, line) => Math.max(maximum, context.measureText(line).width),
-          0,
-        );
+      setStatusText('페이지 크기 계산 중...');
+      const measurementCanvas = document.createElement('canvas');
+      const measurementContext = measurementCanvas.getContext('2d', { alpha: false });
+      if (!measurementContext) {
+        throw new Error('브라우저에서 이미지 캔버스를 만들 수 없습니다.');
+      }
+      measurementContext.font = font;
+      const layouts: ImagePageLayout[] = pages.map((page) => {
+        let maximumTextWidth = 0;
+        if (optimizeWidth) {
+          for (const line of page.lines) {
+            const renderedLine = removeLeadingWhitespace
+              ? line.slice(page.leadingWhitespaceCount)
+              : line;
+            maximumTextWidth = Math.max(
+              maximumTextWidth,
+              measurementContext.measureText(renderedLine).width,
+            );
+          }
+        }
         const requestedWidth = optimizeWidth
           ? Math.max(Math.ceil(maximumTextWidth + (safePadding * 2)), minimumWidth)
           : fixedWidth;
         if (requestedWidth > MAX_CANVAS_SIZE) {
           throw new Error(`이미지 너비가 브라우저 제한(${MAX_CANVAS_SIZE}px)을 초과했습니다.`);
         }
-        const canvasWidth = Math.max(64, Math.floor(requestedWidth));
-        const canvasHeight = Math.max(
-          1,
-          Math.min(safePageHeight, (renderedLines.length * rowHeight) + (safePadding * 2)),
-        );
-        canvas.width = canvasWidth;
-        canvas.height = canvasHeight;
+        return {
+          page,
+          width: Math.max(64, Math.floor(requestedWidth)),
+          height: Math.max(
+            1,
+            Math.min(safePageHeight, (page.lines.length * rowHeight) + (safePadding * 2)),
+          ),
+        };
+      });
 
-        context.fillStyle = '#ffffff';
-        context.fillRect(0, 0, canvasWidth, canvasHeight);
-        context.font = font;
-        context.fillStyle = '#000000';
-        context.textBaseline = 'top';
-        renderedLines.forEach((line, lineIndex) => {
-          context.fillText(line, safePadding, safePadding + (lineIndex * rowHeight));
-        });
+      const mimeType = format === 'png' ? 'image/png' : 'image/jpeg';
+      const quality = format === 'jpg' ? 0.9 : undefined;
+      const blobs = new Array<Blob>(layouts.length);
+      const concurrency = chooseImageEncodingConcurrency(
+        layouts.map(({ width, height }) => width * height),
+        navigator.hardwareConcurrency || 2,
+      );
+      let nextPageIndex = 0;
+      let completedPages = 0;
 
-        const mimeType = format === 'png' ? 'image/png' : 'image/jpeg';
-        const blob = await new Promise<Blob>((resolve, reject) => {
-          canvas.toBlob(
-            (result) => (result ? resolve(result) : reject(new Error('이미지 변환에 실패했습니다.'))),
-            mimeType,
-            format === 'jpg' ? 0.9 : undefined,
-          );
-        });
+      const renderWorker = async () => {
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d', { alpha: false });
+        if (!context) throw new Error('브라우저에서 이미지 캔버스를 만들 수 없습니다.');
+
+        while (nextPageIndex < layouts.length) {
+          const pageIndex = nextPageIndex;
+          nextPageIndex += 1;
+          const { page, width: canvasWidth, height: canvasHeight } = layouts[pageIndex];
+
+          // Resizing clears the backing store and can allocate several MB. Reuse it
+          // whenever consecutive pages have the same dimensions.
+          if (canvas.width !== canvasWidth) canvas.width = canvasWidth;
+          if (canvas.height !== canvasHeight) canvas.height = canvasHeight;
+
+          context.fillStyle = '#ffffff';
+          context.fillRect(0, 0, canvasWidth, canvasHeight);
+          context.font = font;
+          context.fillStyle = '#000000';
+          context.textBaseline = 'top';
+          page.lines.forEach((line, lineIndex) => {
+            const renderedLine = removeLeadingWhitespace
+              ? line.slice(page.leadingWhitespaceCount)
+              : line;
+            context.fillText(
+              renderedLine,
+              safePadding,
+              safePadding + (lineIndex * rowHeight),
+            );
+          });
+
+          blobs[pageIndex] = await canvasToBlob(canvas, mimeType, quality);
+          completedPages += 1;
+          const percent = Math.floor((completedPages / layouts.length) * 100);
+          setProgress(percent);
+          setStatusText(`${completedPages}/${layouts.length}페이지 완료 (${percent}%)`);
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+        }
+      };
+
+      await Promise.all(Array.from({ length: concurrency }, () => renderWorker()));
+
+      const zip = new JSZip();
+      const baseName = stripFileExtension(fileName);
+      blobs.forEach((blob, pageIndex) => {
         const pageName = `${baseName}_${String(pageIndex + 1).padStart(3, '0')}.${format}`;
         zip.file(pageName, blob);
-        const percent = Math.floor(((pageIndex + 1) / pages.length) * 100);
-        setProgress(percent);
-        setStatusText(`${pageIndex + 1}/${pages.length}페이지 완료 (${percent}%)`);
-        await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
-      }
+      });
 
       setStatusText('ZIP 파일 압축 중...');
-      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      const zipBlob = await zip.generateAsync({
+        type: 'blob',
+        compression: 'STORE',
+        streamFiles: true,
+      });
       downloadBlob(zipBlob, `${stripFileExtension(fileName)}_images.zip`);
       onClose();
     } catch (error) {

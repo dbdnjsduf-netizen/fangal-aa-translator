@@ -3,6 +3,7 @@ import { fitTranslationToDisplayWidth } from './verticalText';
 
 const AUTOMATIC_SELECTION_FLAGS: Array<keyof TextSegment> = [
   'isManualSelection',
+  'isManualRegexSelection',
   'isStrictJapanese',
   'isAutoSelected',
   'isBoxedDialogue',

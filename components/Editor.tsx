@@ -1,5 +1,11 @@
 import React, { useState, useRef, useEffect, startTransition } from 'react';
-import { SelectionExclusionRules, SelectionRange, TextSegment, ViewMode } from '../types';
+import {
+  ManualRegexRules,
+  SelectionExclusionRules,
+  SelectionRange,
+  TextSegment,
+  ViewMode,
+} from '../types';
 import SegmentationWorker from '../workers/segmentation.worker?worker';
 import { annotateVerticalTextSegments } from '../services/verticalText';
 import {
@@ -16,6 +22,7 @@ import {
   toggleSegmentTranslationSelection,
 } from '../services/translationApplication';
 import { applySelectionExclusions } from '../services/selectionExclusions';
+import { applyManualRegexRules } from '../services/manualRegex';
 
 interface EditorProps {
   content: string;
@@ -31,8 +38,13 @@ interface EditorProps {
   isManualSelectMode?: boolean;
   isManualVerticalMode?: boolean;
   isBanMode?: boolean;
+  isManualRegexMode?: boolean;
   onBanSelection?: (segmentId: string) => void;
+  onManualRegexSelection?: (segmentId: string) => void;
+  onManualRegexTexts?: (sourceTexts: string[]) => void;
   selectionExclusions: SelectionExclusionRules;
+  manualRegexRules: ManualRegexRules;
+  isLightMode?: boolean;
 }
 
 export const Editor: React.FC<EditorProps> = ({ 
@@ -49,8 +61,13 @@ export const Editor: React.FC<EditorProps> = ({
   isManualSelectMode = false,
   isManualVerticalMode = false,
   isBanMode = false,
+  isManualRegexMode = false,
   onBanSelection,
+  onManualRegexSelection,
+  onManualRegexTexts,
   selectionExclusions,
+  manualRegexRules,
+  isLightMode = false,
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -117,8 +134,9 @@ export const Editor: React.FC<EditorProps> = ({
           // preventing the UI (and other Chrome tabs) from freezing on large files.
           startTransition(() => {
             const annotated = annotateVerticalTextSegments(content, e.data.segments);
+            const withManualRegex = applyManualRegexRules(annotated, manualRegexRules);
             onSegmentsChangeRef.current(
-              applySelectionExclusions(annotated, selectionExclusions),
+              applySelectionExclusions(withManualRegex, selectionExclusions),
             );
           });
         }
@@ -131,7 +149,7 @@ export const Editor: React.FC<EditorProps> = ({
         worker.removeEventListener('message', handleMessage);
       };
     }
-  }, [content, viewMode, segments.length, selectionExclusions]);
+  }, [content, viewMode, segments.length, selectionExclusions, manualRegexRules]);
 
   const toggleSegmentSelection = (id: string) => {
     const newSegments = toggleSegmentTranslationSelection(segments, id);
@@ -140,10 +158,9 @@ export const Editor: React.FC<EditorProps> = ({
     onSelectionChange(null);
   };
 
-  const captureManualTextBox = (x1: number, y1: number, x2: number, y2: number) => {
-    if (!isManualSelectMode || viewMode !== 'smart') return;
+  const collectManualTextRanges = (x1: number, y1: number, x2: number, y2: number) => {
     const container = containerRef.current;
-    if (!container) return;
+    if (!container) return [];
     const containerRect = container.getBoundingClientRect();
     const segmentById = new Map<string, TextSegment>(
       segments.map((segment) => [segment.id, segment]),
@@ -202,15 +219,36 @@ export const Editor: React.FC<EditorProps> = ({
       }
     }
 
-    if (rangeBySegmentId.size === 0) return;
+    return [...rangeBySegmentId.values()];
+  };
+
+  const captureManualTextBox = (x1: number, y1: number, x2: number, y2: number) => {
+    if (!isManualSelectMode || viewMode !== 'smart') return;
+    const ranges = collectManualTextRanges(x1, y1, x2, y2);
+    if (ranges.length === 0) return;
     const nextSegments = applyManualSelectionRanges(
       segments,
-      [...rangeBySegmentId.values()],
+      ranges,
     );
     if (nextSegments !== segments) {
       onSegmentsChange(nextSegments);
       onSelectionChange(null);
     }
+  };
+
+  const captureManualRegexBox = (x1: number, y1: number, x2: number, y2: number) => {
+    if (!isManualRegexMode || viewMode !== 'smart') return;
+    const ranges = collectManualTextRanges(x1, y1, x2, y2);
+    if (ranges.length === 0) return;
+    const segmentById = new Map<string, TextSegment>(
+      segments.map((segment) => [segment.id, segment]),
+    );
+    const sourceTexts = ranges
+      .map(({ segmentId, start, end }) => segmentById.get(segmentId)?.text.slice(start, end) || '')
+      .map((text) => text.trim())
+      .filter(Boolean);
+    if (sourceTexts.length > 0) onManualRegexTexts?.(sourceTexts);
+    onSelectionChange(null);
   };
 
   const captureManualVerticalBox = (x1: number, y1: number, x2: number, y2: number) => {
@@ -289,7 +327,13 @@ export const Editor: React.FC<EditorProps> = ({
   // --- Pointer Events for Robust Dragging ---
   const handlePointerDown = (e: React.PointerEvent) => {
     if (viewMode !== 'smart' || !e.isPrimary || e.button !== 0) return;
-    if (!isDragMode && !isManualSelectMode && !isManualVerticalMode && !isBanMode) return;
+    if (
+      !isDragMode
+      && !isManualSelectMode
+      && !isManualVerticalMode
+      && !isBanMode
+      && !isManualRegexMode
+    ) return;
     
     // Prevent default browser actions (text selection etc)
     e.preventDefault();
@@ -370,10 +414,13 @@ export const Editor: React.FC<EditorProps> = ({
       const segmentId = segmentElement?.dataset.segmentId;
       if (segmentId) {
         if (isBanMode) onBanSelection?.(segmentId);
+        else if (isManualRegexMode) onManualRegexSelection?.(segmentId);
         else toggleSegmentSelection(segmentId);
       }
     } else if (isManualVerticalMode) {
       captureManualVerticalBox(x1, y1, x2, y2);
+    } else if (isManualRegexMode) {
+      captureManualRegexBox(x1, y1, x2, y2);
     } else if (isManualSelectMode) {
       captureManualTextBox(x1, y1, x2, y2);
     } else {
@@ -465,10 +512,12 @@ export const Editor: React.FC<EditorProps> = ({
   return (
     <div className="relative w-full h-full flex flex-col">
       {/* Font Controls */}
-      <div className="absolute top-2 right-4 z-10 flex gap-2 bg-slate-800/80 backdrop-blur p-1 rounded-lg border border-slate-700">
-        <button onClick={() => onFontSizeChange(f => Math.max(10, f - 1))} className="px-2 py-1 text-xs text-slate-300 hover:text-white hover:bg-slate-700 rounded">A-</button>
-        <span className="px-2 py-1 text-xs text-slate-400">{fontSize}px</span>
-        <button onClick={() => onFontSizeChange(f => Math.min(32, f + 1))} className="px-2 py-1 text-xs text-slate-300 hover:text-white hover:bg-slate-700 rounded">A+</button>
+      <div className={`absolute top-2 right-4 z-10 flex gap-2 backdrop-blur p-1 rounded-lg border ${
+        isLightMode ? 'bg-white/80 border-slate-300' : 'bg-slate-800/80 border-slate-700'
+      }`}>
+        <button onClick={() => onFontSizeChange(f => Math.max(10, f - 1))} className={`px-2 py-1 text-xs rounded ${isLightMode ? 'text-slate-600 hover:text-black hover:bg-slate-200' : 'text-slate-300 hover:text-white hover:bg-slate-700'}`}>A-</button>
+        <span className={`px-2 py-1 text-xs ${isLightMode ? 'text-slate-600' : 'text-slate-400'}`}>{fontSize}px</span>
+        <button onClick={() => onFontSizeChange(f => Math.min(32, f + 1))} className={`px-2 py-1 text-xs rounded ${isLightMode ? 'text-slate-600 hover:text-black hover:bg-slate-200' : 'text-slate-300 hover:text-white hover:bg-slate-700'}`}>A+</button>
       </div>
 
       {viewMode === 'raw' ? (
@@ -481,14 +530,18 @@ export const Editor: React.FC<EditorProps> = ({
           onKeyUp={handleSelect}
           onWheel={handleWheel}
           spellCheck={false}
-          className="w-full h-full bg-[#1a1b26] text-[#a9b1d6] p-4 resize-none focus:outline-none font-aa scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent"
+          className={`w-full h-full p-4 resize-none focus:outline-none font-aa scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent ${
+            isLightMode ? 'bg-[#fafafa] text-[#2e2e2e]' : 'bg-[#1a1b26] text-[#a9b1d6]'
+          }`}
           style={{ fontSize: `${fontSize}px`, lineHeight: `${aaLineHeight}px` }}
         />
       ) : (
         <div 
           ref={containerRef}
-          className={`w-full h-full bg-[#1a1b26] text-[#a9b1d6] p-4 overflow-auto whitespace-pre font-aa relative select-none ${
-            isDragMode || isManualSelectMode || isManualVerticalMode || isBanMode
+          className={`w-full h-full p-4 overflow-auto whitespace-pre font-aa relative select-none ${
+            isLightMode ? 'bg-[#fafafa] text-[#2e2e2e]' : 'bg-[#1a1b26] text-[#a9b1d6]'
+          } ${
+            isDragMode || isManualSelectMode || isManualVerticalMode || isBanMode || isManualRegexMode
               ? 'cursor-crosshair touch-none'
               : ''
           }`}
@@ -507,15 +560,17 @@ export const Editor: React.FC<EditorProps> = ({
                    id={seg.id}
                    data-segment-id={seg.id}
                    onClick={(e) => {
-                     if (isDragMode || isManualSelectMode || isManualVerticalMode || isBanMode) return;
+                     if (isDragMode || isManualSelectMode || isManualVerticalMode || isBanMode || isManualRegexMode) return;
                      e.stopPropagation();
                      toggleSegmentSelection(seg.id);
                    }}
                    className={`
                      rounded transition-colors duration-75
-                     ${!isDragMode && !isManualSelectMode && !isManualVerticalMode && !isBanMode && isSegmentTranslationSelectable(seg) ? 'cursor-pointer' : 'cursor-default'}
+                     ${!isDragMode && !isManualSelectMode && !isManualVerticalMode && !isBanMode && !isManualRegexMode && isSegmentTranslationSelectable(seg) ? 'cursor-pointer' : 'cursor-default'}
                      ${seg.isSelected 
-                        ? seg.isManualVerticalSelection
+                        ? seg.isManualRegexSelection
+                          ? 'bg-cyan-600 text-white shadow-[0_0_10px_rgba(8,145,178,0.5)]'
+                        : seg.isManualVerticalSelection
                           ? 'bg-fuchsia-600 text-white shadow-[0_0_10px_rgba(192,38,211,0.55)]'
                           : seg.isVerticalText
                           ? 'bg-purple-600 text-white shadow-[0_0_10px_rgba(147,51,234,0.5)]'
@@ -523,14 +578,16 @@ export const Editor: React.FC<EditorProps> = ({
                             ? 'bg-orange-600 text-white shadow-[0_0_10px_rgba(234,88,12,0.45)]'
                           : 'bg-blue-600 text-white shadow-[0_0_10px_rgba(37,99,235,0.5)]'
                         : seg.isTranslated 
-                            ? 'text-green-400 hover:bg-slate-800' 
+                            ? isLightMode ? 'text-green-700 hover:bg-green-100' : 'text-green-400 hover:bg-slate-800'
                             : seg.isUserExcluded
-                              ? 'text-red-300 bg-red-950/30 line-through decoration-red-500/70'
+                              ? isLightMode ? 'text-red-700 bg-red-100/70 line-through decoration-red-500/70' : 'text-red-300 bg-red-950/30 line-through decoration-red-500/70'
+                            : seg.isManualRegexSelection
+                              ? isLightMode ? 'text-cyan-800 hover:bg-cyan-100' : 'text-cyan-200 hover:bg-cyan-900/30'
                             : seg.isManualVerticalSelection
-                              ? 'text-fuchsia-200 hover:bg-fuchsia-900/30'
+                              ? isLightMode ? 'text-fuchsia-800 hover:bg-fuchsia-100' : 'text-fuchsia-200 hover:bg-fuchsia-900/30'
                               : seg.isVerticalText
-                              ? 'text-purple-200 hover:bg-purple-900/30'
-                              : 'text-yellow-100 hover:bg-slate-700'
+                              ? isLightMode ? 'text-purple-800 hover:bg-purple-100' : 'text-purple-200 hover:bg-purple-900/30'
+                              : isLightMode ? 'text-amber-900 hover:bg-amber-100' : 'text-yellow-100 hover:bg-slate-700'
                      }
                      ${!seg.isTranslated && !seg.isSelected ? 'underline decoration-slate-600/50 decoration-dotted' : ''}
                    `}
@@ -543,7 +600,7 @@ export const Editor: React.FC<EditorProps> = ({
                <span
                  key={seg.id}
                   data-segment-id={seg.id}
-                  className={isManualSelectMode
+                  className={isManualSelectMode || isManualRegexMode
                     ? 'opacity-90'
                     : 'opacity-70 pointer-events-none'}
                >
@@ -558,6 +615,8 @@ export const Editor: React.FC<EditorProps> = ({
                className={`absolute pointer-events-none z-20 ${
                   isBanMode
                     ? 'border border-red-400 bg-red-500/20'
+                    : isManualRegexMode
+                    ? 'border border-cyan-400 bg-cyan-500/20'
                     : isManualVerticalMode
                     ? 'border border-fuchsia-400 bg-fuchsia-500/20'
                     : isManualSelectMode
