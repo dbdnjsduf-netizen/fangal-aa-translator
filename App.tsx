@@ -10,6 +10,7 @@ import { DictionaryModal } from './components/DictionaryModal';
 import { PromptModal } from './components/PromptModal';
 import { TranslationSettingsModal } from './components/TranslationSettingsModal';
 import { ImageExportModal } from './components/ImageExportModal';
+import { SelectionExclusionModal } from './components/SelectionExclusionModal';
 import {
   SelectionRange,
   ViewMode,
@@ -17,6 +18,7 @@ import {
   ApiUsageStats,
   DictionaryEntry,
   OllamaRuntimeInfo,
+  SelectionExclusionRules,
   TranslationProvider,
 } from './types';
 import {
@@ -46,7 +48,14 @@ import {
   NormalTranslationUpdate,
   selectAllTranslatableSegments,
 } from './services/translationApplication';
-import { FileText, Info, Activity, Download, Image as ImageIcon, Timer, History, Book, MessageSquareQuote, Server, CheckSquare } from 'lucide-react';
+import {
+  addExactSelectionExclusion,
+  applySelectionExclusions,
+  deserializeSelectionExclusions,
+  getSelectionExclusionTarget,
+  SELECTION_EXCLUSIONS_STORAGE_KEY,
+} from './services/selectionExclusions';
+import { Ban, FileText, Info, Activity, Download, Image as ImageIcon, Timer, History, Book, MessageSquareQuote, Server, CheckSquare } from 'lucide-react';
 
 type SmartTranslationUnit =
   | {
@@ -70,6 +79,7 @@ function App() {
   const [isDragMode, setIsDragMode] = useState(false); // New Drag Mode State
   const [isManualSelectMode, setIsManualSelectMode] = useState(false);
   const [isManualVerticalMode, setIsManualVerticalMode] = useState(false);
+  const [isBanMode, setIsBanMode] = useState(false);
   const [selection, setSelection] = useState<SelectionRange | null>(null);
   const [segments, setSegments] = useState<TextSegment[]>([]);
   
@@ -80,6 +90,7 @@ function App() {
   const [isChangelogOpen, setIsChangelogOpen] = useState(false);
   const [isDictOpen, setIsDictOpen] = useState(false);
   const [isPromptOpen, setIsPromptOpen] = useState(false);
+  const [isSelectionExclusionOpen, setIsSelectionExclusionOpen] = useState(false);
   const [isTranslationSettingsOpen, setIsTranslationSettingsOpen] = useState(false);
   const [isImageExportOpen, setIsImageExportOpen] = useState(false);
   const [fontSize, setFontSize] = useState(16);
@@ -96,6 +107,12 @@ function App() {
   );
   const [geminiApiKey, setGeminiApiKey] = useState(
     () => sessionStorage.getItem(GEMINI_SESSION_KEY) || '',
+  );
+
+  const [selectionExclusions, setSelectionExclusions] = useState<SelectionExclusionRules>(
+    () => deserializeSelectionExclusions(
+      localStorage.getItem(SELECTION_EXCLUSIONS_STORAGE_KEY),
+    ),
   );
   
   const [history, setHistory] = useState<{ prevContent: string; prevSegments: TextSegment[] } | null>(null);
@@ -136,6 +153,13 @@ function App() {
   useEffect(() => {
     localStorage.setItem(GEMINI_MODEL_STORAGE_KEY, geminiModel);
   }, [geminiModel]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      SELECTION_EXCLUSIONS_STORAGE_KEY,
+      JSON.stringify(selectionExclusions),
+    );
+  }, [selectionExclusions]);
   
   // Dictionary State with Persistence
   const [customDictionary, setCustomDictionary] = useState<DictionaryEntry[]>(() => {
@@ -196,6 +220,27 @@ function App() {
     setIsDragMode(false);
     setIsManualSelectMode(false);
     setIsManualVerticalMode(false);
+    setIsBanMode(false);
+  };
+
+  const handleSelectionExclusionsChange = (nextRules: SelectionExclusionRules) => {
+    setSelectionExclusions(nextRules);
+    setSegments((current) => applySelectionExclusions(current, nextRules));
+  };
+
+  const handleBanSelection = (segmentId: string) => {
+    const target = getSelectionExclusionTarget(segments, segmentId);
+    if (!target) return;
+    if (!target.selected) {
+      alert('먼저 전체 선택이나 직접 선택으로 금지할 항목을 선택하세요.');
+      return;
+    }
+    const nextRules = addExactSelectionExclusion(
+      selectionExclusions,
+      target,
+      makePersistentRuleId(),
+    );
+    handleSelectionExclusionsChange(nextRules);
   };
 
   const updateStats = (usage: { inputTokens: number; outputTokens: number; durationMs: number; requestCount?: number }) => {
@@ -538,6 +583,7 @@ function App() {
     setIsDragMode(false);
     setIsManualSelectMode(false);
     setIsManualVerticalMode(false);
+    setIsBanMode(false);
   };
 
   return (
@@ -603,6 +649,14 @@ function App() {
                 >
                   <MessageSquareQuote className="w-3.5 h-3.5" />
                   <span className="hidden sm:inline">프롬프트</span>
+                </button>
+                <button
+                  onClick={() => setIsSelectionExclusionOpen(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded text-xs text-slate-300 transition-colors"
+                  title="자동 선택에서 제외하도록 저장한 항목 관리"
+                >
+                  <Ban className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">금지항목 관리</span>
                 </button>
                 <button
                   onClick={() => setIsReportOpen(true)}
@@ -694,6 +748,9 @@ function App() {
             isDragMode={isDragMode}
             isManualSelectMode={isManualSelectMode}
             isManualVerticalMode={isManualVerticalMode}
+            isBanMode={isBanMode}
+            onBanSelection={handleBanSelection}
+            selectionExclusions={selectionExclusions}
           />
         )}
       </main>
@@ -713,6 +770,7 @@ function App() {
             setIsDragMode(false);
             setIsManualSelectMode(false);
             setIsManualVerticalMode(false);
+            setIsBanMode(false);
           }
         }}
         smartSelectionCount={new Set(
@@ -730,6 +788,7 @@ function App() {
           if (next) {
             setIsManualSelectMode(false);
             setIsManualVerticalMode(false);
+            setIsBanMode(false);
           }
         }}
         isManualSelectMode={isManualSelectMode}
@@ -739,6 +798,7 @@ function App() {
           if (next) {
             setIsDragMode(false);
             setIsManualVerticalMode(false);
+            setIsBanMode(false);
           }
         }}
         isManualVerticalMode={isManualVerticalMode}
@@ -748,6 +808,17 @@ function App() {
           if (next) {
             setIsDragMode(false);
             setIsManualSelectMode(false);
+            setIsBanMode(false);
+          }
+        }}
+        isBanMode={isBanMode}
+        onToggleBanMode={() => {
+          const next = !isBanMode;
+          setIsBanMode(next);
+          if (next) {
+            setIsDragMode(false);
+            setIsManualSelectMode(false);
+            setIsManualVerticalMode(false);
           }
         }}
       />
@@ -804,6 +875,12 @@ function App() {
           void refreshOllamaStatus(nextOllamaModel);
         }}
       />
+      <SelectionExclusionModal
+        isOpen={isSelectionExclusionOpen}
+        onClose={() => setIsSelectionExclusionOpen(false)}
+        rules={selectionExclusions}
+        onChange={handleSelectionExclusionsChange}
+      />
       <ImageExportModal
         isOpen={isImageExportOpen}
         onClose={() => setIsImageExportOpen(false)}
@@ -827,10 +904,15 @@ function App() {
                         <p className="mt-1"><span className="text-orange-300 bg-slate-700 px-1 rounded">수동</span> 버튼을 켜면 자동 감지에서 빠진 가로 텍스트 전체를 주황색 박스로 간편하게 드래그해 번역 대상으로 추가할 수 있습니다.</p>
                         <p className="mt-1"><span className="text-fuchsia-300 bg-slate-700 px-1 rounded">세로수동</span> 버튼은 세로 글자 열 전체를 박스로 골라 하나의 자홍색 문장으로 묶습니다. 잘못 나뉜 보라색 그룹도 다시 묶을 수 있습니다.</p>
                         <p className="mt-1">수동·세로수동 상태에서도 기존 자동 감지 항목을 살짝 클릭하면 해당 일반 문장이나 세로 그룹의 선택을 끄거나 다시 켤 수 있습니다.</p>
+                        <p className="mt-1"><span className="text-red-300 bg-slate-700 px-1 rounded">금지하기</span>를 켜고 선택 항목을 누르면 완전히 같은 반복 원문을 모두 해제하고 다음 파일에서도 제외합니다.</p>
                     </div>
                     <div>
                         <span className="font-semibold text-green-400">사전 기능</span>
                         <p>상단의 [사전] 메뉴에서 나만의 번역 규칙을 추가하고 저장/복원할 수 있습니다.</p>
+                    </div>
+                    <div>
+                        <span className="font-semibold text-red-400">금지항목 관리</span>
+                        <p>실수로 금지한 항목은 상단 메뉴에서 개별 삭제하거나 목록을 JSON으로 백업·복원할 수 있습니다.</p>
                     </div>
                     <div>
                         <span className="font-semibold text-purple-400">세로쓰기</span>
@@ -846,6 +928,12 @@ function App() {
       </div>
     </div>
   );
+}
+
+function makePersistentRuleId() {
+  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? `exact-${crypto.randomUUID()}`
+    : `exact-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 export default App;

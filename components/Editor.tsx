@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, startTransition } from 'react';
-import { SelectionRange, TextSegment, ViewMode } from '../types';
+import { SelectionExclusionRules, SelectionRange, TextSegment, ViewMode } from '../types';
 import SegmentationWorker from '../workers/segmentation.worker?worker';
 import { annotateVerticalTextSegments } from '../services/verticalText';
 import {
@@ -15,6 +15,7 @@ import {
   isSegmentTranslationSelectable,
   toggleSegmentTranslationSelection,
 } from '../services/translationApplication';
+import { applySelectionExclusions } from '../services/selectionExclusions';
 
 interface EditorProps {
   content: string;
@@ -29,6 +30,9 @@ interface EditorProps {
   isDragMode?: boolean;
   isManualSelectMode?: boolean;
   isManualVerticalMode?: boolean;
+  isBanMode?: boolean;
+  onBanSelection?: (segmentId: string) => void;
+  selectionExclusions: SelectionExclusionRules;
 }
 
 export const Editor: React.FC<EditorProps> = ({ 
@@ -44,6 +48,9 @@ export const Editor: React.FC<EditorProps> = ({
   isDragMode = false,
   isManualSelectMode = false,
   isManualVerticalMode = false,
+  isBanMode = false,
+  onBanSelection,
+  selectionExclusions,
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -109,7 +116,10 @@ export const Editor: React.FC<EditorProps> = ({
           // Use startTransition so React can yield to the browser between renders,
           // preventing the UI (and other Chrome tabs) from freezing on large files.
           startTransition(() => {
-            onSegmentsChangeRef.current(annotateVerticalTextSegments(content, e.data.segments));
+            const annotated = annotateVerticalTextSegments(content, e.data.segments);
+            onSegmentsChangeRef.current(
+              applySelectionExclusions(annotated, selectionExclusions),
+            );
           });
         }
       };
@@ -121,7 +131,7 @@ export const Editor: React.FC<EditorProps> = ({
         worker.removeEventListener('message', handleMessage);
       };
     }
-  }, [content, viewMode, segments.length]);
+  }, [content, viewMode, segments.length, selectionExclusions]);
 
   const toggleSegmentSelection = (id: string) => {
     const newSegments = toggleSegmentTranslationSelection(segments, id);
@@ -279,7 +289,7 @@ export const Editor: React.FC<EditorProps> = ({
   // --- Pointer Events for Robust Dragging ---
   const handlePointerDown = (e: React.PointerEvent) => {
     if (viewMode !== 'smart' || !e.isPrimary || e.button !== 0) return;
-    if (!isDragMode && !isManualSelectMode && !isManualVerticalMode) return;
+    if (!isDragMode && !isManualSelectMode && !isManualVerticalMode && !isBanMode) return;
     
     // Prevent default browser actions (text selection etc)
     e.preventDefault();
@@ -358,7 +368,10 @@ export const Editor: React.FC<EditorProps> = ({
         ? target.closest<HTMLElement>('[data-segment-id]')
         : null;
       const segmentId = segmentElement?.dataset.segmentId;
-      if (segmentId) toggleSegmentSelection(segmentId);
+      if (segmentId) {
+        if (isBanMode) onBanSelection?.(segmentId);
+        else toggleSegmentSelection(segmentId);
+      }
     } else if (isManualVerticalMode) {
       captureManualVerticalBox(x1, y1, x2, y2);
     } else if (isManualSelectMode) {
@@ -475,7 +488,7 @@ export const Editor: React.FC<EditorProps> = ({
         <div 
           ref={containerRef}
           className={`w-full h-full bg-[#1a1b26] text-[#a9b1d6] p-4 overflow-auto whitespace-pre font-aa relative select-none ${
-            isDragMode || isManualSelectMode || isManualVerticalMode
+            isDragMode || isManualSelectMode || isManualVerticalMode || isBanMode
               ? 'cursor-crosshair touch-none'
               : ''
           }`}
@@ -494,13 +507,13 @@ export const Editor: React.FC<EditorProps> = ({
                    id={seg.id}
                    data-segment-id={seg.id}
                    onClick={(e) => {
-                     if (isDragMode || isManualSelectMode || isManualVerticalMode) return;
+                     if (isDragMode || isManualSelectMode || isManualVerticalMode || isBanMode) return;
                      e.stopPropagation();
                      toggleSegmentSelection(seg.id);
                    }}
                    className={`
                      rounded transition-colors duration-75
-                     ${!isDragMode && !isManualSelectMode && !isManualVerticalMode && isSegmentTranslationSelectable(seg) ? 'cursor-pointer' : 'cursor-default'}
+                     ${!isDragMode && !isManualSelectMode && !isManualVerticalMode && !isBanMode && isSegmentTranslationSelectable(seg) ? 'cursor-pointer' : 'cursor-default'}
                      ${seg.isSelected 
                         ? seg.isManualVerticalSelection
                           ? 'bg-fuchsia-600 text-white shadow-[0_0_10px_rgba(192,38,211,0.55)]'
@@ -511,13 +524,15 @@ export const Editor: React.FC<EditorProps> = ({
                           : 'bg-blue-600 text-white shadow-[0_0_10px_rgba(37,99,235,0.5)]'
                         : seg.isTranslated 
                             ? 'text-green-400 hover:bg-slate-800' 
+                            : seg.isUserExcluded
+                              ? 'text-red-300 bg-red-950/30 line-through decoration-red-500/70'
                             : seg.isManualVerticalSelection
                               ? 'text-fuchsia-200 hover:bg-fuchsia-900/30'
                               : seg.isVerticalText
                               ? 'text-purple-200 hover:bg-purple-900/30'
                               : 'text-yellow-100 hover:bg-slate-700'
                      }
-                     ${!seg.isTranslated && !seg.isSelected && 'underline decoration-slate-600/50 decoration-dotted'}
+                     ${!seg.isTranslated && !seg.isSelected ? 'underline decoration-slate-600/50 decoration-dotted' : ''}
                    `}
                  >
                    {seg.text}
@@ -541,7 +556,9 @@ export const Editor: React.FC<EditorProps> = ({
            {isDragging && dragStart && dragCurrent && (
              <div 
                className={`absolute pointer-events-none z-20 ${
-                  isManualVerticalMode
+                  isBanMode
+                    ? 'border border-red-400 bg-red-500/20'
+                    : isManualVerticalMode
                     ? 'border border-fuchsia-400 bg-fuchsia-500/20'
                     : isManualSelectMode
                     ? 'border border-orange-400 bg-orange-500/20'

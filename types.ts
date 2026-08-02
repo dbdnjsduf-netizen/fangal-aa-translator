@@ -40,6 +40,7 @@ export interface TextSegment {
   isIndentedDialogue?: boolean;
   isIsolatedDialogue?: boolean;
   isAutoSelectExcluded?: boolean;
+  isUserExcluded?: boolean;
   isSelected: boolean;
   isTranslated: boolean;
 }
@@ -57,6 +58,19 @@ export interface DictionaryEntry {
   id: string;
   original: string;
   translated: string;
+}
+
+export type SelectionExclusionKind = 'normal' | 'vertical';
+
+export interface ExactSelectionExclusionRule {
+  id: string;
+  kind: SelectionExclusionKind;
+  sourceText: string;
+  createdAt: number;
+}
+
+export interface SelectionExclusionRules {
+  exact: ExactSelectionExclusionRule[];
 }
 
 export type TranslationProvider = 'ollama' | 'gemini';

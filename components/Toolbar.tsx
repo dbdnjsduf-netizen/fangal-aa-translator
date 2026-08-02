@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Wand2, X, Loader2, RotateCcw, ScanSearch, Type, MousePointer2, Eye, Columns3 } from 'lucide-react';
+import { Ban, Wand2, X, Loader2, RotateCcw, ScanSearch, Type, MousePointer2, Eye, Columns3 } from 'lucide-react';
 import { SelectionRange, ViewMode } from '../types';
 
 interface ToolbarProps {
@@ -23,6 +23,8 @@ interface ToolbarProps {
   onToggleManualSelectMode?: () => void;
   isManualVerticalMode?: boolean;
   onToggleManualVerticalMode?: () => void;
+  isBanMode?: boolean;
+  onToggleBanMode?: () => void;
 }
 
 export const Toolbar: React.FC<ToolbarProps> = ({ 
@@ -43,10 +45,12 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onToggleManualSelectMode,
   isManualVerticalMode,
   onToggleManualVerticalMode,
+  isBanMode,
+  onToggleBanMode,
 }) => {
   
   return (
-    <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-3 w-full max-w-3xl px-4 pointer-events-none">
+    <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-3 w-full max-w-5xl px-4 pointer-events-none">
       
       <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700 shadow-2xl rounded-2xl p-2 flex items-center gap-2 pointer-events-auto animate-in slide-in-from-bottom-5 duration-300">
         
@@ -150,6 +154,18 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                     <Columns3 className="w-4 h-4" />
                     세로수동
                 </button>
+                <button
+                    onClick={onToggleBanMode}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
+                      isBanMode
+                        ? 'bg-red-700 text-white hover:bg-red-600'
+                        : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                    }`}
+                    title="선택된 항목을 클릭해 같은 원문을 모두 자동 선택 금지 목록에 저장"
+                >
+                    <Ban className="w-4 h-4" />
+                    금지하기
+                </button>
 
                 {smartSelectionCount > 0 && (
                     <>
@@ -184,10 +200,11 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                         </button>
                     </>
                 )}
-                {smartSelectionCount === 0 && !isDragMode && !isManualSelectMode && !isManualVerticalMode && <span className="text-slate-500 text-sm px-4">클릭하여 선택</span>}
+                {smartSelectionCount === 0 && !isDragMode && !isManualSelectMode && !isManualVerticalMode && !isBanMode && <span className="text-slate-500 text-sm px-4">클릭하여 선택</span>}
                 {smartSelectionCount === 0 && isDragMode && <span className="text-purple-300 text-sm px-4 animate-pulse">영역을 드래그하여 선택...</span>}
                 {smartSelectionCount === 0 && isManualSelectMode && <span className="text-orange-300 text-sm px-4 animate-pulse">가로 텍스트 전체를 박스로 드래그하세요...</span>}
                 {smartSelectionCount === 0 && isManualVerticalMode && <span className="text-fuchsia-300 text-sm px-4 animate-pulse">세로쓰기 전체를 박스로 드래그하세요...</span>}
+                {smartSelectionCount === 0 && isBanMode && <span className="text-red-300 text-sm px-4 animate-pulse">먼저 금지할 항목을 선택하세요...</span>}
             </>
         )}
 
