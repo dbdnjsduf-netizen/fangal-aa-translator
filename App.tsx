@@ -9,6 +9,7 @@ import { ChangelogModal } from './components/ChangelogModal';
 import { DictionaryModal } from './components/DictionaryModal';
 import { PromptModal } from './components/PromptModal';
 import { TranslationSettingsModal } from './components/TranslationSettingsModal';
+import { ImageExportModal } from './components/ImageExportModal';
 import {
   SelectionRange,
   ViewMode,
@@ -20,9 +21,12 @@ import {
 } from './types';
 import {
   GEMINI_SESSION_KEY,
+  GEMINI_MODEL_STORAGE_KEY,
+  OLLAMA_MODEL_STORAGE_KEY,
   getProviderModelLabel,
   isProviderReady,
   normalizeTranslationProvider,
+  normalizeGeminiModel,
   TRANSLATION_PROVIDER_STORAGE_KEY,
   translateSelection,
   translateBatch,
@@ -42,7 +46,7 @@ import {
   NormalTranslationUpdate,
   selectAllTranslatableSegments,
 } from './services/translationApplication';
-import { FileText, Info, Activity, Download, Timer, History, Book, MessageSquareQuote, Server, CheckSquare } from 'lucide-react';
+import { FileText, Info, Activity, Download, Image as ImageIcon, Timer, History, Book, MessageSquareQuote, Server, CheckSquare } from 'lucide-react';
 
 type SmartTranslationUnit =
   | {
@@ -77,8 +81,16 @@ function App() {
   const [isDictOpen, setIsDictOpen] = useState(false);
   const [isPromptOpen, setIsPromptOpen] = useState(false);
   const [isTranslationSettingsOpen, setIsTranslationSettingsOpen] = useState(false);
+  const [isImageExportOpen, setIsImageExportOpen] = useState(false);
+  const [fontSize, setFontSize] = useState(16);
   const [ollamaStatus, setOllamaStatus] = useState<OllamaRuntimeInfo | null>(null);
   const [isCheckingOllama, setIsCheckingOllama] = useState(true);
+  const [ollamaModel, setOllamaModel] = useState(
+    () => localStorage.getItem(OLLAMA_MODEL_STORAGE_KEY) || '',
+  );
+  const [geminiModel, setGeminiModel] = useState(
+    () => normalizeGeminiModel(localStorage.getItem(GEMINI_MODEL_STORAGE_KEY)),
+  );
   const [translationProvider, setTranslationProvider] = useState<TranslationProvider>(
     () => normalizeTranslationProvider(localStorage.getItem(TRANSLATION_PROVIDER_STORAGE_KEY)),
   );
@@ -89,10 +101,18 @@ function App() {
   const [history, setHistory] = useState<{ prevContent: string; prevSegments: TextSegment[] } | null>(null);
   const [lastTranslated, setLastTranslated] = useState<{ original: string; translated: string } | null>(null);
   
-  const refreshOllamaStatus = async () => {
+  const activeOllamaModel = ollamaModel || ollamaStatus?.model || 'gemma4:31b-cloud';
+  const ollamaReady = Boolean(
+    ollamaStatus?.ok
+    && ollamaStatus.modelAvailable
+    && ollamaStatus.model === activeOllamaModel
+  );
+
+  const refreshOllamaStatus = async (model = ollamaModel || undefined) => {
     setIsCheckingOllama(true);
-    const status = await getOllamaRuntimeInfo();
+    const status = await getOllamaRuntimeInfo(model);
     setOllamaStatus(status);
+    if (status.model) setOllamaModel((current) => current || status.model);
     setIsCheckingOllama(false);
   };
 
@@ -108,6 +128,14 @@ function App() {
     if (geminiApiKey) sessionStorage.setItem(GEMINI_SESSION_KEY, geminiApiKey);
     else sessionStorage.removeItem(GEMINI_SESSION_KEY);
   }, [geminiApiKey]);
+
+  useEffect(() => {
+    if (ollamaModel) localStorage.setItem(OLLAMA_MODEL_STORAGE_KEY, ollamaModel);
+  }, [ollamaModel]);
+
+  useEffect(() => {
+    localStorage.setItem(GEMINI_MODEL_STORAGE_KEY, geminiModel);
+  }, [geminiModel]);
   
   // Dictionary State with Persistence
   const [customDictionary, setCustomDictionary] = useState<DictionaryEntry[]>(() => {
@@ -210,7 +238,7 @@ function App() {
     if (!isProviderReady(
       translationProvider,
       geminiApiKey,
-      Boolean(ollamaStatus?.ok && ollamaStatus.modelAvailable),
+      ollamaReady,
     )) {
       setIsTranslationSettingsOpen(true);
       alert(
@@ -231,7 +259,8 @@ function App() {
           selection.text, 
           customDictionary, 
           useDefaultDictionary,
-          systemPrompt
+          systemPrompt,
+          translationProvider === 'gemini' ? geminiModel : activeOllamaModel,
       );
       
       const isUnchanged = translatedText.trim() === selection.text.trim();
@@ -271,7 +300,7 @@ function App() {
     if (!isProviderReady(
       translationProvider,
       geminiApiKey,
-      Boolean(ollamaStatus?.ok && ollamaStatus.modelAvailable),
+      ollamaReady,
     )) {
       setIsTranslationSettingsOpen(true);
       alert(
@@ -341,13 +370,18 @@ function App() {
         throw new Error('번역할 수 있는 텍스트 그룹을 찾지 못했습니다.');
       }
 
-      const updateSegmentsWithPartial = (translatedTexts: string[], collectFailures = false) => {
+      const updateSegmentsWithPartial = (
+        translatedTexts: string[],
+        collectFailures = false,
+        failedTranslationIndices = new Set<number>(),
+      ) => {
         const normalTranslations: NormalTranslationUpdate[] = [];
         const verticalTranslations: Array<{
           unit: Extract<SmartTranslationUnit, { kind: 'vertical' }>;
           translatedText: string;
         }> = [];
         translationUnits.forEach((unit, index) => {
+          if (failedTranslationIndices.has(index)) return;
           const translatedText = translatedTexts[index];
           if (
             unit.kind === 'normal'
@@ -378,34 +412,30 @@ function App() {
             translation: translatedText,
           })),
         );
-        if (!verticalResult.applied) {
-          throw new Error(
-            `세로쓰기 번역을 적용하지 못했습니다: ${verticalResult.reason || '좌표 충돌'}`,
-          );
-        }
         const normalResult = applyNormalTranslationUpdates(
           verticalResult.segments,
           normalTranslations,
           collectFailures,
         );
-        const failures = [...normalResult.layoutFailures];
+        const layoutWarnings = [...normalResult.layoutFailures];
+        const skippedVertical: string[] = [];
         const newSegments = clearCompletedSelections(normalResult.segments);
-        if (collectFailures) {
-          verticalTranslations.forEach(({ unit }, index) => {
-            const reason = verticalResult.items[index]?.reason;
-            if (reason) {
-              failures.push(`${unit.sourceText}: ${reason}`);
-            }
-          });
-        }
+        verticalTranslations.forEach(({ unit }, index) => {
+          const item = verticalResult.items[index];
+          if (!item?.applied) {
+            skippedVertical.push(`${unit.sourceText}: ${item?.reason || '좌표를 복구하지 못했습니다.'}`);
+          } else if (collectFailures && item.reason) {
+            layoutWarnings.push(`${unit.sourceText}: ${item.reason}`);
+          }
+        });
 
         setSegments(newSegments);
         const newContent = newSegments.map(s => s.text).join('');
         setContent(newContent);
-        return failures;
+        return { layoutWarnings, skippedVertical };
       };
 
-      const { translations: finalTranslations, usage } = await translateBatch(
+      const { translations: finalTranslations, usage, failures: batchFailures } = await translateBatch(
           translationProvider,
           geminiApiKey,
           textsToTranslate,
@@ -428,10 +458,19 @@ function App() {
               outputTokens: statsBeforeBatch.outputTokens + partialUsage.outputTokens,
               totalDurationMs: statsBeforeBatch.totalDurationMs + partialUsage.totalDurationMs
             });
-          }
+          },
+          translationProvider === 'gemini' ? geminiModel : activeOllamaModel,
       );
-      
-      const layoutFailures = updateSegmentsWithPartial(finalTranslations, true);
+
+      const failedTranslationIndices = new Set<number>();
+      batchFailures.forEach(({ itemIndices }) => {
+        itemIndices.forEach((index) => failedTranslationIndices.add(index));
+      });
+      const { layoutWarnings, skippedVertical } = updateSegmentsWithPartial(
+        finalTranslations,
+        true,
+        failedTranslationIndices,
+      );
       setApiStats({
         requestCount: statsBeforeBatch.requestCount + usage.requestCount,
         inputTokens: statsBeforeBatch.inputTokens + usage.inputTokens,
@@ -439,11 +478,28 @@ function App() {
         totalDurationMs: statsBeforeBatch.totalDurationMs + usage.durationMs,
       });
       
-      setLastTranslated({ original: `${translationUnits.length} items`, translated: "Done" });
-      if (layoutFailures.length > 0) {
+      const skippedCount = failedTranslationIndices.size + skippedVertical.length;
+      const appliedCount = Math.max(0, translationUnits.length - skippedCount);
+      setLastTranslated({
+        original: `${appliedCount}/${translationUnits.length} items`,
+        translated: skippedCount > 0 ? 'Partial' : 'Done',
+      });
+      if (skippedCount > 0) {
+        const skippedDetails = [
+          ...batchFailures.map((failure) => (
+            `${failure.chunkIndex + 1}번 청크(${failure.itemCount}개): ${failure.message}`
+          )),
+          ...skippedVertical,
+        ];
         alert(
-          `번역은 모두 적용했지만 ${layoutFailures.length}개 항목에서 위치가 일부 확장됐습니다.\n\n`
-          + layoutFailures.slice(0, 3).join('\n'),
+          `일괄 번역 부분 완료: ${appliedCount}개는 적용했고 ${skippedCount}개는 건너뛰어 선택 상태로 남겼습니다.\n`
+          + '남은 항목만 다시 번역하거나 세로수동으로 다시 묶어 재시도하세요.\n\n'
+          + skippedDetails.slice(0, 5).join('\n'),
+        );
+      } else if (layoutWarnings.length > 0) {
+        alert(
+          `번역은 모두 적용했지만 ${layoutWarnings.length}개 항목에서 위치가 일부 확장됐습니다.\n\n`
+          + layoutWarnings.slice(0, 3).join('\n'),
         );
       }
 
@@ -495,9 +551,10 @@ function App() {
                 <h1 className="font-bold text-slate-100 leading-none">Fangal AA Translator</h1>
                 <div className="flex items-center gap-2 mt-0.5">
                    <span className="text-[10px] text-slate-400 font-mono">
-                     {getProviderModelLabel(
-                       translationProvider,
-                       ollamaStatus?.model,
+                      {getProviderModelLabel(
+                        translationProvider,
+                        activeOllamaModel,
+                        geminiModel,
                      ).toUpperCase()}
                    </span>
                    <span className="w-0.5 h-2.5 bg-slate-700"></span>
@@ -521,7 +578,7 @@ function App() {
                     isProviderReady(
                       translationProvider,
                       geminiApiKey,
-                      Boolean(ollamaStatus?.ok && ollamaStatus.modelAvailable),
+                      ollamaReady,
                     )
                       ? 'border-teal-600/50 text-teal-400'
                       : 'border-yellow-600/50 text-yellow-400'
@@ -578,6 +635,17 @@ function App() {
 
             {(content || fileName) && (
                 <button
+                    onClick={() => setIsImageExportOpen(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-xs font-medium transition-colors shadow-sm"
+                    title="AA를 여러 이미지로 나누어 ZIP 다운로드"
+                >
+                    <ImageIcon className="w-3.5 h-3.5" />
+                    <span>이미지 다운로드</span>
+                </button>
+            )}
+
+            {(content || fileName) && (
+                <button
                     onClick={handleDownload}
                     className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-medium transition-colors shadow-sm"
                     title="번역된 파일 다운로드"
@@ -621,6 +689,8 @@ function App() {
             viewMode={viewMode}
             segments={segments}
             onSegmentsChange={setSegments}
+            fontSize={fontSize}
+            onFontSizeChange={setFontSize}
             isDragMode={isDragMode}
             isManualSelectMode={isManualSelectMode}
             isManualVerticalMode={isManualVerticalMode}
@@ -709,11 +779,17 @@ function App() {
         onClose={() => setIsTranslationSettingsOpen(false)}
         status={ollamaStatus}
         isChecking={isCheckingOllama}
-        onRefresh={() => void refreshOllamaStatus()}
+        onRefresh={(model) => void refreshOllamaStatus(model)}
         provider={translationProvider}
+        ollamaModel={activeOllamaModel}
+        geminiModel={geminiModel}
         geminiApiKey={geminiApiKey}
-        onSave={(provider, apiKey) => {
-          if (provider !== translationProvider) {
+        onSave={(provider, apiKey, nextOllamaModel, nextGeminiModel) => {
+          if (
+            provider !== translationProvider
+            || nextOllamaModel !== activeOllamaModel
+            || nextGeminiModel !== geminiModel
+          ) {
             setApiStats({
               requestCount: 0,
               inputTokens: 0,
@@ -722,8 +798,18 @@ function App() {
             });
           }
           setTranslationProvider(provider);
+          setOllamaModel(nextOllamaModel);
+          setGeminiModel(nextGeminiModel);
           setGeminiApiKey(apiKey);
+          void refreshOllamaStatus(nextOllamaModel);
         }}
+      />
+      <ImageExportModal
+        isOpen={isImageExportOpen}
+        onClose={() => setIsImageExportOpen(false)}
+        content={content}
+        fileName={fileName || 'translation.txt'}
+        fontSize={fontSize}
       />
       
       <div className="fixed bottom-4 right-4 z-40">
@@ -738,8 +824,9 @@ function App() {
                         <span className="font-semibold text-blue-400">선택 모드</span>
                         <p>번역하려는 텍스트를 클릭하여 선택하세요.</p>
                         <p className="mt-1">하단 툴바의 <span className="text-slate-100 bg-slate-700 px-1 rounded">드래그</span> 버튼을 켜면 박스 드래그로 여러 줄을 한 번에 선택할 수 있습니다.</p>
-                        <p className="mt-1"><span className="text-orange-300 bg-slate-700 px-1 rounded">수동</span> 버튼을 켜면 자동 감지에서 빠진 글자만 일반 텍스트처럼 드래그해 주황색 번역 대상으로 추가할 수 있습니다.</p>
+                        <p className="mt-1"><span className="text-orange-300 bg-slate-700 px-1 rounded">수동</span> 버튼을 켜면 자동 감지에서 빠진 가로 텍스트 전체를 주황색 박스로 간편하게 드래그해 번역 대상으로 추가할 수 있습니다.</p>
                         <p className="mt-1"><span className="text-fuchsia-300 bg-slate-700 px-1 rounded">세로수동</span> 버튼은 세로 글자 열 전체를 박스로 골라 하나의 자홍색 문장으로 묶습니다. 잘못 나뉜 보라색 그룹도 다시 묶을 수 있습니다.</p>
+                        <p className="mt-1">수동·세로수동 상태에서도 기존 자동 감지 항목을 살짝 클릭하면 해당 일반 문장이나 세로 그룹의 선택을 끄거나 다시 켤 수 있습니다.</p>
                     </div>
                     <div>
                         <span className="font-semibold text-green-400">사전 기능</span>

@@ -99,6 +99,15 @@ export interface TranslationResponseData {
 export interface BatchTranslationResult {
   translations: string[];
   usage: Usage;
+  failures: BatchTranslationFailure[];
+}
+
+export interface BatchTranslationFailure {
+  chunkIndex: number;
+  startIndex: number;
+  itemCount: number;
+  itemIndices: number[];
+  message: string;
 }
 
 export interface TranslationProgress {
@@ -110,14 +119,16 @@ export interface TranslationProgress {
 const MAX_RETRIES = 3;
 const REQUEST_TIMEOUT_MS = 330_000;
 
-export async function getOllamaRuntimeInfo(): Promise<OllamaRuntimeInfo> {
+export async function getOllamaRuntimeInfo(model?: string): Promise<OllamaRuntimeInfo> {
   try {
-    const response = await fetch('/api/health', { headers: { Accept: 'application/json' } });
+    const query = model ? `?model=${encodeURIComponent(model)}` : '';
+    const response = await fetch(`/api/health${query}`, { headers: { Accept: 'application/json' } });
     const payload = await response.json().catch(() => ({}));
     return {
       ok: Boolean(response.ok && payload.ok),
       modelAvailable: payload.modelAvailable !== false,
       model: payload.model || 'gemma4:31b-cloud',
+      defaultModel: payload.defaultModel || payload.model || 'gemma4:31b-cloud',
       mode: payload.mode || 'local-proxy',
       message: payload.message || (response.ok ? 'Ollama 연결이 준비되었습니다.' : 'Ollama 연결 확인에 실패했습니다.'),
     };
@@ -125,7 +136,8 @@ export async function getOllamaRuntimeInfo(): Promise<OllamaRuntimeInfo> {
     return {
       ok: false,
       modelAvailable: false,
-      model: 'gemma4:31b-cloud',
+      model: model || 'gemma4:31b-cloud',
+      defaultModel: 'gemma4:31b-cloud',
       mode: 'local-proxy',
       message: '앱 서버의 Ollama 상태 API에 연결할 수 없습니다.',
     };
@@ -137,6 +149,7 @@ export async function translateSelection(
   customDict: DictionaryEntry[] = [],
   useDefaultDict = true,
   systemInstruction = DEFAULT_SYSTEM_PROMPT,
+  model?: string,
 ): Promise<TranslationResponseData> {
   const result = await translateChunk(
     [textToTranslate],
@@ -144,6 +157,7 @@ export async function translateSelection(
     customDict,
     useDefaultDict,
     systemInstruction,
+    model,
   );
   return { text: result.translations[0], usage: result.usage };
 }
@@ -155,17 +169,21 @@ export async function translateBatch(
   systemInstruction = DEFAULT_SYSTEM_PROMPT,
   onProgress?: (progress: TranslationProgress) => void,
   onPartialResult?: (translations: string[], usage: ApiUsageStats) => void,
+  model?: string,
 ): Promise<BatchTranslationResult> {
   const { chunks, chunkGaps } = createChunks(texts);
   if (chunks.length === 0) {
     return {
       translations: [],
       usage: { inputTokens: 0, outputTokens: 0, requestCount: 0, durationMs: 0 },
+      failures: [],
     };
   }
 
   const results = chunks.map((chunk) => [...chunk]);
-  const failures: Error[] = [];
+  const chunkStarts = getChunkStartIndices(chunks);
+  const completedItems = chunks.map(() => new Set<number>());
+  const failures: BatchTranslationFailure[] = [];
   const usage = { inputTokens: 0, outputTokens: 0, requestCount: 0, durationMs: 0 };
   let nextChunkIndex = 0;
   let completedChunks = 0;
@@ -185,12 +203,19 @@ export async function translateBatch(
           customDict,
           useDefaultDict,
           systemInstruction,
+          model,
           (offset, recoveredTranslations) => {
             results[index].splice(
               offset,
               recoveredTranslations.length,
               ...recoveredTranslations,
             );
+            recoveredTranslations.forEach((translation, recoveredIndex) => {
+              const localIndex = offset + recoveredIndex;
+              if (translation.trim() !== chunks[index][localIndex]?.trim()) {
+                completedItems[index].add(localIndex);
+              }
+            });
             onPartialResult?.(results.flat(), {
               requestCount: usage.requestCount,
               inputTokens: usage.inputTokens,
@@ -200,6 +225,7 @@ export async function translateBatch(
           },
         );
         results[index] = result.translations;
+        result.translations.forEach((_, itemIndex) => completedItems[index].add(itemIndex));
         usage.requestCount += result.usage.requestCount;
         usage.inputTokens += result.usage.inputTokens;
         usage.outputTokens += result.usage.outputTokens;
@@ -219,7 +245,17 @@ export async function translateBatch(
           outputTokens: usage.outputTokens,
           totalDurationMs: usage.durationMs,
         });
-        failures.push(error instanceof Error ? error : new Error(String(error)));
+        const resolvedError = error instanceof Error ? error : new Error(String(error));
+        const itemIndices = chunks[index]
+          .map((_, itemIndex) => chunkStarts[index] + itemIndex)
+          .filter((_, itemIndex) => !completedItems[index].has(itemIndex));
+        failures.push({
+          chunkIndex: index,
+          startIndex: itemIndices[0] ?? chunkStarts[index],
+          itemCount: itemIndices.length,
+          itemIndices,
+          message: resolvedError.message,
+        });
       } finally {
         completedChunks += 1;
         onProgress?.({
@@ -233,12 +269,22 @@ export async function translateBatch(
 
   await Promise.all(Array.from({ length: concurrency }, () => worker()));
 
-  if (failures.length > 0) {
-    const firstFailure = failures[0].message;
+  const completedItemCount = completedItems.reduce((sum, items) => sum + items.size, 0);
+  if (completedItemCount === 0 && failures.length > 0) {
+    const firstFailure = failures[0]?.message || '모든 요청이 실패했습니다.';
     throw new Error(`${failures.length}개 번역 청크가 실패했습니다. ${firstFailure}`);
   }
 
-  return { translations: results.flat(), usage };
+  return { translations: results.flat(), usage, failures };
+}
+
+function getChunkStartIndices(chunks: string[][]) {
+  let offset = 0;
+  return chunks.map((chunk) => {
+    const start = offset;
+    offset += chunk.length;
+    return start;
+  });
 }
 
 export interface ChunkLimits {
@@ -478,6 +524,7 @@ async function translateChunk(
   customDict: DictionaryEntry[],
   useDefaultDict: boolean,
   systemInstruction: string,
+  model?: string,
 ) {
   const prompt = buildTranslationPrompt(chunk, gaps, customDict, useDefaultDict);
 
@@ -505,7 +552,7 @@ async function translateChunk(
           content: buildTranslationSystemInstruction(systemInstruction),
         },
         { role: 'user', content: prompt + retryInstruction },
-      ]);
+      ], model);
       accumulatedUsage.inputTokens += response.prompt_eval_count || 0;
       accumulatedUsage.outputTokens += response.eval_count || 0;
       accumulatedUsage.durationMs += Math.round((response.total_duration || 0) / 1_000_000);
@@ -555,6 +602,7 @@ async function translateChunkResilient(
   customDict: DictionaryEntry[],
   useDefaultDict: boolean,
   systemInstruction: string,
+  model?: string,
   onRecoveredPartial?: (offset: number, translations: string[]) => void,
   baseOffset = 0,
   isRecoveryChild = false,
@@ -566,6 +614,7 @@ async function translateChunkResilient(
       customDict,
       useDefaultDict,
       systemInstruction,
+      model,
     );
     if (isRecoveryChild) {
       onRecoveredPartial?.(baseOffset, result.translations);
@@ -597,6 +646,7 @@ async function translateChunkResilient(
             customDict,
             useDefaultDict,
             systemInstruction,
+            model,
           );
           recovered[invalidIndex] = repaired.translations[0];
           mergeUsage(recoveredUsage, repaired.usage);
@@ -630,6 +680,7 @@ async function translateChunkResilient(
         customDict,
         useDefaultDict,
         systemInstruction,
+        model,
         onRecoveredPartial,
         baseOffset,
         true,
@@ -647,6 +698,7 @@ async function translateChunkResilient(
         customDict,
         useDefaultDict,
         systemInstruction,
+        model,
         onRecoveredPartial,
         baseOffset + splitIndex,
         true,
@@ -673,14 +725,17 @@ export function chooseRecoverySplitIndex(chunkLength: number, gaps: number[]): n
   ), usableGaps[0]);
 }
 
-async function requestChat(messages: { role: string; content: string }[]): Promise<OllamaChatResponse> {
+async function requestChat(
+  messages: { role: string; content: string }[],
+  model?: string,
+): Promise<OllamaChatResponse> {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ messages, temperature: 0.1 }),
+      body: JSON.stringify({ messages, temperature: 0.1, model }),
       signal: controller.signal,
     });
     const payload = await response.json().catch(() => ({}));

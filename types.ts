@@ -65,6 +65,7 @@ export interface OllamaRuntimeInfo {
   ok: boolean;
   modelAvailable: boolean;
   model: string;
+  defaultModel: string;
   mode: 'local-proxy' | 'direct-cloud';
   message: string;
 }

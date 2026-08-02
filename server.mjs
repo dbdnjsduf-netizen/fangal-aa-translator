@@ -11,6 +11,8 @@ const port = readInteger('PORT', 3000, 1, 65535);
 const appHost = process.env.APP_HOST?.trim() || '127.0.0.1';
 const ollamaHost = normalizeOllamaHost(process.env.OLLAMA_HOST || 'http://127.0.0.1:11434');
 const ollamaModel = process.env.OLLAMA_MODEL?.trim() || 'gemma4:31b-cloud';
+const localTranslationModel = 'translategemma:4b';
+const selectableOllamaModels = new Set([ollamaModel, localTranslationModel]);
 const ollamaApiKey = process.env.OLLAMA_API_KEY?.trim() || '';
 const requestTimeoutMs = readInteger('OLLAMA_REQUEST_TIMEOUT_MS', 300_000, 10_000, 900_000);
 const numCtx = readInteger('OLLAMA_NUM_CTX', 32_768, 2_048, 262_144);
@@ -33,19 +35,32 @@ app.use(express.json({ limit: '2mb' }));
 app.get('/api/config', (_request, response) => {
   response.json({
     model: ollamaModel,
+    models: [...selectableOllamaModels],
     mode: isDirectCloudHost(ollamaHost) ? 'direct-cloud' : 'local-proxy',
     maxConcurrency,
   });
 });
 
-app.get('/api/health', async (_request, response) => {
+app.get('/api/health', async (request, response) => {
+  const requestedModel = resolveOllamaModel(request.query?.model);
+  if (!requestedModel) {
+    return response.status(400).json({
+      ok: false,
+      modelAvailable: false,
+      model: String(request.query?.model || ''),
+      defaultModel: ollamaModel,
+      mode: isDirectCloudHost(ollamaHost) ? 'direct-cloud' : 'local-proxy',
+      message: '허용되지 않은 Ollama 모델입니다.',
+    });
+  }
   try {
     const upstream = await ollamaFetch('/api/tags', { method: 'GET' }, 10_000);
     const payload = await readJsonResponse(upstream);
     if (!upstream.ok) {
       return response.status(503).json({
         ok: false,
-        model: ollamaModel,
+        model: requestedModel,
+        defaultModel: ollamaModel,
         mode: isDirectCloudHost(ollamaHost) ? 'direct-cloud' : 'local-proxy',
         message: getUpstreamError(payload, upstream.status),
       });
@@ -54,22 +69,25 @@ app.get('/api/health', async (_request, response) => {
     const availableModels = Array.isArray(payload?.models)
       ? payload.models.map((item) => item?.name || item?.model).filter(Boolean)
       : [];
-    const modelAvailable = isDirectCloudHost(ollamaHost)
-      || availableModels.some((name) => modelNamesMatch(name, ollamaModel));
+    const modelAvailable = (
+      isDirectCloudHost(ollamaHost) && requestedModel === ollamaModel
+    ) || availableModels.some((name) => modelNamesMatch(name, requestedModel));
 
     return response.json({
       ok: true,
-      model: ollamaModel,
+      model: requestedModel,
+      defaultModel: ollamaModel,
       modelAvailable,
       mode: isDirectCloudHost(ollamaHost) ? 'direct-cloud' : 'local-proxy',
       message: modelAvailable
         ? 'Ollama 연결 및 모델 준비가 완료되었습니다.'
-        : `Ollama는 연결되었지만 ${ollamaModel} 모델이 준비되지 않았습니다.`,
+        : `Ollama는 연결되었지만 ${requestedModel} 모델이 준비되지 않았습니다.`,
     });
   } catch (error) {
     return response.status(503).json({
       ok: false,
-      model: ollamaModel,
+      model: requestedModel,
+      defaultModel: ollamaModel,
       mode: isDirectCloudHost(ollamaHost) ? 'direct-cloud' : 'local-proxy',
       message: friendlyConnectionError(error),
     });
@@ -80,6 +98,11 @@ app.post('/api/chat', async (request, response) => {
   const messages = request.body?.messages;
   if (!Array.isArray(messages) || messages.length === 0 || messages.length > 20) {
     return response.status(400).json({ error: 'messages는 1~20개의 메시지 배열이어야 합니다.' });
+  }
+
+  const requestedModel = resolveOllamaModel(request.body?.model);
+  if (!requestedModel) {
+    return response.status(400).json({ error: '허용되지 않은 Ollama 모델입니다.' });
   }
 
   const normalizedMessages = [];
@@ -103,7 +126,7 @@ app.post('/api/chat', async (request, response) => {
     const upstream = await ollamaFetch('/api/chat', {
       method: 'POST',
       body: JSON.stringify({
-        model: ollamaModel,
+        model: requestedModel,
         messages: normalizedMessages,
         stream: false,
         think: false,
@@ -125,7 +148,7 @@ app.post('/api/chat', async (request, response) => {
       return response.status(status).json({
         error: getUpstreamError(payload, upstream.status),
         upstreamStatus: upstream.status,
-        hint: getOllamaHint(upstream.status, payload),
+        hint: getOllamaHint(upstream.status, payload, requestedModel),
       });
     }
 
@@ -256,6 +279,11 @@ function modelNamesMatch(left, right) {
   return normalize(left) === normalize(right);
 }
 
+function resolveOllamaModel(value) {
+  const requested = typeof value === 'string' && value.trim() ? value.trim() : ollamaModel;
+  return selectableOllamaModels.has(requested) ? requested : null;
+}
+
 function getUpstreamError(payload, status) {
   return payload?.error || payload?.message || `Ollama 요청 실패 (HTTP ${status})`;
 }
@@ -265,13 +293,13 @@ function normalizeUpstreamStatus(status) {
   return status >= 500 ? 502 : 400;
 }
 
-function getOllamaHint(status, payload) {
+function getOllamaHint(status, payload, requestedModel = ollamaModel) {
   const message = String(payload?.error || payload?.message || '').toLowerCase();
   if (status === 401 || status === 403) return 'Ollama 계정 로그인 또는 OLLAMA_API_KEY를 확인하세요.';
   if (status === 404 || message.includes('not found')) {
     return isDirectCloudHost(ollamaHost)
-      ? `OLLAMA_MODEL=${ollamaModel} 설정을 확인하세요.`
-      : `터미널에서 \`ollama pull ${ollamaModel}\`을 실행하세요.`;
+      ? `OLLAMA_MODEL=${requestedModel} 설정을 확인하세요.`
+      : `터미널에서 \`ollama pull ${requestedModel}\`을 실행하세요.`;
   }
   if (status === 429) return 'Ollama Pro 세션/주간 할당량 또는 동시 실행 한도를 확인하세요.';
   return 'Ollama 서버 로그와 .env 설정을 확인하세요.';

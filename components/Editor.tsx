@@ -11,7 +11,10 @@ import {
   isManualVerticalSourceCharacter,
   ManualVerticalCharacterRange,
 } from '../services/manualVerticalSelection';
-import { isSegmentTranslationSelectable } from '../services/translationApplication';
+import {
+  isSegmentTranslationSelectable,
+  toggleSegmentTranslationSelection,
+} from '../services/translationApplication';
 
 interface EditorProps {
   content: string;
@@ -21,6 +24,8 @@ interface EditorProps {
   viewMode: ViewMode;
   segments: TextSegment[];
   onSegmentsChange: (segments: TextSegment[]) => void;
+  fontSize: number;
+  onFontSizeChange: React.Dispatch<React.SetStateAction<number>>;
   isDragMode?: boolean;
   isManualSelectMode?: boolean;
   isManualVerticalMode?: boolean;
@@ -34,13 +39,15 @@ export const Editor: React.FC<EditorProps> = ({
   viewMode,
   segments,
   onSegmentsChange,
+  fontSize,
+  onFontSizeChange,
   isDragMode = false,
   isManualSelectMode = false,
   isManualVerticalMode = false,
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [fontSize, setFontSize] = useState(16);
+  const aaLineHeight = Math.floor(fontSize * 1.125);
 
   // Web Worker for segmentation
   const workerRef = useRef<Worker | null>(null);
@@ -60,7 +67,6 @@ export const Editor: React.FC<EditorProps> = ({
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
   const [dragCurrent, setDragCurrent] = useState<{ x: number; y: number } | null>(null);
-  const manualAnchorRef = useRef<{ node: Node; offset: number } | null>(null);
 
   // --- Raw Mode Logic ---
   const handleSelect = () => {
@@ -118,76 +124,83 @@ export const Editor: React.FC<EditorProps> = ({
   }, [content, viewMode, segments.length]);
 
   const toggleSegmentSelection = (id: string) => {
-    const target = segments.find((segment) => segment.id === id);
-    if (!target || !isSegmentTranslationSelectable(target)) return;
-    const nextSelected = !target.isSelected;
-    const newSegments = segments.map((segment) => {
-      if (
-        target.verticalGroupId
-        && segment.verticalGroupId === target.verticalGroupId
-        && isSegmentTranslationSelectable(segment)
-      ) {
-        return { ...segment, isSelected: nextSelected };
-      }
-      return segment.id === id ? { ...segment, isSelected: nextSelected } : segment;
-    });
+    const newSegments = toggleSegmentTranslationSelection(segments, id);
+    if (newSegments === segments) return;
     onSegmentsChange(newSegments);
-    onSelectionChange(null); 
+    onSelectionChange(null);
   };
 
-  const captureManualTextSelection = () => {
+  const captureManualTextBox = (x1: number, y1: number, x2: number, y2: number) => {
     if (!isManualSelectMode || viewMode !== 'smart') return;
     const container = containerRef.current;
-    const browserSelection = window.getSelection();
-    if (
-      !container
-      || !browserSelection
-      || browserSelection.rangeCount === 0
-      || browserSelection.isCollapsed
-    ) return;
-
-    const range = browserSelection.getRangeAt(0);
-    const startElement = findSegmentElement(range.startContainer);
-    const endElement = findSegmentElement(range.endContainer);
-    if (
-      !startElement
-      || !endElement
-      || !container.contains(startElement)
-      || !container.contains(endElement)
-    ) return;
-
-    const startId = startElement.dataset.segmentId;
-    const endId = endElement.dataset.segmentId;
-    const startIndex = segments.findIndex(({ id }) => id === startId);
-    const endIndex = segments.findIndex(({ id }) => id === endId);
-    if (startIndex < 0 || endIndex < startIndex) return;
-
-    const startOffset = textOffsetWithin(
-      startElement,
-      range.startContainer,
-      range.startOffset,
+    if (!container) return;
+    const containerRect = container.getBoundingClientRect();
+    const segmentById = new Map<string, TextSegment>(
+      segments.map((segment) => [segment.id, segment]),
     );
-    const endOffset = textOffsetWithin(
-      endElement,
-      range.endContainer,
-      range.endOffset,
-    );
-    const manualRanges: ManualSelectionRange[] = [];
-    for (let index = startIndex; index <= endIndex; index += 1) {
-      const segment = segments[index];
-      manualRanges.push({
-        segmentId: segment.id,
-        start: index === startIndex ? startOffset : 0,
-        end: index === endIndex ? endOffset : segment.text.length,
-      });
+    const rangeBySegmentId = new Map<string, ManualSelectionRange>();
+
+    for (const element of container.querySelectorAll<HTMLElement>('[data-segment-id]')) {
+      const segmentId = element.dataset.segmentId;
+      const segment = segmentId ? segmentById.get(segmentId) : undefined;
+      if (!segmentId || !segment || segment.isTranslated) continue;
+
+      const elementRect = element.getBoundingClientRect();
+      const elementLeft = elementRect.left - containerRect.left + container.scrollLeft;
+      const elementTop = elementRect.top - containerRect.top + container.scrollTop;
+      const elementRight = elementLeft + elementRect.width;
+      const elementBottom = elementTop + elementRect.height;
+      if (elementRight < x1 || elementLeft > x2 || elementBottom < y1 || elementTop > y2) {
+        continue;
+      }
+
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      let textNode = walker.nextNode();
+      let elementTextOffset = 0;
+      while (textNode) {
+        const nodeText = textNode.textContent || '';
+        let nodeOffset = 0;
+        while (nodeOffset < nodeText.length) {
+          const codePoint = nodeText.codePointAt(nodeOffset);
+          if (codePoint === undefined) break;
+          const character = String.fromCodePoint(codePoint);
+          const nextOffset = nodeOffset + character.length;
+          if (!/^\s$/u.test(character)) {
+            const characterRange = document.createRange();
+            characterRange.setStart(textNode, nodeOffset);
+            characterRange.setEnd(textNode, nextOffset);
+            const characterRect = characterRange.getBoundingClientRect();
+            const centerX = characterRect.left - containerRect.left
+              + container.scrollLeft + (characterRect.width / 2);
+            const centerY = characterRect.top - containerRect.top
+              + container.scrollTop + (characterRect.height / 2);
+            if (centerX >= x1 && centerX <= x2 && centerY >= y1 && centerY <= y2) {
+              const start = elementTextOffset + nodeOffset;
+              const end = elementTextOffset + nextOffset;
+              const existing = rangeBySegmentId.get(segmentId);
+              rangeBySegmentId.set(segmentId, {
+                segmentId,
+                start: existing ? Math.min(existing.start, start) : start,
+                end: existing ? Math.max(existing.end, end) : end,
+              });
+            }
+          }
+          nodeOffset = nextOffset;
+        }
+        elementTextOffset += nodeText.length;
+        textNode = walker.nextNode();
+      }
     }
 
-    const nextSegments = applyManualSelectionRanges(segments, manualRanges);
+    if (rangeBySegmentId.size === 0) return;
+    const nextSegments = applyManualSelectionRanges(
+      segments,
+      [...rangeBySegmentId.values()],
+    );
     if (nextSegments !== segments) {
       onSegmentsChange(nextSegments);
       onSelectionChange(null);
     }
-    browserSelection.removeAllRanges();
   };
 
   const captureManualVerticalBox = (x1: number, y1: number, x2: number, y2: number) => {
@@ -259,29 +272,14 @@ export const Editor: React.FC<EditorProps> = ({
   const handleWheel = (e: React.WheelEvent) => {
     if (e.ctrlKey) {
       e.preventDefault();
-      setFontSize(prev => Math.min(Math.max(10, prev - Math.sign(e.deltaY)), 32));
+      onFontSizeChange(prev => Math.min(Math.max(10, prev - Math.sign(e.deltaY)), 32));
     }
   };
 
   // --- Pointer Events for Robust Dragging ---
   const handlePointerDown = (e: React.PointerEvent) => {
     if (viewMode !== 'smart' || !e.isPrimary || e.button !== 0) return;
-    if (isManualSelectMode) {
-      const caret = caretAtPoint(e.clientX, e.clientY);
-      const container = containerRef.current;
-      if (!caret || !container || !findSegmentElement(caret.node)) return;
-      e.preventDefault();
-      container.setPointerCapture(e.pointerId);
-      manualAnchorRef.current = caret;
-      window.getSelection()?.setBaseAndExtent(
-        caret.node,
-        caret.offset,
-        caret.node,
-        caret.offset,
-      );
-      return;
-    }
-    if (!isDragMode && !isManualVerticalMode) return;
+    if (!isDragMode && !isManualSelectMode && !isManualVerticalMode) return;
     
     // Prevent default browser actions (text selection etc)
     e.preventDefault();
@@ -302,18 +300,6 @@ export const Editor: React.FC<EditorProps> = ({
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
-    if (isManualSelectMode && manualAnchorRef.current) {
-      const caret = caretAtPoint(e.clientX, e.clientY);
-      if (!caret || !findSegmentElement(caret.node)) return;
-      e.preventDefault();
-      window.getSelection()?.setBaseAndExtent(
-        manualAnchorRef.current.node,
-        manualAnchorRef.current.offset,
-        caret.node,
-        caret.offset,
-      );
-      return;
-    }
     if (!isDragging || !dragStart) return;
     
     const container = containerRef.current;
@@ -327,59 +313,56 @@ export const Editor: React.FC<EditorProps> = ({
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
-    if (isManualSelectMode && manualAnchorRef.current) {
-      const container = containerRef.current;
-      const caret = caretAtPoint(e.clientX, e.clientY);
-      if (caret && findSegmentElement(caret.node)) {
-        window.getSelection()?.setBaseAndExtent(
-          manualAnchorRef.current.node,
-          manualAnchorRef.current.offset,
-          caret.node,
-          caret.offset,
-        );
-        captureManualTextSelection();
-      }
-      manualAnchorRef.current = null;
-      if (container?.hasPointerCapture(e.pointerId)) {
-        container.releasePointerCapture(e.pointerId);
+    if (!isDragging || !dragStart) {
+      if (isDragging) {
+        setIsDragging(false);
+        setDragStart(null);
+        setDragCurrent(null);
+        if (containerRef.current?.hasPointerCapture(e.pointerId)) {
+          containerRef.current.releasePointerCapture(e.pointerId);
+        }
       }
       return;
     }
-    if (!isDragging || !dragStart || !dragCurrent) {
-        if (isDragging) {
-           // Cleanup if weird state
-           setIsDragging(false);
-           setDragStart(null);
-           setDragCurrent(null);
-           containerRef.current?.releasePointerCapture(e.pointerId);
-        }
-        return;
-    }
-    
+
     const container = containerRef.current;
-    if (container) container.releasePointerCapture(e.pointerId);
+    if (!container) {
+      setIsDragging(false);
+      setDragStart(null);
+      setDragCurrent(null);
+      return;
+    }
+    if (container.hasPointerCapture(e.pointerId)) {
+      container.releasePointerCapture(e.pointerId);
+    }
+
+    const containerRect = container.getBoundingClientRect();
+    const pointerEnd = {
+      x: e.clientX - containerRect.left + container.scrollLeft,
+      y: e.clientY - containerRect.top + container.scrollTop,
+    };
 
     // Calculate selection box
-    const x1 = Math.min(dragStart.x, dragCurrent.x);
-    const y1 = Math.min(dragStart.y, dragCurrent.y);
-    const x2 = Math.max(dragStart.x, dragCurrent.x);
-    const y2 = Math.max(dragStart.y, dragCurrent.y);
+    const x1 = Math.min(dragStart.x, pointerEnd.x);
+    const y1 = Math.min(dragStart.y, pointerEnd.y);
+    const x2 = Math.max(dragStart.x, pointerEnd.x);
+    const y2 = Math.max(dragStart.y, pointerEnd.y);
 
     // Calculate minimal drag distance to differentiate from click
-    const dist = Math.sqrt(Math.pow(dragCurrent.x - dragStart.x, 2) + Math.pow(dragCurrent.y - dragStart.y, 2));
-    const isClick = dist < 5; 
+    const dist = Math.hypot(pointerEnd.x - dragStart.x, pointerEnd.y - dragStart.y);
+    const isClick = dist < 5;
 
-    if (isClick && !isManualVerticalMode) {
-        // Handle click toggle in drag mode
-        const target = document.elementFromPoint(e.clientX, e.clientY);
-        if (target instanceof HTMLElement && target.id) {
-            const segment = segments.find(s => s.id === target.id);
-            if (segment && isSegmentTranslationSelectable(segment)) {
-                toggleSegmentSelection(target.id);
-            }
-        }
+    if (isClick) {
+      const target = document.elementFromPoint(e.clientX, e.clientY);
+      const segmentElement = target instanceof Element
+        ? target.closest<HTMLElement>('[data-segment-id]')
+        : null;
+      const segmentId = segmentElement?.dataset.segmentId;
+      if (segmentId) toggleSegmentSelection(segmentId);
     } else if (isManualVerticalMode) {
-        captureManualVerticalBox(x1, y1, x2, y2);
+      captureManualVerticalBox(x1, y1, x2, y2);
+    } else if (isManualSelectMode) {
+      captureManualTextBox(x1, y1, x2, y2);
     } else {
         // Find intersecting segments
         const intersectedSegments = segments.map(seg => {
@@ -423,6 +406,16 @@ export const Editor: React.FC<EditorProps> = ({
     setDragCurrent(null);
   };
 
+  const handlePointerCancel = (e: React.PointerEvent) => {
+    const container = containerRef.current;
+    if (container?.hasPointerCapture(e.pointerId)) {
+      container.releasePointerCapture(e.pointerId);
+    }
+    setIsDragging(false);
+    setDragStart(null);
+    setDragCurrent(null);
+  };
+
   // Determine Background Color for Viewer Mode
   const getViewerBackgroundColor = () => {
     const lowerName = fileName.toLowerCase();
@@ -437,14 +430,15 @@ export const Editor: React.FC<EditorProps> = ({
     return (
        <div className="relative w-full h-full flex flex-col">
          <div className="absolute top-2 right-4 z-10 flex gap-2 bg-black/10 backdrop-blur p-1 rounded-lg border border-black/10">
-            <button onClick={() => setFontSize(f => Math.max(10, f - 1))} className="px-2 py-1 text-xs text-slate-700 hover:text-black hover:bg-white/50 rounded">A-</button>
+            <button onClick={() => onFontSizeChange(f => Math.max(10, f - 1))} className="px-2 py-1 text-xs text-slate-700 hover:text-black hover:bg-white/50 rounded">A-</button>
             <span className="px-2 py-1 text-xs text-slate-700 font-mono">{fontSize}px</span>
-            <button onClick={() => setFontSize(f => Math.min(32, f + 1))} className="px-2 py-1 text-xs text-slate-700 hover:text-black hover:bg-white/50 rounded">A+</button>
+            <button onClick={() => onFontSizeChange(f => Math.min(32, f + 1))} className="px-2 py-1 text-xs text-slate-700 hover:text-black hover:bg-white/50 rounded">A+</button>
          </div>
          <div
-            className="w-full h-full p-4 overflow-auto whitespace-pre font-aa leading-tight select-text text-[#2e2e2e]"
+            className="w-full h-full p-4 overflow-auto whitespace-pre font-aa select-text text-[#2e2e2e]"
             style={{ 
                 fontSize: `${fontSize}px`,
+                lineHeight: `${aaLineHeight}px`,
                 backgroundColor: getViewerBackgroundColor()
             }}
             onWheel={handleWheel}
@@ -459,9 +453,9 @@ export const Editor: React.FC<EditorProps> = ({
     <div className="relative w-full h-full flex flex-col">
       {/* Font Controls */}
       <div className="absolute top-2 right-4 z-10 flex gap-2 bg-slate-800/80 backdrop-blur p-1 rounded-lg border border-slate-700">
-        <button onClick={() => setFontSize(f => Math.max(10, f - 1))} className="px-2 py-1 text-xs text-slate-300 hover:text-white hover:bg-slate-700 rounded">A-</button>
+        <button onClick={() => onFontSizeChange(f => Math.max(10, f - 1))} className="px-2 py-1 text-xs text-slate-300 hover:text-white hover:bg-slate-700 rounded">A-</button>
         <span className="px-2 py-1 text-xs text-slate-400">{fontSize}px</span>
-        <button onClick={() => setFontSize(f => Math.min(32, f + 1))} className="px-2 py-1 text-xs text-slate-300 hover:text-white hover:bg-slate-700 rounded">A+</button>
+        <button onClick={() => onFontSizeChange(f => Math.min(32, f + 1))} className="px-2 py-1 text-xs text-slate-300 hover:text-white hover:bg-slate-700 rounded">A+</button>
       </div>
 
       {viewMode === 'raw' ? (
@@ -474,20 +468,23 @@ export const Editor: React.FC<EditorProps> = ({
           onKeyUp={handleSelect}
           onWheel={handleWheel}
           spellCheck={false}
-          className="w-full h-full bg-[#1a1b26] text-[#a9b1d6] p-4 resize-none focus:outline-none font-aa scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent leading-tight"
-          style={{ fontSize: `${fontSize}px` }}
+          className="w-full h-full bg-[#1a1b26] text-[#a9b1d6] p-4 resize-none focus:outline-none font-aa scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent"
+          style={{ fontSize: `${fontSize}px`, lineHeight: `${aaLineHeight}px` }}
         />
       ) : (
         <div 
           ref={containerRef}
-          className={`w-full h-full bg-[#1a1b26] text-[#a9b1d6] p-4 overflow-auto whitespace-pre font-aa leading-tight relative ${
-            isManualSelectMode ? 'select-text cursor-text' : 'select-none'
-          } ${isDragMode || isManualVerticalMode ? 'cursor-crosshair touch-none' : ''}`}
-          style={{ fontSize: `${fontSize}px` }}
+          className={`w-full h-full bg-[#1a1b26] text-[#a9b1d6] p-4 overflow-auto whitespace-pre font-aa relative select-none ${
+            isDragMode || isManualSelectMode || isManualVerticalMode
+              ? 'cursor-crosshair touch-none'
+              : ''
+          }`}
+          style={{ fontSize: `${fontSize}px`, lineHeight: `${aaLineHeight}px` }}
           onWheel={handleWheel}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerCancel}
         >
            {segments.map((seg) => {
              if (seg.isJapanese) {
@@ -497,13 +494,13 @@ export const Editor: React.FC<EditorProps> = ({
                    id={seg.id}
                    data-segment-id={seg.id}
                    onClick={(e) => {
-                     if (isManualSelectMode || isManualVerticalMode) return;
+                     if (isDragMode || isManualSelectMode || isManualVerticalMode) return;
                      e.stopPropagation();
                      toggleSegmentSelection(seg.id);
                    }}
                    className={`
-                     rounded px-0.5 transition-colors duration-75 inline-block
-                     ${!isDragMode && !isManualVerticalMode && isSegmentTranslationSelectable(seg) ? 'cursor-pointer' : 'cursor-default'}
+                     rounded transition-colors duration-75
+                     ${!isDragMode && !isManualSelectMode && !isManualVerticalMode && isSegmentTranslationSelectable(seg) ? 'cursor-pointer' : 'cursor-default'}
                      ${seg.isSelected 
                         ? seg.isManualVerticalSelection
                           ? 'bg-fuchsia-600 text-white shadow-[0_0_10px_rgba(192,38,211,0.55)]'
@@ -530,10 +527,10 @@ export const Editor: React.FC<EditorProps> = ({
              return (
                <span
                  key={seg.id}
-                 data-segment-id={seg.id}
-                 className={isManualSelectMode
-                   ? 'opacity-90 cursor-text'
-                   : 'opacity-70 pointer-events-none'}
+                  data-segment-id={seg.id}
+                  className={isManualSelectMode
+                    ? 'opacity-90'
+                    : 'opacity-70 pointer-events-none'}
                >
                  {seg.text}
                </span>
@@ -544,9 +541,11 @@ export const Editor: React.FC<EditorProps> = ({
            {isDragging && dragStart && dragCurrent && (
              <div 
                className={`absolute pointer-events-none z-20 ${
-                 isManualVerticalMode
-                   ? 'border border-fuchsia-400 bg-fuchsia-500/20'
-                   : 'border border-blue-400 bg-blue-500/20'
+                  isManualVerticalMode
+                    ? 'border border-fuchsia-400 bg-fuchsia-500/20'
+                    : isManualSelectMode
+                    ? 'border border-orange-400 bg-orange-500/20'
+                    : 'border border-blue-400 bg-blue-500/20'
                }`}
                style={{
                  left: Math.min(dragStart.x, dragCurrent.x),
@@ -561,34 +560,3 @@ export const Editor: React.FC<EditorProps> = ({
     </div>
   );
 };
-
-function findSegmentElement(node: Node): HTMLElement | null {
-  const element = node instanceof HTMLElement ? node : node.parentElement;
-  return element?.closest<HTMLElement>('[data-segment-id]') || null;
-}
-
-function textOffsetWithin(element: HTMLElement, node: Node, offset: number): number {
-  const range = document.createRange();
-  range.selectNodeContents(element);
-  try {
-    range.setEnd(node, offset);
-    return Math.max(0, Math.min(range.toString().length, element.textContent?.length || 0));
-  } catch {
-    return 0;
-  }
-}
-
-function caretAtPoint(x: number, y: number): { node: Node; offset: number } | null {
-  const caretPosition = document.caretPositionFromPoint?.(x, y);
-  if (caretPosition) {
-    return { node: caretPosition.offsetNode, offset: caretPosition.offset };
-  }
-
-  const legacyDocument = document as Document & {
-    caretRangeFromPoint?: (clientX: number, clientY: number) => Range | null;
-  };
-  const range = legacyDocument.caretRangeFromPoint?.(x, y);
-  return range
-    ? { node: range.startContainer, offset: range.startOffset }
-    : null;
-}

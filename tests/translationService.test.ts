@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  normalizeGeminiModel,
   translateBatch as translateBatchWithGemini,
   translateSelection as translateWithGemini,
 } from '../services/geminiService';
@@ -18,12 +19,22 @@ test('저장된 엔진 값은 허용된 두 모드로만 복구한다', () => {
   assert.equal(normalizeTranslationProvider(null), 'ollama');
 });
 
+test('저장된 Gemini 모델은 지원 목록으로만 복구한다', () => {
+  assert.equal(normalizeGeminiModel('gemini-2.5-flash-lite'), 'gemini-2.5-flash-lite');
+  assert.equal(normalizeGeminiModel('gemini-3.1-flash-lite'), 'gemini-3.1-flash-lite');
+  assert.equal(normalizeGeminiModel('unknown-model'), 'gemini-3.6-flash');
+});
+
 test('선택한 엔진에 맞는 준비 상태와 모델명을 반환한다', () => {
   assert.equal(isProviderReady('ollama', '', true), true);
   assert.equal(isProviderReady('ollama', 'unused-key', false), false);
   assert.equal(isProviderReady('gemini', 'entered-key', false), true);
   assert.equal(isProviderReady('gemini', '   ', true), false);
   assert.equal(getProviderModelLabel('gemini'), 'gemini-3.6-flash');
+  assert.equal(
+    getProviderModelLabel('gemini', 'unused', 'gemini-3.1-flash-lite'),
+    'gemini-3.1-flash-lite',
+  );
   assert.equal(getProviderModelLabel('ollama', 'custom-model'), 'custom-model');
 });
 
@@ -82,12 +93,13 @@ test('Gemini 요청은 키를 URL이 아닌 헤더로 보내고 고정 길이 JS
       [],
       false,
       '자연스러운 한국어로 번역하세요.',
+      'gemini-2.5-flash-lite',
     );
     assert.equal(result.text, '안녕하세요');
     assert.equal(result.usage.requestCount, 1);
     assert.equal(result.usage.inputTokens, 12);
     assert.equal(result.usage.outputTokens, 3);
-    assert.match(capturedUrl, /gemini-3\.6-flash:generateContent$/);
+    assert.match(capturedUrl, /gemini-2\.5-flash-lite:generateContent$/);
     assert.doesNotMatch(capturedUrl, /TEST_ONLY_NOT_A_REAL_KEY/);
     assert.equal(capturedKey, 'TEST_ONLY_NOT_A_REAL_KEY');
     assert.equal(
@@ -160,6 +172,62 @@ test('Gemini도 일본어가 남은 항목만 구조화 응답으로 다시 번�
       ['勇者だ'],
     ]);
     assert.equal(result.usage.requestCount, 3);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousWindow) {
+      Object.defineProperty(globalThis, 'window', previousWindow);
+    } else {
+      Reflect.deleteProperty(globalThis, 'window');
+    }
+  }
+});
+
+test('Gemini도 일부 청크 실패 시 정상 항목을 반환하고 실패 항목만 남긴다', async () => {
+  const previousFetch = globalThis.fetch;
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const inputs = [
+    ...Array.from({ length: 64 }, (_, index) => `原文${index}`),
+    '失敗',
+  ];
+
+  Object.defineProperty(globalThis, 'window', {
+    value: globalThis,
+    writable: true,
+    configurable: true,
+  });
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body));
+    const prompt = String(body.contents[0].parts[0].text);
+    const chunk = JSON.parse(prompt.split('INPUT_JSON:\n')[1]) as string[];
+    if (chunk.includes('失敗')) {
+      return new Response(JSON.stringify({ error: { message: 'Gemini 단일 청크 실패' } }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify({
+      candidates: [{
+        content: { parts: [{ text: JSON.stringify(chunk.map((_, index) => `번역${index}`)) }] },
+        finishReason: 'STOP',
+      }],
+      usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5 },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    const result = await translateBatchWithGemini(
+      inputs,
+      'TEST_ONLY_NOT_A_REAL_KEY',
+      [],
+      false,
+      'Translate.',
+    );
+    assert.equal(result.translations[0], '번역0');
+    assert.equal(result.translations[64], '失敗');
+    assert.deepEqual(result.failures[0].itemIndices, [64]);
   } finally {
     globalThis.fetch = previousFetch;
     if (previousWindow) {

@@ -1,5 +1,6 @@
 import { ApiUsageStats, DictionaryEntry } from '../types';
 import {
+  BatchTranslationFailure,
   BatchTranslationResult,
   buildTranslationRetryCorrection,
   buildTranslationPrompt,
@@ -14,9 +15,12 @@ import {
 } from './ollamaService';
 
 export const GEMINI_MODEL = 'gemini-3.6-flash';
-
-const GEMINI_API_URL =
-  `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+export const GEMINI_MODELS = [
+  { id: GEMINI_MODEL, label: 'Gemini 3.6 Flash' },
+  { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash-Lite' },
+  { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite' },
+] as const;
+export type GeminiModel = typeof GEMINI_MODELS[number]['id'];
 const GEMINI_MAX_CONCURRENCY = 2;
 const MAX_RETRIES = 3;
 const REQUEST_TIMEOUT_MS = 330_000;
@@ -62,18 +66,26 @@ export function hasGeminiApiKey(apiKey: string) {
   return apiKey.trim().length > 0;
 }
 
+export function normalizeGeminiModel(value: string | null | undefined): GeminiModel {
+  return GEMINI_MODELS.some((model) => model.id === value)
+    ? value as GeminiModel
+    : GEMINI_MODEL;
+}
+
 export async function translateSelection(
   textToTranslate: string,
   apiKey: string,
   customDict: DictionaryEntry[] = [],
   useDefaultDict = true,
   systemInstruction = DEFAULT_SYSTEM_PROMPT,
+  model: GeminiModel = GEMINI_MODEL,
 ): Promise<TranslationResponseData> {
   assertApiKey(apiKey);
   const result = await translateChunk(
     [textToTranslate],
     [],
     apiKey.trim(),
+    normalizeGeminiModel(model),
     customDict,
     useDefaultDict,
     systemInstruction,
@@ -89,6 +101,7 @@ export async function translateBatch(
   systemInstruction = DEFAULT_SYSTEM_PROMPT,
   onProgress?: (progress: TranslationProgress) => void,
   onPartialResult?: (translations: string[], usage: ApiUsageStats) => void,
+  model: GeminiModel = GEMINI_MODEL,
 ): Promise<BatchTranslationResult> {
   assertApiKey(apiKey);
   const { chunks, chunkGaps } = createChunks(texts, {
@@ -101,11 +114,14 @@ export async function translateBatch(
     return {
       translations: [],
       usage: emptyUsage(),
+      failures: [],
     };
   }
 
   const results = chunks.map((chunk) => [...chunk]);
-  const failures: Error[] = [];
+  const chunkStarts = getChunkStartIndices(chunks);
+  const completedItems = chunks.map(() => new Set<number>());
+  const failures: BatchTranslationFailure[] = [];
   const usage = emptyUsage();
   let nextChunkIndex = 0;
   let completedChunks = 0;
@@ -128,6 +144,7 @@ export async function translateBatch(
           chunks[index],
           chunkGaps[index],
           apiKey.trim(),
+          normalizeGeminiModel(model),
           customDict,
           useDefaultDict,
           systemInstruction,
@@ -137,16 +154,33 @@ export async function translateBatch(
               recoveredTranslations.length,
               ...recoveredTranslations,
             );
+            recoveredTranslations.forEach((translation, recoveredIndex) => {
+              const localIndex = offset + recoveredIndex;
+              if (translation.trim() !== chunks[index][localIndex]?.trim()) {
+                completedItems[index].add(localIndex);
+              }
+            });
             emitPartial();
           },
         );
         results[index] = result.translations;
+        result.translations.forEach((_, itemIndex) => completedItems[index].add(itemIndex));
         mergeUsage(usage, result.usage);
         emitPartial();
       } catch (error) {
         mergeUsage(usage, getErrorUsage(error));
         emitPartial();
-        failures.push(error instanceof Error ? error : new Error(String(error)));
+        const resolvedError = error instanceof Error ? error : new Error(String(error));
+        const itemIndices = chunks[index]
+          .map((_, itemIndex) => chunkStarts[index] + itemIndex)
+          .filter((_, itemIndex) => !completedItems[index].has(itemIndex));
+        failures.push({
+          chunkIndex: index,
+          startIndex: itemIndices[0] ?? chunkStarts[index],
+          itemCount: itemIndices.length,
+          itemIndices,
+          message: resolvedError.message,
+        });
       } finally {
         completedChunks += 1;
         onProgress?.({
@@ -160,19 +194,30 @@ export async function translateBatch(
 
   await Promise.all(Array.from({ length: concurrency }, () => worker()));
 
-  if (failures.length > 0) {
+  const completedItemCount = completedItems.reduce((sum, items) => sum + items.size, 0);
+  if (completedItemCount === 0 && failures.length > 0) {
     throw new Error(
-      `${failures.length}개 Gemini 번역 청크가 실패했습니다. ${failures[0].message}`,
+      `${failures.length}개 Gemini 번역 청크가 실패했습니다. ${failures[0]?.message || '모든 요청이 실패했습니다.'}`,
     );
   }
 
-  return { translations: results.flat(), usage };
+  return { translations: results.flat(), usage, failures };
+}
+
+function getChunkStartIndices(chunks: string[][]) {
+  let offset = 0;
+  return chunks.map((chunk) => {
+    const start = offset;
+    offset += chunk.length;
+    return start;
+  });
 }
 
 async function translateChunk(
   chunk: string[],
   gaps: number[],
   apiKey: string,
+  model: GeminiModel,
   customDict: DictionaryEntry[],
   useDefaultDict: boolean,
   systemInstruction: string,
@@ -194,6 +239,7 @@ async function translateChunk(
       accumulatedUsage.requestCount += 1;
       const response = await requestGemini(
         apiKey,
+        model,
         buildTranslationSystemInstruction(systemInstruction),
         prompt + retryInstruction,
         chunk.length,
@@ -238,6 +284,7 @@ async function translateChunkResilient(
   chunk: string[],
   gaps: number[],
   apiKey: string,
+  model: GeminiModel,
   customDict: DictionaryEntry[],
   useDefaultDict: boolean,
   systemInstruction: string,
@@ -250,6 +297,7 @@ async function translateChunkResilient(
       chunk,
       gaps,
       apiKey,
+      model,
       customDict,
       useDefaultDict,
       systemInstruction,
@@ -280,6 +328,7 @@ async function translateChunkResilient(
             [chunk[invalidIndex]],
             [],
             apiKey,
+            model,
             customDict,
             useDefaultDict,
             systemInstruction,
@@ -312,6 +361,7 @@ async function translateChunkResilient(
         chunk.slice(0, splitIndex),
         leftGaps,
         apiKey,
+        model,
         customDict,
         useDefaultDict,
         systemInstruction,
@@ -330,6 +380,7 @@ async function translateChunkResilient(
         chunk.slice(splitIndex),
         rightGaps,
         apiKey,
+        model,
         customDict,
         useDefaultDict,
         systemInstruction,
@@ -351,6 +402,7 @@ async function translateChunkResilient(
 
 async function requestGemini(
   apiKey: string,
+  model: GeminiModel,
   systemInstruction: string,
   userPrompt: string,
   expectedCount: number,
@@ -360,36 +412,39 @@ async function requestGemini(
   const startedAt = performance.now();
 
   try {
-    const response = await fetch(GEMINI_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': apiKey,
-      },
-      body: JSON.stringify({
-        systemInstruction: {
-          parts: [{ text: systemInstruction }],
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': apiKey,
         },
-        contents: [{
-          role: 'user',
-          parts: [{ text: userPrompt }],
-        }],
-        generationConfig: {
-          responseFormat: {
-            text: {
-              mimeType: 'application/json',
-              schema: {
-                type: 'array',
-                minItems: expectedCount,
-                maxItems: expectedCount,
-                items: { type: 'string' },
+        body: JSON.stringify({
+          systemInstruction: {
+            parts: [{ text: systemInstruction }],
+          },
+          contents: [{
+            role: 'user',
+            parts: [{ text: userPrompt }],
+          }],
+          generationConfig: {
+            responseFormat: {
+              text: {
+                mimeType: 'application/json',
+                schema: {
+                  type: 'array',
+                  minItems: expectedCount,
+                  maxItems: expectedCount,
+                  items: { type: 'string' },
+                },
               },
             },
           },
-        },
-      }),
-      signal: controller.signal,
-    });
+        }),
+        signal: controller.signal,
+      },
+    );
     const payload = await response.json().catch(() => ({})) as GeminiResponse;
     if (!response.ok) throw createGeminiHttpError(response.status, payload);
 

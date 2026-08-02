@@ -37,8 +37,9 @@ export const SystemReport: React.FC<SystemReportProps> = ({ isOpen, onClose }) =
               <li><strong className="text-purple-300">언어/AA 분리:</strong> 가나·한자 조합과 자연어 형태를 AA 반복 문자·선·기호 밀도와 별도로 평가합니다.</li>
               <li><strong className="text-purple-300">세로쓰기 복원:</strong> 파이프와 꺾쇠 말풍선 경계 트랙을 따라 글자를 열로 묶고 위→아래, 오른쪽→왼쪽 순서로 재구성합니다.</li>
               <li><strong className="text-purple-300">정밀 표시:</strong> 세로쓰기 실제 문자 슬롯만 보라색으로 분리하여 같은 행의 AA 그림을 함께 칠하지 않습니다.</li>
-              <li><strong className="text-orange-300">수동 문자 선택:</strong> 자동 감지에서 빠진 텍스트는 포인터 좌표를 문자 오프셋으로 변환해 지정 범위만 주황색 번역 세그먼트로 분리합니다.</li>
+              <li><strong className="text-orange-300">수동 박스 선택:</strong> 자동 감지에서 빠진 가로 텍스트는 박스 안 문자 중심점만 판정해 지정 범위를 주황색 번역 세그먼트로 분리합니다.</li>
               <li><strong className="text-fuchsia-300">수동 세로 묶음:</strong> 박스 안의 세로 문자를 열 단위로 정렬해 하나의 문장으로 만들며, 기존 자동 세로 그룹도 같은 방식으로 다시 묶을 수 있습니다.</li>
+              <li><strong className="text-blue-300">빠른 선택 전환:</strong> 수동·세로수동 모드에서도 기존 자동 감지 항목을 짧게 클릭하면 해당 문장이나 세로 그룹 전체의 선택을 켜고 끕니다.</li>
               <li><strong className="text-purple-300">위치 우선 적용:</strong> 세로 번역은 먼저 기존 문자 슬롯만 치환하며 다른 문자와 테두리를 수정하지 않습니다.</li>
               <li><strong className="text-purple-300">번역 보장:</strong> 번역문이 원래 영역보다 길어도 원문을 남기지 않고, 오른쪽 가장자리의 한 행만 필요한 만큼 확장합니다.</li>
             </ul>
@@ -54,7 +55,8 @@ export const SystemReport: React.FC<SystemReportProps> = ({ isOpen, onClose }) =
               <p>전략: <span className="text-blue-300">문맥 보존 동적 청킹</span></p>
               <p>Ollama: <span className="text-blue-300">목표 50항목 · 최대 3개 동적 워커</span></p>
               <p>Gemini: <span className="text-blue-300">목표 50항목 · 최대 2개 동적 워커</span></p>
-              <p>모델: <span className="text-purple-300">gemma4:31b-cloud / gemini-3.6-flash</span></p>
+              <p>Ollama: <span className="text-purple-300">gemma4:31b-cloud / translategemma:4b</span></p>
+              <p>Gemini: <span className="text-purple-300">3.6 Flash / 3.1 Flash-Lite / 2.5 Flash-Lite</span></p>
             </div>
             <p className="mt-2 text-sm">
               API 오버헤드를 줄이고 컨텍스트 윈도우(Context Window) 활용을 극대화하기 위해 다음과 같은 전략을 사용합니다:
@@ -63,6 +65,7 @@ export const SystemReport: React.FC<SystemReportProps> = ({ isOpen, onClose }) =
               <li><strong className="text-slate-200">원자적 그룹화 (Atomic Grouping):</strong> 문장은 분할 불가능한 최소 단위로 취급됩니다. 시스템은 <strong>절대로 문장을 중간에 자르지 않으며</strong>, 현재 배치에 들어가지 않으면 다음 배치로 넘깁니다.</li>
               <li><strong className="text-slate-200">엔진별 동적 채우기:</strong> Ollama는 목표 2,400자/50항목, Gemini는 목표 2,800자/50항목으로 나눠 각 모델의 응답 안정성과 처리량을 함께 유지합니다.</li>
               <li><strong className="text-slate-200">신뢰성:</strong> JSON 인덱스 수를 엄격히 검증하며, 항목 수가 맞지 않으면 청크를 문맥 경계에서 자동 분할해 한 항목 단위까지 복구합니다.</li>
+              <li><strong className="text-slate-200">오류 격리:</strong> 일부 청크나 세로 그룹만 실패하면 정상 항목은 확정 적용하고 실패 항목만 선택 상태로 남겨 다음 재시도 대상으로 유지합니다.</li>
               <li><strong className="text-slate-200">일시 오류:</strong> 429/5xx/네트워크 오류는 지수 백오프와 지터를 적용해 자동 재시도합니다.</li>
             </ul>
           </section>

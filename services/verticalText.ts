@@ -50,6 +50,7 @@ export interface VerticalTranslationAssignment {
 }
 
 export interface VerticalBatchApplyItem {
+  applied: boolean;
   groupId: string;
   normalizedTranslation: string;
   reason?: string;
@@ -66,6 +67,7 @@ export interface FixedWidthTextResult {
   applied: boolean;
   text: string;
   reason?: string;
+  overflowWidth?: number;
 }
 
 interface RawGlyph {
@@ -117,6 +119,15 @@ interface RawVerticalGroup {
   tokens: CandidateToken[];
 }
 
+interface VerticalSegmentMetadata {
+  groupId: string;
+  order: number;
+  line: number;
+  stringIndex: number;
+  displayX: number;
+  displayWidth: number;
+}
+
 export function getDisplayWidth(text: string): number {
   let width = 0;
   for (const character of text) {
@@ -145,7 +156,7 @@ export function detectVerticalTextGroups(
       ));
       if (!range || range.segment.isManualVerticalSelection) continue;
 
-      const segmentOffset = token.stringIndex - range.start;
+      const segmentOffset = range.segmentOffset + token.stringIndex - range.start;
       if (range.segment.text[segmentOffset] !== token.char) continue;
 
       mappedTokens.push({
@@ -242,14 +253,21 @@ export function annotateVerticalTextSegments(
   segments: TextSegment[],
 ): TextSegment[] {
   const groups = detectVerticalTextGroups(content, segments);
-  const metadata = new Map<string, Map<number, { groupId: string; order: number }>>();
+  const metadata = new Map<string, Map<number, VerticalSegmentMetadata>>();
 
   for (const group of groups) {
     group.tokens.forEach((token, order) => {
       const segmentMetadata = metadata.get(token.segmentId) || new Map();
       const previous = segmentMetadata.get(token.segmentOffset);
       if (!previous || order < previous.order) {
-        segmentMetadata.set(token.segmentOffset, { groupId: group.id, order });
+        segmentMetadata.set(token.segmentOffset, {
+          groupId: group.id,
+          order,
+          line: token.line,
+          stringIndex: token.stringIndex,
+          displayX: token.displayX,
+          displayWidth: token.displayWidth,
+        });
         metadata.set(token.segmentId, segmentMetadata);
       }
     });
@@ -272,7 +290,7 @@ export function annotateVerticalTextSegments(
     const pushSlice = (
       start: number,
       end: number,
-      vertical?: { groupId: string; order: number },
+      vertical?: VerticalSegmentMetadata,
     ) => {
       if (end <= start) return;
       const text = segment.text.slice(start, end);
@@ -299,6 +317,10 @@ export function annotateVerticalTextSegments(
         isAutoSelectExcluded: false,
         verticalGroupId: vertical.groupId,
         verticalOrder: vertical.order,
+        verticalSourceLine: vertical.line,
+        verticalSourceIndex: vertical.stringIndex,
+        verticalDisplayX: vertical.displayX,
+        verticalDisplayWidth: vertical.displayWidth,
       });
     };
 
@@ -328,10 +350,12 @@ export function fitTranslationToDisplayWidth(
 
   const translatedWidth = getDisplayWidth(text);
   if (translatedWidth > availableWidth) {
+    const overflowWidth = translatedWidth - availableWidth;
     return {
       applied: true,
       text,
-      reason: `번역 폭이 ${translatedWidth - availableWidth}칸 초과되어 오른쪽 내용을 밀어냈습니다.`,
+      reason: `번역 폭이 ${overflowWidth}칸 초과되어 오른쪽 내용을 밀어냈습니다.`,
+      overflowWidth,
     };
   }
 
@@ -349,10 +373,10 @@ export function applyVerticalTranslation(
   const result = applyVerticalTranslations(segments, [{ group, translation }]);
   const item = result.items[0];
   return {
-    applied: result.applied,
+    applied: item?.applied ?? false,
     segments: result.segments,
     normalizedTranslation: item?.normalizedTranslation || '',
-    reason: result.reason || item?.reason,
+    reason: item?.reason || result.reason,
   };
 }
 
@@ -369,22 +393,61 @@ export function applyVerticalTranslations(
     const normalizedTranslation = normalizeVerticalTranslation(translation);
     const outputCharacters = Array.from(normalizedTranslation);
     if (outputCharacters.length === 0) outputCharacters.push('　');
+    const groupReplacements = new Map<string, Map<number, string>>();
+    const groupWholeReplacements = new Map<string, string>();
 
     const resolvedTokens = group.tokens.map((token, order) => {
       const segment = segmentById.get(token.segmentId);
       if (
         segment
-        && token.char.length === 1
-        && token.displayWidth === 2
         && token.segmentOffset >= 0
-        && token.segmentOffset < segment.text.length
-        && segment.text[token.segmentOffset] === token.char
+        && token.segmentOffset + token.char.length <= segment.text.length
+        && segment.text.slice(
+          token.segmentOffset,
+          token.segmentOffset + token.char.length,
+        ) === token.char
       ) {
         return {
           token,
           segmentId: token.segmentId,
           segmentOffset: token.segmentOffset,
           replaceWholeSegment: false,
+        };
+      }
+
+      // The segment id itself is stable across partial-result renders. An
+      // annotated vertical slot is a one-character segment whose `original`
+      // remains untouched even after its visible text has been expanded.
+      if (
+        segment
+        && Array.from(segment.original).length === 1
+        && segment.original === token.char
+      ) {
+        return {
+          token,
+          segmentId: segment.id,
+          segmentOffset: 0,
+          replaceWholeSegment: true,
+        };
+      }
+
+      // Group ids include display coordinates and may legitimately change when
+      // an earlier translation widens the same row. Recover by the immutable
+      // source coordinate recorded during annotation before trying the legacy
+      // group/order identity.
+      const coordinateMatches = segments.filter((candidate) => (
+        candidate.isVerticalText
+        && candidate.verticalSourceLine === token.line
+        && candidate.verticalSourceIndex === token.stringIndex
+        && Array.from(candidate.original).length === 1
+        && candidate.original === token.char
+      ));
+      if (coordinateMatches.length === 1) {
+        return {
+          token,
+          segmentId: coordinateMatches[0].id,
+          segmentOffset: 0,
+          replaceWholeSegment: true,
         };
       }
 
@@ -409,12 +472,13 @@ export function applyVerticalTranslations(
     const unsafeIndex = resolvedTokens.findIndex((resolved) => !resolved);
     if (unsafeIndex >= 0) {
       const unsafeToken = group.tokens[unsafeIndex];
-      return {
+      items.push({
         applied: false,
-        segments,
-        items,
-        reason: `원문 슬롯(${unsafeToken.line + 1}행)의 위치가 변경되어 적용할 수 없습니다.`,
-      };
+        groupId: group.id,
+        normalizedTranslation,
+        reason: `원문 슬롯(${unsafeToken.line + 1}행, '${normalizeSourceCharacter(unsafeToken.char)}')을 복구하지 못했습니다. 해당 말풍선을 세로수동으로 다시 묶어 재시도하세요.`,
+      });
+      continue;
     }
 
     const overflow = Math.max(0, outputCharacters.length - group.capacity);
@@ -430,6 +494,7 @@ export function applyVerticalTranslations(
         }, 0)
       : -1;
 
+    let groupFailure: string | undefined;
     for (const [index, resolved] of resolvedTokens.entries()) {
       const { token, segmentId, segmentOffset, replaceWholeSegment } = resolved!;
       const outputIndex = overflow > 0 && index > overflowAnchorIndex
@@ -447,31 +512,54 @@ export function applyVerticalTranslations(
           .join('');
       }
       if (replaceWholeSegment) {
-        if (wholeSegmentReplacements.has(segmentId) || replacements.has(segmentId)) {
-          return {
-            applied: false,
-            segments,
-            items,
-            reason: `세로 말풍선들이 ${token.line + 1}행의 같은 문자 슬롯과 겹칩니다.`,
-          };
+        if (
+          wholeSegmentReplacements.has(segmentId)
+          || replacements.has(segmentId)
+          || groupWholeReplacements.has(segmentId)
+          || groupReplacements.has(segmentId)
+        ) {
+          groupFailure = `세로 말풍선들이 ${token.line + 1}행의 같은 문자 슬롯과 겹칩니다.`;
+          break;
         }
-        wholeSegmentReplacements.set(segmentId, replacement);
+        groupWholeReplacements.set(segmentId, replacement);
         continue;
       }
-      const segmentReplacements = replacements.get(segmentId) || new Map<number, string>();
-      if (segmentReplacements.has(segmentOffset) || wholeSegmentReplacements.has(segmentId)) {
-        return {
-          applied: false,
-          segments,
-          items,
-          reason: `세로 말풍선들이 ${token.line + 1}행의 같은 문자 슬롯과 겹칩니다.`,
-        };
+      const existingReplacements = replacements.get(segmentId);
+      const segmentReplacements = groupReplacements.get(segmentId) || new Map<number, string>();
+      if (
+        existingReplacements?.has(segmentOffset)
+        || segmentReplacements.has(segmentOffset)
+        || wholeSegmentReplacements.has(segmentId)
+        || groupWholeReplacements.has(segmentId)
+      ) {
+        groupFailure = `세로 말풍선들이 ${token.line + 1}행의 같은 문자 슬롯과 겹칩니다.`;
+        break;
       }
       segmentReplacements.set(segmentOffset, replacement);
-      replacements.set(segmentId, segmentReplacements);
+      groupReplacements.set(segmentId, segmentReplacements);
+    }
+
+    if (groupFailure) {
+      items.push({
+        applied: false,
+        groupId: group.id,
+        normalizedTranslation,
+        reason: groupFailure,
+      });
+      continue;
+    }
+
+    for (const [segmentId, replacement] of groupWholeReplacements) {
+      wholeSegmentReplacements.set(segmentId, replacement);
+    }
+    for (const [segmentId, pending] of groupReplacements) {
+      const committed = replacements.get(segmentId) || new Map<number, string>();
+      for (const [offset, replacement] of pending) committed.set(offset, replacement);
+      replacements.set(segmentId, committed);
     }
 
     items.push({
+      applied: true,
       groupId: group.id,
       normalizedTranslation,
       reason: overflow > 0
@@ -507,10 +595,14 @@ export function applyVerticalTranslations(
     };
   });
 
+  const failedItems = items.filter(({ applied }) => !applied);
   return {
-    applied: true,
+    applied: failedItems.length === 0,
     segments: updated,
     items,
+    reason: failedItems.length > 0
+      ? `${failedItems.length}개 세로쓰기 그룹을 건너뛰고 나머지를 적용했습니다.`
+      : undefined,
   };
 }
 
@@ -946,6 +1038,10 @@ function clearVerticalMetadata(segment: TextSegment): TextSegment {
     isVerticalText: undefined,
     verticalGroupId: undefined,
     verticalOrder: undefined,
+    verticalSourceLine: undefined,
+    verticalSourceIndex: undefined,
+    verticalDisplayX: undefined,
+    verticalDisplayWidth: undefined,
   };
 }
 
@@ -954,18 +1050,37 @@ function containsJapaneseScript(text: string): boolean {
 }
 
 function buildSegmentRanges(segments: TextSegment[]) {
-  const result = new Map<number, Array<{ start: number; end: number; segment: TextSegment }>>();
+  const result = new Map<number, Array<{
+    start: number;
+    end: number;
+    segment: TextSegment;
+    segmentOffset: number;
+  }>>();
+  let line = 0;
+  let stringIndex = 0;
+
   for (const segment of segments) {
-    const match = /^seg-(\d+)-(\d+)$/.exec(segment.id);
-    if (!match || segment.text === '\n') continue;
-    const line = Number(match[1]);
-    const start = Number(match[2]);
-    const ranges = result.get(line) || [];
-    ranges.push({ start, end: start + segment.text.length, segment });
-    result.set(line, ranges);
-  }
-  for (const ranges of result.values()) {
-    ranges.sort((left, right) => left.start - right.start);
+    let segmentOffset = 0;
+    while (segmentOffset < segment.text.length) {
+      const newlineOffset = segment.text.indexOf('\n', segmentOffset);
+      const endOffset = newlineOffset >= 0 ? newlineOffset : segment.text.length;
+      const length = endOffset - segmentOffset;
+      if (length > 0) {
+        const ranges = result.get(line) || [];
+        ranges.push({
+          start: stringIndex,
+          end: stringIndex + length,
+          segment,
+          segmentOffset,
+        });
+        result.set(line, ranges);
+        stringIndex += length;
+      }
+      if (newlineOffset < 0) break;
+      line += 1;
+      stringIndex = 0;
+      segmentOffset = newlineOffset + 1;
+    }
   }
   return result;
 }

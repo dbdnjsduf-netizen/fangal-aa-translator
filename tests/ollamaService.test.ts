@@ -117,7 +117,9 @@ test('항목 수가 틀린 큰 응답은 자동 분할하고 성공한 앞부분
     assert.equal(url, '/api/chat');
     const request = JSON.parse(String(init?.body)) as {
       messages: Array<{ role: string; content: string }>;
+      model?: string;
     };
+    assert.equal(request.model, 'translategemma:4b');
     const protectedPrompt = request.messages.find(({ role }) => role === 'system')?.content || '';
     assert.match(protectedPrompt, /NON-NEGOTIABLE OUTPUT CONTRACT/);
     assert.match(protectedPrompt, /TRANSLATION STYLE:\nTranslate\./);
@@ -147,6 +149,7 @@ test('항목 수가 틀린 큰 응답은 자동 분할하고 성공한 앞부분
       'Translate.',
       undefined,
       (items) => partialSnapshots.push([...items]),
+      'translategemma:4b',
     );
     assert.deepEqual(result.translations, ['가', '나', '다', '라']);
     assert.deepEqual(chatChunkSizes, [4, 2, 2]);
@@ -309,6 +312,131 @@ test('기본 워커 세 개가 청크를 병렬 처리하고 원래 순서를 �
       result.translations,
       inputs.map((source) => `번역${source.slice(1)}`),
     );
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousWindow) {
+      Object.defineProperty(globalThis, 'window', previousWindow);
+    } else {
+      Reflect.deleteProperty(globalThis, 'window');
+    }
+  }
+});
+
+test('일부 번역 청크만 실패하면 성공 결과를 반환하고 실패 인덱스를 격리한다', async () => {
+  const previousFetch = globalThis.fetch;
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const inputs = [
+    ...Array.from({ length: 64 }, (_, index) => `原文${index}`),
+    '失敗',
+  ];
+
+  Object.defineProperty(globalThis, 'window', {
+    value: globalThis,
+    writable: true,
+    configurable: true,
+  });
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === '/api/config') {
+      return new Response(JSON.stringify({ maxConcurrency: 1 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    const request = JSON.parse(String(init?.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const userPrompt = request.messages.find(({ role }) => role === 'user')?.content || '';
+    const chunk = JSON.parse(userPrompt.split('INPUT_JSON:\n')[1]) as string[];
+    if (chunk.includes('失敗')) {
+      return new Response(JSON.stringify({ error: '의도한 단일 청크 실패' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify({
+      message: { content: JSON.stringify(chunk.map((_, index) => `번역${index}`)) },
+      prompt_eval_count: 10,
+      eval_count: 5,
+      total_duration: 1_000_000,
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    const result = await translateBatch(inputs, [], false, 'Translate.');
+    assert.equal(result.translations[0], '번역0');
+    assert.equal(result.translations[64], '失敗');
+    assert.deepEqual(result.failures, [{
+      chunkIndex: 1,
+      startIndex: 64,
+      itemCount: 1,
+      itemIndices: [64],
+      message: '의도한 단일 청크 실패',
+    }]);
+    await assert.rejects(
+      translateBatch(['失敗'], [], false, 'Translate.'),
+      /1개 번역 청크가 실패했습니다/u,
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousWindow) {
+      Object.defineProperty(globalThis, 'window', previousWindow);
+    } else {
+      Reflect.deleteProperty(globalThis, 'window');
+    }
+  }
+});
+
+test('복구 분할의 앞부분만 성공해도 그 항목은 보존하고 뒷부분만 실패 처리한다', async () => {
+  const previousFetch = globalThis.fetch;
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+
+  Object.defineProperty(globalThis, 'window', {
+    value: globalThis,
+    writable: true,
+    configurable: true,
+  });
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === '/api/config') {
+      return new Response(JSON.stringify({ maxConcurrency: 1 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    const request = JSON.parse(String(init?.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const userPrompt = request.messages.find(({ role }) => role === 'user')?.content || '';
+    const chunk = JSON.parse(userPrompt.split('INPUT_JSON:\n')[1]) as string[];
+    if (chunk.length === 4) {
+      return new Response(JSON.stringify({
+        message: { content: '["일부만 반환"]' },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    if (chunk[0] === 'あ') {
+      return new Response(JSON.stringify({
+        message: { content: '["가","나"]' },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify({ error: '오른쪽 복구 조각 실패' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    const result = await translateBatch(['あ', 'い', 'う', 'え'], [], false, 'Translate.');
+    assert.deepEqual(result.translations, ['가', '나', 'う', 'え']);
+    assert.deepEqual(result.failures[0].itemIndices, [2, 3]);
+    assert.equal(result.failures[0].itemCount, 2);
   } finally {
     globalThis.fetch = previousFetch;
     if (previousWindow) {
