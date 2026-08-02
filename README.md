@@ -24,11 +24,34 @@
 
 ## 빠른 시작
 
-요구 사항:
+### Windows 초보자용 실행 방법
 
-- Node.js 18.18 이상
+이 프로그램은 로컬 번역기 서버를 실행하기 위해 **Node.js 20 이상**과 Node.js에
+포함된 **npm**이 필요합니다. 새로 설치한다면 공식 사이트의 최신 **LTS** 버전을
+권장합니다.
+
+1. [Node.js 공식 다운로드 페이지](https://nodejs.org/en/download)를 엽니다.
+2. **LTS** 버전의 **Windows Installer(.msi)**를 내려받습니다.
+3. 설치 프로그램은 특별한 이유가 없다면 기본값 그대로 `Next`를 눌러 설치합니다.
+   npm과 PATH 등록 항목도 기본값으로 유지합니다.
+4. 설치가 끝나면 열려 있던 명령 프롬프트를 닫습니다.
+5. GitHub의 **Code → Download ZIP**으로 프로젝트를 내려받고 압축을 풉니다.
+6. 압축을 푼 폴더에서 `start.bat`를 더블클릭합니다.
+
+`start.bat`는 Node.js와 npm 설치 여부 및 버전을 자동으로 검사합니다. Node.js가 없거나
+너무 오래된 경우 한국어 해결 방법을 표시하고 공식 다운로드 페이지를 엽니다. 처음
+실행할 때는 `npm install`도 자동으로 진행하므로 인터넷 연결이 필요합니다.
+
+### 필요한 프로그램
+
+- Node.js 20 이상 — 최신 LTS 권장
+- npm — Node.js 공식 설치 프로그램에 포함
 - Ollama 모드를 쓸 경우 Ollama 앱과 계정
 - Gemini 모드를 쓸 경우 본인의 Gemini API 키
+
+Ollama는 선택 사항입니다. Ollama가 없어도 Gemini API 모드는 사용할 수 있습니다.
+
+### 명령어로 실행하는 방법
 
 ```bash
 git clone https://github.com/dbdnjsduf-netizen/fangal-aa-translator.git
@@ -37,8 +60,8 @@ npm install
 npm run dev
 ```
 
-브라우저에서 `http://127.0.0.1:3000`을 엽니다. Windows에서는 `start.bat`,
-macOS/Linux에서는 `./start.sh`를 실행해도 됩니다.
+브라우저에서 `http://127.0.0.1:3000`을 엽니다. macOS/Linux에서는 `./start.sh`를
+실행할 수 있으며, 이 스크립트도 Node.js와 npm을 먼저 검사합니다.
 
 프로덕션 실행:
 
@@ -184,12 +207,13 @@ npm run check
 
 ## 업데이트 기록
 
-현재 공개 버전은 **1.5.0**입니다. 아래 기록은 일반 사용자가 체감하는 주요 기능을 기준으로 묶었습니다.
+현재 공개 버전은 **1.5.1**입니다. 아래 기록은 일반 사용자가 체감하는 주요 기능을 기준으로 묶었습니다.
 
 ### 1.5 — 이미지 ZIP 다운로드 추가
 
 - 번역 결과를 PNG 또는 JPG 여러 장으로 나누어 ZIP 파일로 받을 수 있습니다.
 - 스마트 빈줄 분할, 페이지별 너비 최적화, 공통 좌측 공백 제거와 여백 설정을 지원합니다.
+- 초보자를 위한 Node.js LTS 설치 안내와 실행 전 자동 의존성 검사를 추가했습니다.
 
 ### 1.4 — AA 화면 표시 개선
 

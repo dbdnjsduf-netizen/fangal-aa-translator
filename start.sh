@@ -7,10 +7,28 @@ echo ""
 # Node.js 설치 확인
 if ! command -v node &> /dev/null; then
     echo "[오류] Node.js가 설치되어 있지 않습니다."
-    echo "https://nodejs.org 에서 Node.js를 먼저 설치해주세요."
+    echo "https://nodejs.org/en/download 에서 최신 LTS 버전을 설치해주세요."
     echo ""
     exit 1
 fi
+
+NODE_MAJOR=$(node -p "process.versions.node.split('.')[0]")
+if [ "$NODE_MAJOR" -lt 20 ]; then
+    echo "[오류] Node.js 20 이상이 필요합니다. 현재 버전: $(node -v)"
+    echo "https://nodejs.org/en/download 에서 최신 LTS 버전으로 업데이트해주세요."
+    echo ""
+    exit 1
+fi
+
+if ! command -v npm &> /dev/null; then
+    echo "[오류] npm을 찾을 수 없습니다. Node.js를 기본 설정으로 다시 설치해주세요."
+    echo "https://nodejs.org/en/download"
+    echo ""
+    exit 1
+fi
+
+echo "[확인] Node.js $(node -v), npm $(npm -v)"
+echo ""
 
 # Ollama는 선택 사항이며 Gemini API 모드는 앱 안에서 선택할 수 있습니다.
 if ! command -v ollama &> /dev/null; then

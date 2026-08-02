@@ -8,11 +8,12 @@ interface ChangelogModalProps {
 
 const changelogData = [
   {
-    version: '1.5.0',
-    title: '이미지 ZIP 다운로드',
+    version: '1.5.1',
+    title: '이미지 ZIP 다운로드와 쉬운 설치',
     changes: [
       '번역 결과를 PNG 또는 JPG 여러 장으로 나누어 ZIP으로 다운로드',
       '스마트 빈줄 분할, 너비 자동 최적화, 좌측 공백 제거와 여백 설정 지원',
+      'Node.js LTS 설치 안내와 start.bat의 Node.js·npm 자동 검사 추가',
     ],
   },
   {
