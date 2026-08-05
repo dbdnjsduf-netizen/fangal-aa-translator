@@ -164,6 +164,7 @@ test('부분 결과가 세로 셀 표시를 먼저 바꿔도 원본 세그먼트
 test('일반 스마트 번역도 원문의 표시 폭을 정확히 유지한다', () => {
   const result = fitTranslationToDisplayWidth('こんにちは', '안녕');
   assert.equal(result.applied, true);
+  assert.equal(result.text, `안녕${' '.repeat(6)}`);
   assert.equal(getDisplayWidth(result.text), getDisplayWidth('こんにちは'));
 });
 
