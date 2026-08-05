@@ -153,12 +153,16 @@ export function applyManualRegexRules(
 
   if (normalTexts.length === 0) return withVerticalSelections;
   const ranges: ManualSelectionRange[] = [];
-  for (const segment of withVerticalSelections) {
+  for (const [segmentIndex, segment] of withVerticalSelections.entries()) {
     // A selected segment already belongs to the current translation batch.
     // Splitting it merely to add a persistent rule would disturb the user's
     // current selection layout without adding another translation target.
     if (segment.isTranslated || segment.isSelected || segment.verticalGroupId) continue;
-    ranges.push(...findLiteralRanges(segment, normalTexts));
+    ranges.push(...findLiteralRanges(
+      withVerticalSelections,
+      segmentIndex,
+      normalTexts,
+    ));
   }
   if (ranges.length === 0) return withVerticalSelections;
   withVerticalSelections = applyManualSelectionRanges(
@@ -169,14 +173,22 @@ export function applyManualRegexRules(
   return withVerticalSelections;
 }
 
-function findLiteralRanges(segment: TextSegment, sourceTexts: string[]) {
+function findLiteralRanges(
+  segments: TextSegment[],
+  segmentIndex: number,
+  sourceTexts: string[],
+) {
+  const segment = segments[segmentIndex];
   const candidates: Array<{ start: number; end: number }> = [];
   for (const sourceText of sourceTexts) {
     let start = 0;
     while (start <= segment.text.length - sourceText.length) {
       const matchStart = segment.text.indexOf(sourceText, start);
       if (matchStart === -1) break;
-      candidates.push({ start: matchStart, end: matchStart + sourceText.length });
+      const matchEnd = matchStart + sourceText.length;
+      if (hasWhitespaceBoundaries(segments, segmentIndex, matchStart, matchEnd)) {
+        candidates.push({ start: matchStart, end: matchEnd });
+      }
       start = matchStart + Math.max(1, sourceText.length);
     }
   }
@@ -189,6 +201,43 @@ function findLiteralRanges(segment: TextSegment, sourceTexts: string[]) {
     occupiedUntil = candidate.end;
   }
   return accepted;
+}
+
+function hasWhitespaceBoundaries(
+  segments: TextSegment[],
+  segmentIndex: number,
+  start: number,
+  end: number,
+) {
+  const left = findAdjacentCharacter(segments, segmentIndex, start, -1);
+  const right = findAdjacentCharacter(segments, segmentIndex, end, 1);
+  return isWhitespaceOrDocumentEdge(left) && isWhitespaceOrDocumentEdge(right);
+}
+
+function findAdjacentCharacter(
+  segments: TextSegment[],
+  segmentIndex: number,
+  offset: number,
+  direction: -1 | 1,
+): string | undefined {
+  const currentText = segments[segmentIndex].text;
+  if (direction === -1 && offset > 0) return currentText.slice(offset - 1, offset);
+  if (direction === 1 && offset < currentText.length) return currentText.slice(offset, offset + 1);
+
+  for (
+    let index = segmentIndex + direction;
+    index >= 0 && index < segments.length;
+    index += direction
+  ) {
+    const text = segments[index].text;
+    if (!text) continue;
+    return direction === -1 ? text.slice(-1) : text.slice(0, 1);
+  }
+  return undefined;
+}
+
+function isWhitespaceOrDocumentEdge(character: string | undefined) {
+  return character === undefined || /^\s$/u.test(character);
 }
 
 function sourceOf(segment: TextSegment) {

@@ -40,6 +40,7 @@ import {
 import {
   applyVerticalTranslations,
   detectVerticalTextGroups,
+  fitTranslationToDisplayWidth,
   makeVerticalTranslationRequest,
   VerticalTextGroup,
 } from './services/verticalText';
@@ -379,10 +380,13 @@ function App() {
       );
       
       const isUnchanged = translatedText.trim() === selection.text.trim();
+      const replacementText = isUnchanged
+        ? selection.text
+        : fitTranslationToDisplayWidth(selection.text, translatedText).text;
       
       const before = content.substring(0, selection.start);
       const after = content.substring(selection.end);
-      const newContent = before + translatedText + after;
+      const newContent = before + replacementText + after;
 
       setContent(newContent);
       setSegments([]); 
@@ -396,8 +400,8 @@ function App() {
         // 원문과 동일한 경우 선택 상태 유지 (길이가 달라졌을 수 있으므로 업데이트)
         setSelection({
           start: selection.start,
-          end: selection.start + translatedText.length,
-          text: translatedText
+          end: selection.start + replacementText.length,
+          text: replacementText
         });
       }
     } catch (error: any) {

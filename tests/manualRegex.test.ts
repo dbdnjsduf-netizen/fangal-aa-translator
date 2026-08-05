@@ -46,7 +46,7 @@ test('선택한 문장의 정규식 특수문자는 문자 그대로 안전하�
   assert.equal(rules.entries[0].pattern, '勇者\\(仮\\)\\+1\\?');
 });
 
-test('같은 원문이 큰 세그먼트 안에 반복되어도 해당 부분만 모두 자동 선택한다', () => {
+test('같은 원문이 좌우 공백으로 분리되어 반복되면 해당 부분만 모두 자동 선택한다', () => {
   const source = segment('source', 'AA 勇者(仮) BB 勇者(仮) CC');
   const result = applyManualRegexRules([source], rulesFor('勇者(仮)'));
   assert.equal(result.map(({ text }) => text).join(''), source.text);
@@ -59,13 +59,44 @@ test('같은 원문이 큰 세그먼트 안에 반복되어도 해당 부분만 
   ));
 });
 
-test('겹치는 규칙은 긴 원문을 우선하고 주변 문자를 선택하지 않는다', () => {
+test('겹치는 규칙은 긴 원문을 우선하고 주변 공백은 선택하지 않는다', () => {
   const result = applyManualRegexRules(
-    [segment('source', '前勇者さま後')],
+    [segment('source', '前 勇者さま 後')],
     rulesFor('勇者', '勇者さま'),
   );
-  assert.deepEqual(result.map(({ text }) => text), ['前', '勇者さま', '後']);
+  assert.deepEqual(result.map(({ text }) => text), ['前 ', '勇者さま', ' 後']);
   assert.equal(result[1].isSelected, true);
+});
+
+test('수동 정규식 원문이 다른 텍스트에 붙어 있으면 자동 선택하지 않는다', () => {
+  const source = segment(
+    'source',
+    '앞勇者 뒤 勇者뒤 앞勇者뒤 분리 勇者 완료',
+  );
+  const result = applyManualRegexRules([source], rulesFor('勇者'));
+  assert.equal(result.filter(({ isSelected }) => isSelected).length, 1);
+  assert.equal(result.find(({ isSelected }) => isSelected)?.text, '勇者');
+});
+
+test('세그먼트 경계를 넘어 실제 좌우 문자를 검사하고 문서 끝은 빈 경계로 허용한다', () => {
+  const separated = applyManualRegexRules([
+    segment('left-space', ' '),
+    segment('target', '勇者'),
+    segment('right-space', '\n'),
+  ], rulesFor('勇者'));
+  assert.equal(separated.find(({ text }) => text === '勇者')?.isSelected, true);
+
+  const attached = applyManualRegexRules([
+    segment('left-text', '앞'),
+    segment('attached-target', '勇者'),
+    segment('right-space-2', ' '),
+  ], rulesFor('勇者'));
+  assert.equal(attached.some(({ isSelected }) => isSelected), false);
+
+  const documentEdge = applyManualRegexRules([
+    segment('edge-target', '勇者'),
+  ], rulesFor('勇者'));
+  assert.equal(documentEdge[0].isSelected, true);
 });
 
 test('세로쓰기 규칙은 글자 슬롯 순서가 아니라 세로 읽기 순서로 그룹 전체를 선택한다', () => {
@@ -146,6 +177,7 @@ test('새 규칙만 증분 적용해 기존에 직접 해제한 정규식 선택
       isManualRegexSelection: true,
       isSelected: false,
     }),
+    segment('separator', ' '),
     segment('new', '新規'),
   ], added);
   assert.equal(added.entries.length, 1);
