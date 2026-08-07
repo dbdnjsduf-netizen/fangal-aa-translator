@@ -20,8 +20,8 @@ test('저장된 엔진 값은 허용된 두 모드로만 복구한다', () => {
 });
 
 test('저장된 Gemini 모델은 지원 목록으로만 복구한다', () => {
-  assert.equal(normalizeGeminiModel('gemini-2.5-flash-lite'), 'gemini-2.5-flash-lite');
   assert.equal(normalizeGeminiModel('gemini-3.1-flash-lite'), 'gemini-3.1-flash-lite');
+  assert.equal(normalizeGeminiModel('gemini-2.5-flash-lite'), 'gemini-3.6-flash');
   assert.equal(normalizeGeminiModel('unknown-model'), 'gemini-3.6-flash');
 });
 
@@ -93,21 +93,21 @@ test('Gemini 요청은 키를 URL이 아닌 헤더로 보내고 고정 길이 JS
       [],
       false,
       '자연스러운 한국어로 번역하세요.',
-      'gemini-2.5-flash-lite',
+      'gemini-3.1-flash-lite',
     );
     assert.equal(result.text, '안녕하세요');
     assert.equal(result.usage.requestCount, 1);
     assert.equal(result.usage.inputTokens, 12);
     assert.equal(result.usage.outputTokens, 3);
-    assert.match(capturedUrl, /gemini-2\.5-flash-lite:generateContent$/);
+    assert.match(capturedUrl, /gemini-3\.1-flash-lite:generateContent$/);
     assert.doesNotMatch(capturedUrl, /TEST_ONLY_NOT_A_REAL_KEY/);
     assert.equal(capturedKey, 'TEST_ONLY_NOT_A_REAL_KEY');
     assert.equal(
-      capturedBody.generationConfig.responseFormat.text.mimeType,
+      capturedBody.generationConfig.responseMimeType,
       'application/json',
     );
-    assert.equal(capturedBody.generationConfig.responseFormat.text.schema.minItems, 1);
-    assert.equal(capturedBody.generationConfig.responseFormat.text.schema.maxItems, 1);
+    assert.equal(capturedBody.generationConfig.responseSchema.minItems, 1);
+    assert.equal(capturedBody.generationConfig.responseSchema.maxItems, 1);
   } finally {
     globalThis.fetch = previousFetch;
     if (previousWindow) {

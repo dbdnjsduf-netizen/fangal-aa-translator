@@ -18,7 +18,6 @@ export const GEMINI_MODEL = 'gemini-3.6-flash';
 export const GEMINI_MODELS = [
   { id: GEMINI_MODEL, label: 'Gemini 3.6 Flash' },
   { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash-Lite' },
-  { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite' },
 ] as const;
 export type GeminiModel = typeof GEMINI_MODELS[number]['id'];
 const GEMINI_MAX_CONCURRENCY = 2;
@@ -429,16 +428,12 @@ async function requestGemini(
             parts: [{ text: userPrompt }],
           }],
           generationConfig: {
-            responseFormat: {
-              text: {
-                mimeType: 'application/json',
-                schema: {
-                  type: 'array',
-                  minItems: expectedCount,
-                  maxItems: expectedCount,
-                  items: { type: 'string' },
-                },
-              },
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: 'array',
+              minItems: expectedCount,
+              maxItems: expectedCount,
+              items: { type: 'string' },
             },
           },
         }),
