@@ -23,6 +23,7 @@ import {
 } from '../services/translationApplication';
 import { applySelectionExclusions } from '../services/selectionExclusions';
 import { applyManualRegexRules } from '../services/manualRegex';
+import { refineAutoDetectionWithLearnedPatterns } from '../services/detectionPatternLearning';
 
 interface EditorProps {
   content: string;
@@ -134,7 +135,12 @@ export const Editor: React.FC<EditorProps> = ({
           // preventing the UI (and other Chrome tabs) from freezing on large files.
           startTransition(() => {
             const annotated = annotateVerticalTextSegments(content, e.data.segments);
-            const withManualRegex = applyManualRegexRules(annotated, manualRegexRules);
+            const refined = refineAutoDetectionWithLearnedPatterns(
+              annotated,
+              selectionExclusions,
+              manualRegexRules,
+            );
+            const withManualRegex = applyManualRegexRules(refined, manualRegexRules);
             onSegmentsChangeRef.current(
               applySelectionExclusions(withManualRegex, selectionExclusions),
             );

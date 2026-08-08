@@ -5,7 +5,7 @@
 // --- Pre-compiled regex patterns ---
 const RE_JAPANESE_CHAR = /[\u3040-\u309f\u30a0-\u30ff\uff66-\uff9f\u4e00-\u9faf\u3400-\u4dbf]/;
 const RE_JAPANESE_CHARS_G = /[\u3040-\u309f\u30a0-\u30ff\uff66-\uff9f\u4e00-\u9faf\u3400-\u4dbf]/g;
-const RE_JAPANESE_PUNCTUATION = /[！？。、…「」『』（）［］【】]/;
+const RE_JAPANESE_PUNCTUATION = /[!?！？。、…「」『』（）［］【】]/;
 const RE_INLINE_DRAWING = /[|│┃｜\/／\\＼_＿￣─━≦≧=＝<＜>＞∫∬\u2500-\u257F\u2580-\u259F]/;
 const RE_GAP = /([\s\u3000\u00A0\u2000-\u200B]*(?:[|│┃｜＞＜\u2500-\u257F／＼\[\]｛｝［］★◆]+|[\s\u3000\u00A0\u2000-\u200B]{2,})[\s\u3000\u00A0\u2000-\u200B]*)/;
 const RE_SEPARATOR = /^[\s\u3000\u00A0\u2000-\u200B]*(?:[|│┃｜＞＜\u2500-\u257F／＼\[\]｛｝［］★◆]+|[\s\u3000\u00A0\u2000-\u200B]{2,})[\s\u3000\u00A0\u2000-\u200B]*$/;
@@ -21,17 +21,17 @@ const RE_BOX_PIPE_CHAR_RIGHT = /[|│┃｜＜\u2500-\u257F]/;
 const RE_ARROW_BOX_START = /[>＞|｜]/;
 const RE_ARROW_BOX_END = /[<＜|｜]/;
 const RE_EDGE_BLANK = /^[\s\u200B\u3000\u00A0\u2000-\u200B│┃|｜＞＜／＼\u2500-\u257F人从⌒YWV^‐―＝≡   ´｀ヽヾ乂ノﾚﾉ]*$/;
-const RE_AUTO_SELECTED = /ﾀｯﾀｯﾀ/;
-
 const RE_STRUCTURAL_REPEAT = /[二三壬]{2,}|[口ロ十]{3,}/;
 const RE_LINE_BORDERS = /[|│┃｜_＿￣─━\-\/／\\＼]{2,}/;
 const RE_BOUNDARY_DRAWING = /^[\s\u3000]*[|│┃｜\/／\\＼_＿￣─━]|[\s\u3000]*[|│┃｜\/／\\＼_＿￣─━][\s\u3000]*$/;
 const RE_STANDARD_HIRAGANA = /[ぁ-ん]/;
 const RE_GEGE_G = /[ゝゞ]/g;
 const RE_DRAWING_MARKS = /[ヽヾ丶〆丿乂爻巛川]/;
-const RE_AA_CHARS = /[二三七彡ニメ八人入ヌノト一へヘ大イムくミシツテ了心ハフソィッェァォュョエ工乀乁口ロ日目回凵凹凸匚コ丁十小山마히릴레와시アイウエ오카키쿠케코사시스세소타치츠테토나니누네노하히후헤호마미무메모야유요라릴레로완ー―つっぅヽヾ丶〆丿乂爻巛川芹云ゝゞ冖宀冂广廴廾彐彳忄扌氵犭纟艹辶阝丈乃亅卜匕个丫儿厂厶ヲ\uff65-\uff9fA-Za-z0-9Ａ-Ｚａ-ｚ０-９＿￣]/;
+// Japanese glyphs that frequently double as strokes in Shift-JIS art. Keep
+// this list evidence-based: no Hangul lookalikes or invented transliterations.
+const RE_AA_CHARS = /[二三七彡八人入ヌノト一へヘ大イムくミシツテ了心ハフソィッェァォュョエ工乀乁口ロ日目回凵凹凸匚コ丁十小山ー―つっぅヽヾ丶〆丿乂爻巛川芹云ゝゞ冖宀冂广廴廾彐彳忄扌氵犭纟艹辶阝丈乃亅卜匕个丫儿厂厶ヲｲﾉﾆﾊﾍﾄﾚﾘﾙﾛｯｪｧｫｭｮ]/u;
 const RE_NON_JP_G = /[^\u3040-\u309f\u30a0-\u30ff\uff66-\uff9f\u4e00-\u9faf\u3400-\u4dbf]/g;
-const RE_SYMBOLS_G = /[^\u3040-\u309f\u30a0-\u30ff\uff66-\uff9f\u4e00-\u9faf\u3400-\u4dbf！？。、…「」『』（）［］【】\s]/g;
+const RE_SYMBOLS_G = /[^\u3040-\u309f\u30a0-\u30ff\uff66-\uff9f\u4e00-\u9faf\u3400-\u4dbf!?！？。、…「」『』（）［］【】\s]/g;
 const RE_HALFWIDTH_PUNCT = /[\uff61-\uff65]/;
 const RE_THREAD_NAME = /^\s*\d+\s*[:：].*?(?:◆|ID[:：]\w|\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2})/;
 // Box border chars: horiz ─━ (U+2500-01), vert │┃ (U+2502-03), dashed (U+2504-05,2508-09), corners/intersections (U+250C-254D), double (U+2550,2552-2573), ASCII/fullwidth pipes (|｜)
@@ -43,6 +43,8 @@ const RE_HW_DAKUTEN = /[\uff9e\uff9f]/;
 const RE_DISQUALIFIED = /[}｝囗＿|ｌl丿／｜><]/;
 const RE_AUTO_SELECT_EXCLUDE = /[＼＞＜]|(^[ﾆ二ニ々]+$)/;
 const RE_NOISE_ONLY = /^[\s\u3000\u00A0\u2000-\u200B从人f´￣｀ヽ_！]+$/;
+const RE_FACE_FRAME = /[()（）<>＜＞〈〉《》「」『』\[\]｛｝{}´｀'"＾^⌒ﾟ°・]/u;
+const RE_AA_CONTEXT_GLYPH = /[|│┃｜/／\\＼_＿￣─━\-~～^＾<>＜＞()（）\[\]｛｝{}´｀'"`.,:;・ﾟ°vVyYwWjJiIlLfFxX]/u;
 const RE_VERTICAL_PIPES_G = /[|│┃｜]/g;
 const RE_JAPANESE_SCRIPT = /[\u3041-\u3096\u30a1-\u30f6\uff66-\uff9f\u4e00-\u9faf\u3400-\u4dbf]/;
 const RE_MEANINGFUL_JP = /[\u3041-\u3096\u30a1-\u30f6\uff66-\uff9f\u4e00-\u9faf\u3400-\u4dbf]/;
@@ -214,6 +216,60 @@ const hasSafeVerticalContext = (lines: string[], lineIdx: number, colStart: numb
   return (above === undefined || isSafeRange(above, checkStart, checkEnd)) && (below === undefined || isSafeRange(below, checkStart, checkEnd));
 };
 
+// Short kana-like fragments inside character art often look like valid words in
+// isolation. Measure the nearby AA strokes in display columns so those fragments
+// are not promoted merely because their own line has whitespace. Verified
+// dialogue boxes are handled separately and deliberately override this signal.
+const hasDenseAADrawingContext = (
+  lines: string[],
+  lineIdx: number,
+  colStart: number,
+  colEnd: number,
+  columnRadius: number = 10,
+  rowRadius: number = 3,
+): boolean => {
+  const currentLine = lines[lineIdx] || '';
+  const displayStart = getDisplayWidth(currentLine.substring(0, colStart));
+  const displayEnd = displayStart + getDisplayWidth(currentLine.substring(colStart, colEnd));
+  const checkStart = Math.max(0, displayStart - columnRadius);
+  const checkEnd = displayEnd + columnRadius;
+  const occupiedSides = new Set<'above' | 'below' | 'left' | 'right'>();
+  let totalGlyphs = 0;
+  let occupiedRows = 0;
+
+  const countDrawingGlyphs = (value: string): number => Array.from(value).filter((character) => (
+    RE_AA_CONTEXT_GLYPH.test(character) || RE_AA_CHARS.test(character)
+  )).length;
+
+  for (let offset = -rowRadius; offset <= rowRadius; offset += 1) {
+    const row = lines[lineIdx + offset];
+    if (row === undefined) continue;
+
+    if (offset === 0) {
+      const leftCount = countDrawingGlyphs(substringByDisplayCols(row, checkStart, displayStart));
+      const rightCount = countDrawingGlyphs(substringByDisplayCols(row, displayEnd, checkEnd));
+      totalGlyphs += leftCount + rightCount;
+      if (leftCount >= 1) occupiedSides.add('left');
+      if (rightCount >= 1) occupiedSides.add('right');
+      if (leftCount + rightCount >= 2) occupiedRows += 1;
+      continue;
+    }
+
+    const rowCount = countDrawingGlyphs(substringByDisplayCols(row, checkStart, checkEnd));
+    totalGlyphs += rowCount;
+    if (rowCount >= 2) {
+      occupiedRows += 1;
+      occupiedSides.add(offset < 0 ? 'above' : 'below');
+    }
+  }
+
+  const hasVerticalDrawingNeighbor = occupiedSides.has('above') || occupiedSides.has('below');
+  return totalGlyphs >= 6
+    && occupiedRows >= 2
+    && occupiedSides.size >= 2
+    && hasVerticalDrawingNeighbor;
+};
+
 const hasJapaneseChar = (text: string) => RE_JAPANESE_CHAR.test(text);
 
 const isNaturalJapaneseText = (text: string, allowShort = false): boolean => {
@@ -252,6 +308,13 @@ const isNaturalJapaneseText = (text: string, allowShort = false): boolean => {
   if (scriptCharacters.length >= 4 && (kanaCount >= 2 || cjkCount >= 2)) return true;
   if (kanaCount >= 2) return true;
   if (cjkCount >= 2 && new Set(scriptCharacters).size >= 2) return true;
+  if (
+    allowShort
+    && cjkCount >= 1
+    && kanaCount >= 1
+    && scriptCharacters.length >= 2
+    && RE_JAPANESE_PUNCTUATION.test(text)
+  ) return true;
   return allowShort
     && scriptCharacters.length === 1
     && kanaCount === 1
@@ -259,6 +322,45 @@ const isNaturalJapaneseText = (text: string, allowShort = false): boolean => {
 };
 
 const isStrictJapaneseText = (text: string) => isNaturalJapaneseText(text);
+
+const hasStrongLexicalEvidence = (text: string): boolean => {
+  const characters = text.match(RE_JAPANESE_CHARS_G) || [];
+  const hiragana = characters.filter((character) => /[ぁ-ん]/u.test(character));
+  const katakana = characters.filter((character) => /[ァ-ヶ\uff66-\uff9f]/u.test(character));
+  const cjk = characters.filter((character) => /[一-龯々〆ヵヶ]/u.test(character));
+  const strongHiragana = hiragana.filter((character) => !/[っぅゃゅょぁぃぇぉ]/u.test(character));
+  const hasHiraganaPhrase = (
+    /[ぁ-ん]{2,}/u.test(text)
+    && new Set(strongHiragana).size >= 2
+  ) || (hiragana.length >= 3 && RE_JAPANESE_PUNCTUATION.test(text));
+  const hasMixedPhrase = cjk.length >= 1 && hiragana.length >= 1 && characters.length >= 3;
+  const hasKatakanaWord = katakana.length >= 3
+    && new Set(katakana.filter((character) => character !== 'ー')).size >= 2
+    && !katakana.every((character) => RE_AA_CHARS.test(character));
+  const hasCjkPhrase = cjk.length >= 3 && new Set(cjk).size >= 2;
+  const hasShortPunctuatedPhrase = characters.length >= 2
+    && RE_JAPANESE_PUNCTUATION.test(text)
+    && (new Set(characters).size >= 2 || hiragana.length >= 2);
+  return hasHiraganaPhrase
+    || hasMixedPhrase
+    || hasKatakanaWord
+    || hasCjkPhrase
+    || hasShortPunctuatedPhrase;
+};
+
+const isLikelyAAFaceFragment = (text: string): boolean => {
+  const characters = text.match(RE_JAPANESE_CHARS_G) || [];
+  if (characters.length === 0 || characters.length > 7 || hasStrongLexicalEvidence(text)) {
+    return false;
+  }
+  const aaCount = characters.filter((character) => RE_AA_CHARS.test(character)).length;
+  const symbols = text.match(RE_SYMBOLS_G) || [];
+  const mostlyShapeGlyphs = aaCount / characters.length >= 0.5;
+  const repetitiveShapes = new Set(characters).size <= 2 && mostlyShapeGlyphs;
+  const framedLikeFace = RE_FACE_FRAME.test(text) && mostlyShapeGlyphs;
+  const symbolHeavyShape = symbols.length >= characters.length && mostlyShapeGlyphs;
+  return repetitiveShapes || framedLikeFace || symbolHeavyShape;
+};
 
 const RE_AA_EFFECTS = /．・｀ｰ"|｀ｰ"/;
 
@@ -336,8 +438,8 @@ function segmentContent(content: string, requestId: number): void {
   const newSegments: WorkerTextSegment[] = [];
 
   lines.forEach((line, lineIdx) => {
-    // --- Fast path: skip per-part processing for lines with no Japanese and no auto-select keywords ---
-    if (!hasJapaneseChar(line) && !RE_AUTO_SELECTED.test(line)) {
+    // --- Fast path: skip per-part processing for lines with no Japanese ---
+    if (!hasJapaneseChar(line)) {
       if (line.length > 0) {
         newSegments.push({
           id: `seg-${lineIdx}-0`,
@@ -450,7 +552,12 @@ function segmentContent(content: string, requestId: number): void {
           const nextLine = lineIdx < lines.length - 1 ? lines[lineIdx + 1] : "";
           
           // 1. Check for immediate horizontal border lines (top/bottom of a box)
-          const isTopOrBottom = RE_BOX_BORDER_ANY.test(prevLine) || RE_BOX_BORDER_ANY.test(nextLine);
+          const isActualBoxBorderLine = (candidateLine: string): boolean => (
+            candidateLine.length > 0
+            && RE_BOX_BORDER_ANY.test(candidateLine)
+            && RE_BAR_CHAR.test(candidateLine)
+          );
+          const isTopOrBottom = isActualBoxBorderLine(prevLine) || isActualBoxBorderLine(nextLine);
           
           // 2. Check for vertical continuity: neighbors have borders at the same positions (with tolerance)
           const checkBorder = (l: string, idx: number) => {
@@ -480,6 +587,7 @@ function segmentContent(content: string, requestId: number): void {
       const verticalPipesInLine = (line.match(RE_VERTICAL_PIPES_G) || []).length;
       const isAAStructureLine = verticalPipesInLine > 4;
       const isInsideBox = !isAAStructureLine && isBoxIsolated && (hasBothBordersWithPipe || (leftBorderIsBoxPipe && getCleanBoxCtx()));
+      const hasVerifiedDialogueBox = isInsideBox && getCleanBoxCtx();
 
       let _hasVertBoxCtx: boolean | undefined;
       const getVertBoxCtx = (): boolean => {
@@ -499,19 +607,30 @@ function segmentContent(content: string, requestId: number): void {
       // Guard: when all sides are blank but text is entirely AA chars and short (≤6), it's likely an AA art fragment
       // Threshold of 6 covers most AA fragments while preserving legitimate short sound effects
       const isAllAAOnly = jpCharsMatch.length > 0 && jpCharsMatch.every(c => RE_AA_CHARS.test(c));
+      const hasStrongLanguage = hasStrongLexicalEvidence(part);
+      const isLikelyFaceFragment = isLikelyAAFaceFragment(part);
+      const hasDenseAAContext = jpCharsMatch.length <= 4
+        && !hasVerifiedDialogueBox
+        && hasDenseAADrawingContext(lines, lineIdx, currentOffset, currentOffset + part.length);
       // Guard: segments with no real Japanese script content are never selectable in any path
       // Real Japanese = hiragana, katakana (\u30a0-\u30ff), kanji (\u4e00-\u9faf) — not just fullwidth ASCII (\uff01-\uff5e)
       // Blocks: single AA art chars (人,ノ), fullwidth punctuation only (（）), special chars
       // Allows: hiragana (お,え〜), katakana sound effects, kanji text
       const hasHiragana = RE_STANDARD_HIRAGANA.test(part);
       const hasJapaneseScript = RE_JAPANESE_SCRIPT.test(part);
-      const isNeverSelectable = RE_DISQUALIFIED.test(part) || RE_NOISE_ONLY.test(part) || !RE_MEANINGFUL_JP.test(part) || (!hasHiragana && isAllAAOnly && jpCharsMatch.length <= 1);
+      const isNeverSelectable = RE_DISQUALIFIED.test(part)
+        || RE_NOISE_ONLY.test(part)
+        || !RE_MEANINGFUL_JP.test(part)
+        || isLikelyFaceFragment
+        || hasDenseAAContext
+        || (!hasHiragana && isAllAAOnly && jpCharsMatch.length <= 1);
       const isAllSidesBlankQualified = isAllSidesBlank && !isNeverSelectable;
 
       // Relaxed path first (isAllSidesBlank already computed) to short-circuit the expensive strict regex
       // When all 4 sides are blank (isAllSidesBlankQualified), skip isDrawing: truly isolated text is likely a sound effect / annotation
       const isStrict = !isThreadNameLine && !isNeverSelectable && isJp && hasEnoughDistinctJpChars && (!isTouchingBar || hasNoAAChars) && (
-        isAllSidesBlankQualified || (getSafeVertCtx() && !getIsDrawing() && isStrictJapaneseText(part) && (isAboveThreadName || getVertIsolated()))
+        (isAllSidesBlankQualified && !isLikelyFaceFragment)
+        || (getSafeVertCtx() && !getIsDrawing() && isStrictJapaneseText(part) && (isAboveThreadName || getVertIsolated()))
       );
 
       // Edge position: outer sides of the segment contain only whitespace/border chars
@@ -551,7 +670,6 @@ function segmentContent(content: string, requestId: number): void {
         ))
       );
 
-      const isAutoSelected = RE_AUTO_SELECTED.test(part);
       const isNaturalText = isNaturalJapaneseText(part, true);
 
       const hasSomeNonAAChars = jpCharsMatch.some(c => !RE_AA_CHARS.test(c));
@@ -589,6 +707,28 @@ function segmentContent(content: string, requestId: number): void {
           line.substring(currentOffset + part.length, rightBorderIdx),
         )
       );
+      const leadingWhitespaceWidth = getDisplayWidth(
+        leftContent.match(/[\s\u3000\u00A0\u2000-\u200B]+$/u)?.[0] || '',
+      );
+      const trailingWhitespaceWidth = getDisplayWidth(
+        rightContent.match(/^[\s\u3000\u00A0\u2000-\u200B]+/u)?.[0] || '',
+      );
+      const hasComfortableHorizontalSpace = (
+        leadingWhitespaceWidth >= 2
+        && trailingWhitespaceWidth >= 2
+      ) || (
+        Math.max(leadingWhitespaceWidth, trailingWhitespaceWidth) >= 6
+        && (
+          RE_STRICT_BLANK.test(leftContent)
+          || RE_STRICT_BLANK.test(rightContent)
+          || hasPairedDialogueBorders
+        )
+      );
+      const hasDialogueContextEvidence = hasStrongLanguage
+        || jpCharsMatch.length >= 6
+        || hasComfortableHorizontalSpace
+        || hasPairedDialogueBorders
+        || isInsideBox;
       const isStrongBorderedNaturalText = (
         isNaturalText
         && (
@@ -686,7 +826,9 @@ function segmentContent(content: string, requestId: number): void {
 
       const isStandaloneNaturalText = (
         !isThreadNameLine
+        && !isNeverSelectable
         && isNaturalText
+        && hasDialogueContextEvidence
         && (
           jpCharsMatch.length >= 4
           || (
@@ -699,6 +841,7 @@ function segmentContent(content: string, requestId: number): void {
       );
       const isGapSeparatedNaturalText = (
         !isThreadNameLine
+        && !isNeverSelectable
         && isNaturalText
         && (
           jpCharsMatch.length >= 4
@@ -728,8 +871,9 @@ function segmentContent(content: string, requestId: number): void {
         && !getIsDrawing()
       );
 
-      const isIndentedDialogue = !RE_DISQUALIFIED.test(part) && !RE_NOISE_ONLY.test(part) &&
+      const isIndentedDialogue = !isNeverSelectable &&
                                  isNaturalText && !getIsDrawing() &&
+                                 hasDialogueContextEvidence &&
                                  (
                                    isStandaloneNaturalText
                                    || isGapSeparatedNaturalText
@@ -742,8 +886,9 @@ function segmentContent(content: string, requestId: number): void {
                                    )
                                  );
 
-      const isIsolatedDialogue = !RE_DISQUALIFIED.test(part) && !RE_NOISE_ONLY.test(part) &&
+      const isIsolatedDialogue = !isNeverSelectable &&
                                  /[ぁ-んァ-ン\uff66-\uff9f]/.test(part) &&
+                                 hasDialogueContextEvidence &&
                                  (!getIsDrawing() || !isDrawing(part)) &&
                                  getDisplayWidth(trailingSpaces) >= 2 &&
                                  RE_STRICT_BLANK.test(rightContent) &&
@@ -767,7 +912,6 @@ function segmentContent(content: string, requestId: number): void {
         && !RE_NOISE_ONLY.test(part)
         && (
           isNaturalText
-          || isAutoSelected
           || isStrict
           || isBoxedDialogue
           || isContextDlg
@@ -775,7 +919,9 @@ function segmentContent(content: string, requestId: number): void {
           || isIndentedDialogue
           || isIsolatedDialogue
         );
-      const isAutoSelectExcluded = RE_AUTO_SELECT_EXCLUDE.test(part);
+      const isAutoSelectExcluded = RE_AUTO_SELECT_EXCLUDE.test(part)
+        || isLikelyFaceFragment
+        || hasDenseAAContext;
 
       newSegments.push({
         id: `seg-${lineIdx}-${currentOffset}`,
@@ -783,7 +929,6 @@ function segmentContent(content: string, requestId: number): void {
         original: part,
         isJapanese,
         isStrictJapanese: isStrict,
-        isAutoSelected: isAutoSelected,
         isBoxedDialogue: isBoxedDialogue,
         isContextDialogue: isContextDlg,
         isArrowBox: isArrowBox,

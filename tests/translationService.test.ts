@@ -12,9 +12,11 @@ import {
   normalizeTranslationProvider,
 } from '../services/translationService';
 
-test('저장된 엔진 값은 허용된 두 모드로만 복구한다', () => {
+test('저장된 엔진 값은 허용된 공급자로만 복구한다', () => {
   assert.equal(normalizeTranslationProvider('gemini'), 'gemini');
   assert.equal(normalizeTranslationProvider('ollama'), 'ollama');
+  assert.equal(normalizeTranslationProvider('codex'), 'codex');
+  assert.equal(normalizeTranslationProvider('openrouter'), 'openrouter');
   assert.equal(normalizeTranslationProvider('unknown'), 'ollama');
   assert.equal(normalizeTranslationProvider(null), 'ollama');
 });
@@ -30,12 +32,24 @@ test('선택한 엔진에 맞는 준비 상태와 모델명을 반환한다', ()
   assert.equal(isProviderReady('ollama', 'unused-key', false), false);
   assert.equal(isProviderReady('gemini', 'entered-key', false), true);
   assert.equal(isProviderReady('gemini', '   ', true), false);
+  assert.equal(isProviderReady('openrouter', 'entered-key', false), true);
+  assert.equal(isProviderReady('openrouter', '   ', true), false);
+  assert.equal(isProviderReady('codex', '', false, {
+    ok: true,
+    authenticated: true,
+    model: 'gpt-5.6-luna',
+    cliVersion: 'codex-cli test',
+    message: 'ready',
+  }), true);
+  assert.equal(isProviderReady('codex', '', true, null), false);
   assert.equal(getProviderModelLabel('gemini'), 'gemini-3.6-flash');
   assert.equal(
     getProviderModelLabel('gemini', 'unused', 'gemini-3.1-flash-lite'),
     'gemini-3.1-flash-lite',
   );
   assert.equal(getProviderModelLabel('ollama', 'custom-model'), 'custom-model');
+  assert.equal(getProviderModelLabel('codex'), 'gpt-5.6-luna');
+  assert.equal(getProviderModelLabel('openrouter'), 'google/gemma-3-27b-it');
 });
 
 test('Gemini용 보수적 청크 한도를 공통 청커에 적용할 수 있다', () => {

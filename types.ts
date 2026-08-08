@@ -41,6 +41,7 @@ export interface TextSegment {
   isIndentedDialogue?: boolean;
   isIsolatedDialogue?: boolean;
   isAutoSelectExcluded?: boolean;
+  isPatternAutoSelectExcluded?: boolean;
   isUserExcluded?: boolean;
   isSelected: boolean;
   isTranslated: boolean;
@@ -88,7 +89,7 @@ export interface ManualRegexRules {
 
 export type AppTheme = 'dark' | 'light';
 
-export type TranslationProvider = 'ollama' | 'gemini';
+export type TranslationProvider = 'ollama' | 'gemini' | 'codex' | 'openrouter';
 
 export interface OllamaRuntimeInfo {
   ok: boolean;
@@ -96,5 +97,13 @@ export interface OllamaRuntimeInfo {
   model: string;
   defaultModel: string;
   mode: 'local-proxy' | 'direct-cloud';
+  message: string;
+}
+
+export interface CodexRuntimeInfo {
+  ok: boolean;
+  authenticated: boolean;
+  model: string;
+  cliVersion: string;
   message: string;
 }
