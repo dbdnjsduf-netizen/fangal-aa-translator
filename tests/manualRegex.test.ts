@@ -162,6 +162,48 @@ test('이미 선택된 큰 세그먼트에 규칙을 추가해도 분할하거�
   assert.equal(result[0].isSelected, true);
 });
 
+test('아직 전체선택 전인 자동 대사도 한 글자 수동정규식이 다시 분할하지 않는다', () => {
+  const source = segment('auto-spaced-dialogue', 'い　い　加　減　死　ね　よ　お　前　等　ぁ　あ　あっ　！　！', {
+    isJapanese: true,
+    isSelected: false,
+    isAutoSelected: true,
+    isStrictJapanese: true,
+  });
+  const result = applyManualRegexRules([source], rulesFor('あ'));
+
+  assert.equal(result.length, 1);
+  assert.strictEqual(result[0], source);
+  assert.equal(result[0].isManualRegexSelection, undefined);
+  assert.equal(result[0].isAutoSelected, true);
+});
+
+test('자동 감지됐지만 전체선택 제외된 항목은 수동정규식으로 다시 선택한다', () => {
+  const source = segment('excluded-auto', 'あ', {
+    isJapanese: true,
+    isSelected: false,
+    isAutoSelected: true,
+    isStrictJapanese: true,
+    isAutoSelectExcluded: true,
+  });
+  const [result] = applyManualRegexRules([source], rulesFor('あ'));
+
+  assert.equal(result.isSelected, true);
+  assert.equal(result.isManualRegexSelection, true);
+});
+
+test('학습 패턴 때문에 전체선택 제외된 항목도 수동정규식을 우선한다', () => {
+  const source = segment('pattern-excluded-auto', '対象', {
+    isJapanese: true,
+    isSelected: false,
+    isAutoSelected: true,
+    isPatternAutoSelectExcluded: true,
+  });
+  const [result] = applyManualRegexRules([source], rulesFor('対象'));
+
+  assert.equal(result.isSelected, true);
+  assert.equal(result.isManualRegexSelection, true);
+});
+
 test('새 규칙만 증분 적용해 기존에 직접 해제한 정규식 선택은 건드리지 않는다', () => {
   const previous = rulesFor('以前');
   const next = addManualRegexRule(

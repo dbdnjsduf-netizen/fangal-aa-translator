@@ -250,6 +250,35 @@ test('한 칸씩 규칙적으로 띄운 말풍선 대사를 하나의 가로 번
   assert.equal(detectVerticalTextGroups(sample, segments).length, 0);
 });
 
+test('한 글자씩 띄운 장문과 분리된 느낌표까지 하나의 자동선택 단위로 묶는다', () => {
+  const sample = '＞　い　い　加　減　死　ね　よ　お　前　等　ぁ　あ　あ　あ　あ　あ　あっ　！　！　\u2009 ＜';
+  const segments = segment(sample);
+  const selectable = segments.filter(isSelectable);
+
+  assert.equal(segments.map(({ text }) => text).join(''), sample);
+  assert.equal(selectable.length, 1);
+  assert.equal(
+    selectable[0].text,
+    'い　い　加　減　死　ね　よ　お　前　等　ぁ　あ　あ　あ　あ　あ　あっ　！　！',
+  );
+  assert.equal(selectable[0].isAutoSelected, true);
+});
+
+test('혼합 폭 공백 사이의 독립 점을 넘어 邪王부터 전체 필살기 대사를 선택한다', () => {
+  const sample = '＞　邪 \u200A 王\u2009.\u200A 雷　龍　波\u2009 \u2005ぁ　あ　あ　あ　あ　あ　あ　あ　っ　！　！　\u2009 ＜';
+  const segments = segment(sample);
+  const selectable = segments.filter(isSelectable);
+
+  assert.equal(segments.map(({ text }) => text).join(''), sample);
+  assert.equal(selectable.length, 1);
+  assert.equal(
+    selectable[0].text,
+    '邪 \u200A 王\u2009.\u200A 雷　龍　波\u2009 \u2005ぁ　あ　あ　あ　あ　あ　あ　あ　っ　！　！',
+  );
+  assert.match(selectable[0].text, /^邪[\s\u2000-\u200B]+王/u);
+  assert.equal(selectable[0].isAutoSelected, true);
+});
+
 test('문장 근거가 없는 띄엄띄엄한 AA 모양 문자는 가로 대사로 합치지 않는다', () => {
   const sample = '　　　　　　　　＞　ハ　人　ノ　へ　ミ　ハ　人　＜';
   const selectedText = segment(sample)
