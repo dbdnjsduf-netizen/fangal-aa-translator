@@ -35,7 +35,7 @@ test('미인식 세그먼트에서 사용자가 지정한 문자 범위만 번�
   assert.equal(result[2].isSelected, false);
 });
 
-test('이미 인식된 전체 세그먼트는 불필요하게 분할하지 않고 선택한다', () => {
+test('이미 인식된 전체 세그먼트도 수동 선택으로 확실하게 덮어쓴다', () => {
   const recognized = segment('見逃した台詞', { isJapanese: true });
   const [result] = applyManualSelectionRanges(
     [recognized],
@@ -44,7 +44,7 @@ test('이미 인식된 전체 세그먼트는 불필요하게 분할하지 않�
 
   assert.equal(result.id, recognized.id);
   assert.equal(result.isSelected, true);
-  assert.equal(result.isManualSelection, undefined);
+  assert.equal(result.isManualSelection, true);
 });
 
 test('부분 수동 선택의 주변 조각은 부모의 기존 선택 상태를 물려받지 않는다', () => {
@@ -182,4 +182,49 @@ test('수동정규식으로 선택된 전체 항목도 일반 수동이 가로 �
   assert.equal(overridden.isManualSelection, true);
   assert.equal(overridden.isManualRegexSelection, undefined);
   assert.equal(overridden.isVerticalText, false);
+});
+
+test('자동·수동정규식 조각과 그 사이 공백을 일반 수동 한 덩어리로 덮어쓴다', () => {
+  const pieces = [
+    segment('邪', { id: 'seg-0', isJapanese: true, isSelected: true, isAutoSelected: true }),
+    segment('　', { id: 'seg-1' }),
+    segment('王雷龍波', {
+      id: 'seg-2',
+      isJapanese: true,
+      isSelected: true,
+      isManualRegexSelection: true,
+    }),
+    segment('　', { id: 'seg-3' }),
+    segment('ああああっ！！', {
+      id: 'seg-4',
+      isJapanese: true,
+      isSelected: true,
+      isAutoSelected: true,
+    }),
+  ];
+  const selectedRanges = pieces
+    .filter(({ text }) => text.trim().length > 0)
+    .map(({ id, text }) => ({ segmentId: id, start: 0, end: text.length }));
+  const result = applyManualSelectionRanges(pieces, selectedRanges);
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0].text, '邪　王雷龍波　ああああっ！！');
+  assert.equal(result[0].original, '邪　王雷龍波　ああああっ！！');
+  assert.equal(result[0].isManualSelection, true);
+  assert.equal(result[0].isManualRegexSelection, undefined);
+  assert.equal(result[0].isAutoSelected, false);
+  assert.equal(result[0].isSelected, true);
+});
+
+test('수동 선택 사이에 줄바꿈이 있으면 서로 다른 행을 합치지 않는다', () => {
+  const first = segment('上', { id: 'seg-first', isJapanese: true, isSelected: true });
+  const newline = segment('\n', { id: 'seg-newline' });
+  const second = segment('下', { id: 'seg-second', isJapanese: true, isSelected: true });
+  const result = applyManualSelectionRanges(
+    [first, newline, second],
+    [first, second].map(({ id, text }) => ({ segmentId: id, start: 0, end: text.length })),
+  );
+
+  assert.deepEqual(result.map(({ text }) => text), ['上', '\n', '下']);
+  assert.equal(result.filter(({ isManualSelection }) => isManualSelection).length, 2);
 });
