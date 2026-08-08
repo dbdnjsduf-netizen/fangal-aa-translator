@@ -8,6 +8,15 @@ interface ChangelogModalProps {
 
 const changelogData = [
   {
+    version: '1.11.1',
+    title: 'AA 내부 세로열·짧은 대사 감지 보정',
+    changes: [
+      '멀리 떨어진 외곽 파이프 사이의 복잡한 AA 조각을 세로 말풍선으로 오인하지 않도록 행 밀도 검사 추가',
+      '자동 세로열은 행을 건너뛰지 않는 연속 문자 슬롯만 기본 허용',
+      '狂ってる…처럼 어휘 근거가 충분한 단문은 특이한 말풍선에서도 주변 AA 억제로 누락되지 않게 보호',
+    ],
+  },
+  {
     version: '1.11.0',
     title: 'GitHub 자동 업데이트',
     changes: [

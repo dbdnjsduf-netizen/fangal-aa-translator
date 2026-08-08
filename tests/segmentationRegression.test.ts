@@ -114,6 +114,22 @@ test('검증된 말풍선 박스 안의 한자+작은 가나+!? 짧은 대사를
   assert.match(selectedText, /婿っ!?/u);
 });
 
+test('둥근 AA 말풍선 안의 자연스러운 狂ってる… 단문을 전체 선택에 포함한다', () => {
+  const sample = [
+    '　　　　　　　　　┌──────────、',
+    '',
+    '　　　　　　　　　│　　　狂ってる…　　│',
+    '',
+    '　　　　　　　　　乂＿＿＿＿＿＿＿＿ノ',
+  ].join('\n');
+  const selectedText = segment(sample)
+    .filter(isSelectable)
+    .map(({ text }) => text)
+    .join('');
+
+  assert.match(selectedText, /狂ってる…/u);
+});
+
 test('박스 밖에서 여러 방향의 AA 획에 둘러싸인 짧은 가나 조각은 선택하지 않는다', () => {
   const sample = [
     '　　　　　／V＼　　人',

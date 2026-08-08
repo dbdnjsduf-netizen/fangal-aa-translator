@@ -12,12 +12,15 @@ const LOOSE_BUBBLE_BOUNDARY = /[<>＜＞()（）／＼\\/⌒'`｀{}｛｝]/u;
 const TRACK_CENTER_TOLERANCE = 10;
 const TRACK_WIDTH_TOLERANCE = 5;
 const COLUMN_TOLERANCE = 2;
-const MAX_LINE_GAP = 3;
+const MAX_LINE_GAP = 1;
 // Up to three full-width cells of AA-border wobble is tolerated, while the
 // previous 18-column jumps that connected unrelated face parts are rejected.
 const MAX_VERTICAL_COLUMN_DRIFT = 6;
-const MAX_LOOSE_LINE_GAP = 2;
+const MAX_LOOSE_LINE_GAP = 1;
 const MAX_LOOSE_STEP_DRIFT = 6;
+const MAX_BOX_ROW_CONTENT_GLYPHS = 8;
+const MAX_BOX_ROW_DRAWING_GLYPHS = 3;
+const MAX_LOOSE_ROW_OTHER_GLYPHS = 2;
 const VERTICAL_AA_ONLY = /^[ニィノイ二三彡一。ー（）［］]+$/u;
 
 export interface VerticalTextToken {
@@ -654,6 +657,7 @@ export function detectRawVerticalGroups(content: string): RawVerticalGroup[] {
         makeBoundaryPair('arrow', leftArrows, rightArrows, glyph.displayX),
       ].filter((pair): pair is NonNullable<typeof pair> => Boolean(pair))
         .filter(({ width }) => width >= 4 && width <= 80)
+        .filter((pair) => isSparseVerticalBoxRow(glyphs, pair.left, pair.right))
         .sort((left, right) => left.width - right.width);
       const pair = pairs[0];
       if (!pair) continue;
@@ -830,7 +834,7 @@ function detectLooseVerticalGroups(lines: string[], claimedTokens: Set<string>):
         other !== glyph
         && Math.abs(other.displayX - glyph.displayX) <= 2
       )))
-      .filter((glyph) => hasLooseBubbleBoundary(glyphs, glyph.displayX))
+      .filter((glyph) => hasSparseLooseBubbleSlot(glyphs, glyph))
       .map((glyph) => ({
         ...glyph,
         line: lineIndex,
@@ -885,15 +889,43 @@ function detectLooseVerticalGroups(lines: string[], claimedTokens: Set<string>):
     }));
 }
 
-function hasLooseBubbleBoundary(glyphs: RawGlyph[], x: number) {
+function hasSparseLooseBubbleSlot(glyphs: RawGlyph[], sourceGlyph: RawGlyph) {
   const boundaries = glyphs.filter(({ char }) => LOOSE_BUBBLE_BOUNDARY.test(char));
-  const hasLeftBoundary = boundaries.some(({ displayX }) => (
-    displayX < x && x - displayX <= 60
+  const leftBoundary = [...boundaries]
+    .filter(({ displayX }) => displayX < sourceGlyph.displayX)
+    .sort((left, right) => right.displayX - left.displayX)[0];
+  const rightBoundary = boundaries
+    .filter(({ displayX }) => displayX > sourceGlyph.displayX)
+    .sort((left, right) => left.displayX - right.displayX)[0];
+  if (
+    !leftBoundary
+    || !rightBoundary
+    || sourceGlyph.displayX - leftBoundary.displayX > 60
+    || rightBoundary.displayX - sourceGlyph.displayX > 60
+  ) return false;
+
+  const otherInteriorGlyphs = glyphs.filter((glyph) => (
+    glyph !== sourceGlyph
+    && glyph.displayX > leftBoundary.displayX
+    && glyph.displayX < rightBoundary.displayX
+    && !/^\s$/u.test(glyph.char)
   ));
-  const hasRightBoundary = boundaries.some(({ displayX }) => (
-    displayX > x && displayX - x <= 60
+  return otherInteriorGlyphs.length <= MAX_LOOSE_ROW_OTHER_GLYPHS;
+}
+
+function isSparseVerticalBoxRow(
+  glyphs: RawGlyph[],
+  leftBoundary: RawGlyph,
+  rightBoundary: RawGlyph,
+) {
+  const interior = glyphs.filter((glyph) => (
+    glyph.displayX > leftBoundary.displayX
+    && glyph.displayX < rightBoundary.displayX
+    && !/^\s$/u.test(glyph.char)
   ));
-  return hasLeftBoundary && hasRightBoundary;
+  if (interior.length > MAX_BOX_ROW_CONTENT_GLYPHS) return false;
+  const drawingGlyphs = interior.filter(({ char }) => !VERTICAL_SOURCE_CHAR.test(char));
+  return drawingGlyphs.length <= MAX_BOX_ROW_DRAWING_GLYPHS;
 }
 
 function trimLooseTrack(tokens: CandidateToken[]) {
