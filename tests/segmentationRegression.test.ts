@@ -80,6 +80,71 @@ test('AA 구조 문자와 반복 가타카나는 일반 대사로 선택하지 �
   assert.equal(detectVerticalTextGroups(sample, segments).length, 0);
 });
 
+test('얼굴의 눈썹·눈·윤곽에 쓰이는 짧은 일본어 모양 문자를 대사로 선택하지 않는다', () => {
+  const sample = [
+    '　　　　（　ノ　ヽ　）',
+    '　　　　（　へ　へ　）',
+    '　　　　ハ　　ハ',
+    '　　　　つ　　ノ',
+    '',
+    '　　　　おい',
+    '　　　　危険！',
+  ].join('\n');
+  const selectedText = segment(sample)
+    .filter(isSelectable)
+    .map(({ text }) => text)
+    .join('');
+
+  assert.doesNotMatch(selectedText, /ノ|へ|ハ|つ/u);
+  assert.match(selectedText, /おい/u);
+  assert.match(selectedText, /危険/u);
+});
+
+test('검증된 말풍선 박스 안의 한자+작은 가나+!? 짧은 대사를 선택한다', () => {
+  const sample = [
+    '　　　┌──────────┐',
+    '　　　│　　　婿っ!?　　　│',
+    '　　　└──────────┘',
+  ].join('\n');
+  const selectedText = segment(sample)
+    .filter(isSelectable)
+    .map(({ text }) => text)
+    .join('');
+
+  assert.match(selectedText, /婿っ!?/u);
+});
+
+test('박스 밖에서 여러 방향의 AA 획에 둘러싸인 짧은 가나 조각은 선택하지 않는다', () => {
+  const sample = [
+    '　　　　　／V＼　　人',
+    '　　　　ノ　　ヽ／　＼',
+    '　　　　　　トェ～ぅ',
+    '　　　　乂　　V　　ﾉ',
+    '　　　　　／　｜　＼',
+  ].join('\n');
+  const selectedText = segment(sample)
+    .filter(isSelectable)
+    .map(({ text }) => text)
+    .join('');
+
+  assert.doesNotMatch(selectedText, /トェ～ぅ/u);
+});
+
+test('자연스러운 장문 대사는 위아래 줄에 연속되어 있어도 자동 선택한다', () => {
+  const sample = [
+    '　　　これは上の行から続いている自然な長文です',
+    '　　　上下に余白がなくても文章なら選択されます',
+    '　　　最後の行も同じ話者の台詞として扱います',
+  ].join('\n');
+  const selectedText = segment(sample)
+    .filter(isSelectable)
+    .map(({ text }) => text)
+    .join('');
+  assert.match(selectedText, /これは上の行/u);
+  assert.match(selectedText, /上下に余白/u);
+  assert.match(selectedText, /最後の行/u);
+});
+
 test('가로 두 줄 대사를 세로쓰기로 뒤집어 읽지 않는다', () => {
   const sample = [
     '|　それからこの世界でドラゴンワールドとして　|',

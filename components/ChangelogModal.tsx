@@ -8,6 +8,36 @@ interface ChangelogModalProps {
 
 const changelogData = [
   {
+    version: '1.11.0',
+    title: 'GitHub 자동 업데이트',
+    changes: [
+      '상단 버전 버튼에서 설치본과 GitHub main의 최신 버전을 자동 비교',
+      'ZIP·Git 설치 모두 새 버전을 임시 폴더에서 설치·빌드 검증한 뒤 자동 교체',
+      '.env·API 키·금지항목·수동정규식 기록을 보존하고 완료 후 서버 자동 재시작',
+      '수정 중인 Git 작업 폴더에서는 파일 손상을 막기 위해 자동 업데이트 차단',
+    ],
+  },
+  {
+    version: '1.10.0',
+    title: '문자·세로쓰기 자동 감지 정밀화',
+    changes: [
+      'AA 문자표에 잘못 섞인 한글·근거 없는 음차 문자 제거',
+      '눈썹·눈·얼굴 윤곽의 짧은 모양 문자를 자연어 대사와 분리',
+      '자유형 세로쓰기는 양쪽 말풍선 경계와 연속된 직선 열을 갖춘 경우만 자동 인식',
+      '금지항목은 짧은 유사 오탐을 억제하고 수동정규식은 과잉 억제를 막는 학습 신호로 활용',
+    ],
+  },
+  {
+    version: '1.9.0',
+    title: 'Codex 로그인·OpenRouter 번역 엔진 추가',
+    changes: [
+      'Codex CLI의 ChatGPT OAuth 로그인을 재사용하는 GPT-5.6 Luna 번역 추가',
+      'OpenRouter API 키로 Gemma 3 27B 모델을 사용하는 번역 추가',
+      'Codex 인증 토큰을 앱이 읽거나 저장하지 않고 CLI에 실행 위임',
+      'OpenRouter 키는 현재 브라우저 탭에만 보관하고 로컬 서버가 안전하게 중계',
+    ],
+  },
+  {
     version: '1.8.0',
     title: '수동 정규식 오선택과 짧은 번역 배치 개선',
     changes: [

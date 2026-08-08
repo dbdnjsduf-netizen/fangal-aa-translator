@@ -9,10 +9,15 @@ const LEFT_ARROW_BOUNDARY = /[>＞]/;
 const RIGHT_ARROW_BOUNDARY = /[<＜]/;
 const LOOSE_VERTICAL_SOURCE_CHAR = /[ぁ-んァ-ヶ一-龯々〆ヵヶー！？。、…│┃\uff66-\uff9f]/;
 const LOOSE_BUBBLE_BOUNDARY = /[<>＜＞()（）／＼\\/⌒'`｀{}｛｝]/u;
-const TRACK_CENTER_TOLERANCE = 18;
+const TRACK_CENTER_TOLERANCE = 10;
 const TRACK_WIDTH_TOLERANCE = 5;
 const COLUMN_TOLERANCE = 2;
 const MAX_LINE_GAP = 3;
+// Up to three full-width cells of AA-border wobble is tolerated, while the
+// previous 18-column jumps that connected unrelated face parts are rejected.
+const MAX_VERTICAL_COLUMN_DRIFT = 6;
+const MAX_LOOSE_LINE_GAP = 2;
+const MAX_LOOSE_STEP_DRIFT = 6;
 const VERTICAL_AA_ONLY = /^[ニィノイ二三彡一。ー（）［］]+$/u;
 
 export interface VerticalTextToken {
@@ -779,7 +784,8 @@ export function detectRawVerticalGroups(content: string): RawVerticalGroup[] {
     const verticalColumns = columns.filter((column) => {
       const linesInColumn = [...new Set(column.tokens.map(({ line }) => line))];
       return linesInColumn.length >= 2
-        && Math.max(...linesInColumn) - Math.min(...linesInColumn) >= 1;
+        && Math.max(...linesInColumn) - Math.min(...linesInColumn) >= 1
+        && isStraightTokenTrack(column.tokens, MAX_VERTICAL_COLUMN_DRIFT, MAX_LINE_GAP);
     });
     const verticalTokens = verticalColumns
       // A smaller distance from the right border is the rightmost Japanese column.
@@ -836,13 +842,15 @@ function detectLooseVerticalGroups(lines: string[], claimedTokens: Set<string>):
 
   const tracks: Array<{ tokens: CandidateToken[]; lastLine: number; lastX: number }> = [];
   rows.forEach((row, line) => {
-    const active = tracks.filter(({ lastLine }) => line - lastLine <= 3);
+    const active = tracks.filter(({ lastLine }) => line - lastLine <= MAX_LOOSE_LINE_GAP);
     const used = new Set<typeof tracks[number]>();
     for (const token of [...row].sort((left, right) => (
       looseTokenPriority(right.char) - looseTokenPriority(left.char)
       || right.displayX - left.displayX
     ))) {
-      const maximumDistance = looseTokenPriority(token.char) > 0 ? 18 : 6;
+      const maximumDistance = looseTokenPriority(token.char) > 0
+        ? MAX_LOOSE_STEP_DRIFT
+        : MAX_VERTICAL_COLUMN_DRIFT;
       const nearest = active
         .filter((track) => (
           !used.has(track) && Math.abs(token.displayX - track.lastX) <= maximumDistance
@@ -863,7 +871,11 @@ function detectLooseVerticalGroups(lines: string[], claimedTokens: Set<string>):
 
   return tracks
     .map(({ tokens }) => trimLooseTrack(tokens))
-    .filter((tokens) => tokens.length >= 4 && isLikelyLooseVerticalGroup(tokens))
+    .filter((tokens) => (
+      tokens.length >= 4
+      && isStraightTokenTrack(tokens, MAX_VERTICAL_COLUMN_DRIFT, MAX_LOOSE_LINE_GAP)
+      && isLikelyLooseVerticalGroup(tokens)
+    ))
     .map((tokens) => ({
       top: Math.min(...tokens.map(({ line }) => line)),
       bottom: Math.max(...tokens.map(({ line }) => line)),
@@ -874,10 +886,14 @@ function detectLooseVerticalGroups(lines: string[], claimedTokens: Set<string>):
 }
 
 function hasLooseBubbleBoundary(glyphs: RawGlyph[], x: number) {
-  return glyphs.some(({ char, displayX }) => (
-    LOOSE_BUBBLE_BOUNDARY.test(char)
-    && Math.abs(displayX - x) <= 80
+  const boundaries = glyphs.filter(({ char }) => LOOSE_BUBBLE_BOUNDARY.test(char));
+  const hasLeftBoundary = boundaries.some(({ displayX }) => (
+    displayX < x && x - displayX <= 60
   ));
+  const hasRightBoundary = boundaries.some(({ displayX }) => (
+    displayX > x && displayX - x <= 60
+  ));
+  return hasLeftBoundary && hasRightBoundary;
 }
 
 function trimLooseTrack(tokens: CandidateToken[]) {
@@ -891,6 +907,25 @@ function trimLooseTrack(tokens: CandidateToken[]) {
 
 function looseTokenPriority(character: string) {
   return /^[ー！？。、…│┃\uff70]$/u.test(character) ? 0 : 1;
+}
+
+function isStraightTokenTrack(
+  tokens: CandidateToken[],
+  maximumDrift: number,
+  maximumLineGap: number,
+) {
+  const ordered = [...tokens].sort((left, right) => left.line - right.line);
+  const lineNumbers = [...new Set(ordered.map(({ line }) => line))];
+  if (lineNumbers.length < 2) return false;
+  for (let index = 1; index < lineNumbers.length; index += 1) {
+    if (lineNumbers[index] - lineNumbers[index - 1] > maximumLineGap) return false;
+  }
+  const xValues = ordered.map(({ displayX }) => displayX);
+  const minimumX = Math.min(...xValues);
+  const maximumX = Math.max(...xValues);
+  if (maximumX - minimumX > maximumDrift) return false;
+  const span = lineNumbers[lineNumbers.length - 1] - lineNumbers[0] + 1;
+  return lineNumbers.length / span >= 0.65;
 }
 
 function isLikelyLooseVerticalGroup(tokens: CandidateToken[]) {

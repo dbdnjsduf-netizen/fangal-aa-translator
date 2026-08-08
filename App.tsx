@@ -12,6 +12,7 @@ import { TranslationSettingsModal } from './components/TranslationSettingsModal'
 import { ImageExportModal } from './components/ImageExportModal';
 import { SelectionExclusionModal } from './components/SelectionExclusionModal';
 import { ManualRegexModal } from './components/ManualRegexModal';
+import { UpdateModal } from './components/UpdateModal';
 import {
   SelectionRange,
   ViewMode,
@@ -19,6 +20,7 @@ import {
   ApiUsageStats,
   DictionaryEntry,
   OllamaRuntimeInfo,
+  CodexRuntimeInfo,
   SelectionExclusionRules,
   ManualRegexRules,
   TranslationProvider,
@@ -26,8 +28,10 @@ import {
 import {
   GEMINI_SESSION_KEY,
   GEMINI_MODEL_STORAGE_KEY,
+  OPENROUTER_SESSION_KEY,
   OLLAMA_MODEL_STORAGE_KEY,
   getProviderModelLabel,
+  getTranslationProviderLabel,
   isProviderReady,
   normalizeTranslationProvider,
   normalizeGeminiModel,
@@ -35,6 +39,7 @@ import {
   translateSelection,
   translateBatch,
   getOllamaRuntimeInfo,
+  getCodexRuntimeInfo,
   resolveStoredSystemPrompt,
 } from './services/translationService';
 import {
@@ -67,7 +72,9 @@ import {
   MANUAL_REGEX_STORAGE_KEY,
 } from './services/manualRegex';
 import { APP_THEME_STORAGE_KEY, normalizeAppTheme } from './services/appTheme';
-import { Ban, Braces, FileText, Info, Activity, Download, Image as ImageIcon, Timer, History, Book, MessageSquareQuote, Server, CheckSquare, Moon, Sun } from 'lucide-react';
+import { refineAutoDetectionWithLearnedPatterns } from './services/detectionPatternLearning';
+import { AppUpdateStatus, fetchAppUpdateStatus } from './services/appUpdate';
+import { Ban, Braces, FileText, Info, Activity, Download, Image as ImageIcon, Timer, History, Book, MessageSquareQuote, Server, CheckSquare, Moon, Sun, CloudDownload } from 'lucide-react';
 
 type SmartTranslationUnit =
   | {
@@ -82,6 +89,13 @@ type SmartTranslationUnit =
       sourceText: string;
       requestText: string;
     };
+
+function getProviderSetupMessage(provider: TranslationProvider) {
+  if (provider === 'gemini') return 'Gemini API 키를 입력한 뒤 번역을 시작하세요.';
+  if (provider === 'openrouter') return 'OpenRouter API 키를 입력한 뒤 번역을 시작하세요.';
+  if (provider === 'codex') return '터미널에서 Codex에 로그인한 뒤 상태를 다시 확인하세요.';
+  return 'Ollama 연결과 모델 준비 상태를 먼저 확인하세요.';
+}
 
 function App() {
   const [content, setContent] = useState<string>("");
@@ -107,9 +121,13 @@ function App() {
   const [isManualRegexOpen, setIsManualRegexOpen] = useState(false);
   const [isTranslationSettingsOpen, setIsTranslationSettingsOpen] = useState(false);
   const [isImageExportOpen, setIsImageExportOpen] = useState(false);
+  const [isUpdateOpen, setIsUpdateOpen] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus | null>(null);
   const [fontSize, setFontSize] = useState(16);
   const [ollamaStatus, setOllamaStatus] = useState<OllamaRuntimeInfo | null>(null);
   const [isCheckingOllama, setIsCheckingOllama] = useState(true);
+  const [codexStatus, setCodexStatus] = useState<CodexRuntimeInfo | null>(null);
+  const [isCheckingCodex, setIsCheckingCodex] = useState(true);
   const [ollamaModel, setOllamaModel] = useState(
     () => localStorage.getItem(OLLAMA_MODEL_STORAGE_KEY) || '',
   );
@@ -121,6 +139,9 @@ function App() {
   );
   const [geminiApiKey, setGeminiApiKey] = useState(
     () => sessionStorage.getItem(GEMINI_SESSION_KEY) || '',
+  );
+  const [openRouterApiKey, setOpenRouterApiKey] = useState(
+    () => sessionStorage.getItem(OPENROUTER_SESSION_KEY) || '',
   );
   const [appTheme, setAppTheme] = useState(
     () => normalizeAppTheme(localStorage.getItem(APP_THEME_STORAGE_KEY)),
@@ -144,6 +165,16 @@ function App() {
     && ollamaStatus.modelAvailable
     && ollamaStatus.model === activeOllamaModel
   );
+  const activeApiKey = translationProvider === 'gemini'
+    ? geminiApiKey
+    : translationProvider === 'openrouter'
+      ? openRouterApiKey
+      : '';
+  const activeModel = getProviderModelLabel(
+    translationProvider,
+    activeOllamaModel,
+    geminiModel,
+  );
 
   const refreshOllamaStatus = async (model = ollamaModel || undefined) => {
     setIsCheckingOllama(true);
@@ -153,8 +184,19 @@ function App() {
     setIsCheckingOllama(false);
   };
 
+  const refreshCodexStatus = async () => {
+    setIsCheckingCodex(true);
+    setCodexStatus(await getCodexRuntimeInfo());
+    setIsCheckingCodex(false);
+  };
+
   useEffect(() => {
     void refreshOllamaStatus();
+    void refreshCodexStatus();
+    const updateTimer = window.setTimeout(() => {
+      void fetchAppUpdateStatus().then(setUpdateStatus).catch(() => undefined);
+    }, 1_000);
+    return () => window.clearTimeout(updateTimer);
   }, []);
 
   useEffect(() => {
@@ -165,6 +207,11 @@ function App() {
     if (geminiApiKey) sessionStorage.setItem(GEMINI_SESSION_KEY, geminiApiKey);
     else sessionStorage.removeItem(GEMINI_SESSION_KEY);
   }, [geminiApiKey]);
+
+  useEffect(() => {
+    if (openRouterApiKey) sessionStorage.setItem(OPENROUTER_SESSION_KEY, openRouterApiKey);
+    else sessionStorage.removeItem(OPENROUTER_SESSION_KEY);
+  }, [openRouterApiKey]);
 
   useEffect(() => {
     if (ollamaModel) localStorage.setItem(OLLAMA_MODEL_STORAGE_KEY, ollamaModel);
@@ -254,7 +301,10 @@ function App() {
 
   const handleSelectionExclusionsChange = (nextRules: SelectionExclusionRules) => {
     setSelectionExclusions(nextRules);
-    setSegments((current) => applySelectionExclusions(current, nextRules));
+    setSegments((current) => applySelectionExclusions(
+      refineAutoDetectionWithLearnedPatterns(current, nextRules, manualRegexRules),
+      nextRules,
+    ));
   };
 
   const handleBanSelection = (segmentId: string) => {
@@ -297,7 +347,14 @@ function App() {
     // and selection, and only select new matches instead of re-running the
     // worker as if the entire file had just been reopened.
     setSegments((current) => applySelectionExclusions(
-      applyManualRegexRules(current, addedRules),
+      applyManualRegexRules(
+        refineAutoDetectionWithLearnedPatterns(
+          current,
+          selectionExclusions,
+          nextRules,
+        ),
+        addedRules,
+      ),
       selectionExclusions,
     ));
   };
@@ -353,14 +410,13 @@ function App() {
     if (!selection) return;
     if (!isProviderReady(
       translationProvider,
-      geminiApiKey,
+      activeApiKey,
       ollamaReady,
+      codexStatus,
     )) {
       setIsTranslationSettingsOpen(true);
       alert(
-        translationProvider === 'gemini'
-          ? 'Gemini API 키를 입력한 뒤 번역을 시작하세요.'
-          : 'Ollama 연결과 모델 준비 상태를 먼저 확인하세요.',
+        getProviderSetupMessage(translationProvider),
       );
       return;
     }
@@ -371,12 +427,12 @@ function App() {
     try {
       const { text: translatedText, usage } = await translateSelection(
           translationProvider,
-          geminiApiKey,
+          activeApiKey,
           selection.text, 
           customDictionary, 
           useDefaultDictionary,
           systemPrompt,
-          translationProvider === 'gemini' ? geminiModel : activeOllamaModel,
+          activeModel,
       );
       
       const isUnchanged = translatedText.trim() === selection.text.trim();
@@ -418,14 +474,13 @@ function App() {
     if (selectedSegments.length === 0) return;
     if (!isProviderReady(
       translationProvider,
-      geminiApiKey,
+      activeApiKey,
       ollamaReady,
+      codexStatus,
     )) {
       setIsTranslationSettingsOpen(true);
       alert(
-        translationProvider === 'gemini'
-          ? 'Gemini API 키를 입력한 뒤 번역을 시작하세요.'
-          : 'Ollama 연결과 모델 준비 상태를 먼저 확인하세요.',
+        getProviderSetupMessage(translationProvider),
       );
       return;
     }
@@ -556,7 +611,7 @@ function App() {
 
       const { translations: finalTranslations, usage, failures: batchFailures } = await translateBatch(
           translationProvider,
-          geminiApiKey,
+          activeApiKey,
           textsToTranslate,
           customDictionary, 
           useDefaultDictionary,
@@ -578,7 +633,7 @@ function App() {
               totalDurationMs: statsBeforeBatch.totalDurationMs + partialUsage.totalDurationMs
             });
           },
-          translationProvider === 'gemini' ? geminiModel : activeOllamaModel,
+          activeModel,
       );
 
       const failedTranslationIndices = new Set<number>();
@@ -681,17 +736,13 @@ function App() {
                 <h1 className={`font-bold leading-none ${isLightMode ? 'text-slate-900' : 'text-slate-100'}`}>Fangal AA Translator</h1>
                 <div className="flex items-center gap-2 mt-0.5">
                    <span className="text-[10px] text-slate-400 font-mono">
-                      {getProviderModelLabel(
-                        translationProvider,
-                        activeOllamaModel,
-                        geminiModel,
-                     ).toUpperCase()}
+                      {activeModel.toUpperCase()}
                    </span>
                    <span className="w-0.5 h-2.5 bg-slate-700"></span>
                    <button 
                       onClick={() => setIsStatsOpen(true)}
                       className="text-[10px] text-green-400 font-mono flex items-center gap-1 hover:text-green-300 transition-colors"
-                      title={`${translationProvider === 'ollama' ? 'Ollama' : 'Gemini'} 사용량 보기`}
+                      title={`${getTranslationProviderLabel(translationProvider)} 사용량 보기`}
                    >
                       <Timer className="w-3 h-3" />
                       {apiStats.requestCount}회 · {(apiStats.totalDurationMs / 1000).toFixed(1)}초
@@ -707,8 +758,9 @@ function App() {
                   className={`${headerControlClass} ${
                     isProviderReady(
                       translationProvider,
-                      geminiApiKey,
+                      activeApiKey,
                       ollamaReady,
+                      codexStatus,
                     )
                       ? 'border-teal-600/50 text-teal-400'
                       : 'border-yellow-600/50 text-yellow-400'
@@ -716,7 +768,7 @@ function App() {
                   title="번역 엔진 및 인증 설정"
                 >
                   <Server className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">{translationProvider === 'ollama' ? 'Ollama' : 'Gemini'}</span>
+                  <span className="hidden sm:inline">{getTranslationProviderLabel(translationProvider)}</span>
                 </button>
                 <button
                   onClick={() => setIsDictOpen(true)}
@@ -757,6 +809,24 @@ function App() {
                 >
                   <Activity className="w-3.5 h-3.5" />
                   <span className="hidden sm:inline">Logic</span>
+                </button>
+                <button
+                  onClick={() => setIsUpdateOpen(true)}
+                  className={`${headerControlClass} ${
+                    updateStatus?.updateAvailable
+                      ? 'border-amber-500/60 text-amber-400'
+                      : ''
+                  }`}
+                  title={updateStatus?.updateAvailable
+                    ? `GitHub v${updateStatus.latestVersion} 업데이트 가능`
+                    : 'GitHub 최신 버전 확인'}
+                >
+                  <CloudDownload className="w-3.5 h-3.5" />
+                  <span className="hidden xl:inline">
+                    {updateStatus?.updateAvailable
+                      ? `v${updateStatus.latestVersion}`
+                      : `v${updateStatus?.currentVersion || '확인'}`}
+                  </span>
                 </button>
                 <button
                   onClick={() => setIsChangelogOpen(true)}
@@ -831,7 +901,13 @@ function App() {
           <FileUpload
             onFileLoaded={handleFileLoaded}
             translationProvider={translationProvider}
-            geminiApiKeyReady={Boolean(geminiApiKey)}
+            providerReady={isProviderReady(
+              translationProvider,
+              activeApiKey,
+              ollamaReady,
+              codexStatus,
+            )}
+            codexStatus={codexStatus}
             ollamaStatus={ollamaStatus}
             onOpenTranslationSettings={() => setIsTranslationSettingsOpen(true)}
           />
@@ -954,6 +1030,13 @@ function App() {
         provider={translationProvider}
       />
       <ChangelogModal isOpen={isChangelogOpen} onClose={() => setIsChangelogOpen(false)} />
+      <UpdateModal
+        isOpen={isUpdateOpen}
+        onClose={() => setIsUpdateOpen(false)}
+        status={updateStatus}
+        onStatusChange={setUpdateStatus}
+        isLightMode={isLightMode}
+      />
       <DictionaryModal 
         isOpen={isDictOpen} 
         onClose={() => setIsDictOpen(false)}
@@ -974,11 +1057,15 @@ function App() {
         status={ollamaStatus}
         isChecking={isCheckingOllama}
         onRefresh={(model) => void refreshOllamaStatus(model)}
+        codexStatus={codexStatus}
+        isCheckingCodex={isCheckingCodex}
+        onRefreshCodex={() => void refreshCodexStatus()}
         provider={translationProvider}
         ollamaModel={activeOllamaModel}
         geminiModel={geminiModel}
         geminiApiKey={geminiApiKey}
-        onSave={(provider, apiKey, nextOllamaModel, nextGeminiModel) => {
+        openRouterApiKey={openRouterApiKey}
+        onSave={(provider, nextGeminiApiKey, nextOpenRouterApiKey, nextOllamaModel, nextGeminiModel) => {
           if (
             provider !== translationProvider
             || nextOllamaModel !== activeOllamaModel
@@ -994,7 +1081,8 @@ function App() {
           setTranslationProvider(provider);
           setOllamaModel(nextOllamaModel);
           setGeminiModel(nextGeminiModel);
-          setGeminiApiKey(apiKey);
+          setGeminiApiKey(nextGeminiApiKey);
+          setOpenRouterApiKey(nextOpenRouterApiKey);
           void refreshOllamaStatus(nextOllamaModel);
         }}
       />

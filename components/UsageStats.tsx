@@ -2,6 +2,7 @@
 import React from 'react';
 import { X, Server, Timer, ArrowUpFromLine, ArrowDownToLine, Gauge } from 'lucide-react';
 import { ApiUsageStats, TranslationProvider } from '../types';
+import { getTranslationProviderLabel } from '../services/translationService';
 
 interface UsageStatsProps {
   isOpen: boolean;
@@ -19,7 +20,7 @@ export const UsageStats: React.FC<UsageStatsProps> = ({ isOpen, onClose, stats, 
         <div className="flex items-center justify-between p-6 border-b border-slate-800">
           <h2 className="text-lg font-bold text-white flex items-center gap-2">
             <Server className="w-5 h-5 text-blue-400" />
-            {provider === 'ollama' ? 'Ollama' : 'Gemini'} 사용량 통계
+            {getTranslationProviderLabel(provider)} 사용량 통계
           </h2>
           <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors">
             <X className="w-5 h-5" />
@@ -58,7 +59,11 @@ export const UsageStats: React.FC<UsageStatsProps> = ({ isOpen, onClose, stats, 
                         누적 처리 시간
                     </div>
                     <div className="text-xs text-teal-400/70 mt-1">
-                      {provider === 'ollama' ? 'Ollama 응답 메타데이터 기준' : 'Gemini API 응답 기준'}
+                      {provider === 'ollama'
+                        ? 'Ollama 응답 메타데이터 기준'
+                        : provider === 'codex'
+                          ? 'Codex CLI 응답 기준'
+                          : `${getTranslationProviderLabel(provider)} API 응답 기준`}
                     </div>
                 </div>
                 <div className="text-3xl font-bold text-teal-100 font-mono">
@@ -71,7 +76,11 @@ export const UsageStats: React.FC<UsageStatsProps> = ({ isOpen, onClose, stats, 
                 <p className="text-[10px] text-slate-400 leading-tight">
                     {provider === 'ollama'
                       ? 'Ollama Pro 할당량은 클라우드 GPU 사용량을 기준으로 계산됩니다. 정확한 잔여량은 Ollama 계정의 Usage 화면에서 확인하세요.'
-                      : '표시된 토큰은 응답 메타데이터의 누적값입니다. 실제 무료·유료 쿼터와 비용은 해당 Google Cloud/AI Studio 프로젝트에서 확인하세요.'}
+                      : provider === 'gemini'
+                        ? '표시된 토큰은 응답 메타데이터의 누적값입니다. 실제 무료·유료 쿼터와 비용은 해당 Google Cloud/AI Studio 프로젝트에서 확인하세요.'
+                        : provider === 'openrouter'
+                          ? '표시된 토큰은 OpenRouter 응답의 누적값입니다. 실제 비용과 잔액은 OpenRouter 계정에서 확인하세요.'
+                          : 'Codex CLI가 토큰 수를 제공하지 않는 실행에서는 0으로 표시될 수 있습니다. 실제 잔여량은 ChatGPT 구독 한도를 기준으로 합니다.'}
                 </p>
             </div>
           </div>

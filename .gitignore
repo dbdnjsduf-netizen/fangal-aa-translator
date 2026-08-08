@@ -6,6 +6,8 @@ coverage/
 .DS_Store
 Thumbs.db
 *.log
+.fangal-update-state.json
+.fangal-update-*/
 .env*
 !.env.example
 .idea/

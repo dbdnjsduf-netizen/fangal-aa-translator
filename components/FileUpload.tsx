@@ -1,12 +1,14 @@
 
 import React, { useCallback, useState } from 'react';
-import { Upload, Server, AlertTriangle, KeyRound } from 'lucide-react';
-import { OllamaRuntimeInfo, TranslationProvider } from '../types';
+import { Upload, Server, AlertTriangle, KeyRound, Terminal } from 'lucide-react';
+import { CodexRuntimeInfo, OllamaRuntimeInfo, TranslationProvider } from '../types';
+import { getTranslationProviderLabel } from '../services/translationService';
 
 interface FileUploadProps {
   onFileLoaded: (content: string, fileName: string) => void;
   translationProvider: TranslationProvider;
-  geminiApiKeyReady: boolean;
+  providerReady: boolean;
+  codexStatus?: CodexRuntimeInfo | null;
   ollamaStatus?: OllamaRuntimeInfo | null;
   onOpenTranslationSettings?: () => void;
 }
@@ -14,7 +16,8 @@ interface FileUploadProps {
 export const FileUpload: React.FC<FileUploadProps> = ({
   onFileLoaded,
   translationProvider,
-  geminiApiKeyReady,
+  providerReady,
+  codexStatus,
   ollamaStatus,
   onOpenTranslationSettings,
 }) => {
@@ -106,11 +109,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
       )}
 
       <div className="mt-8 flex flex-col items-center gap-4 relative z-10">
-        {(
-          translationProvider === 'gemini'
-            ? !geminiApiKeyReady
-            : !ollamaStatus?.ok || !ollamaStatus.modelAvailable
-        ) && (
+        {!providerReady && (
           <div className="w-full max-w-2xl mb-2">
             <button
               onClick={onOpenTranslationSettings}
@@ -119,18 +118,22 @@ export const FileUpload: React.FC<FileUploadProps> = ({
               <AlertTriangle className="w-5 h-5 text-yellow-400" />
               <div className="text-left">
                 <p className="text-yellow-300 font-semibold text-sm">
-                  {translationProvider === 'gemini'
-                    ? 'Gemini API 키를 입력해주세요'
-                    : 'Ollama 연결을 확인해주세요'}
+                  {translationProvider === 'gemini' || translationProvider === 'openrouter'
+                    ? `${getTranslationProviderLabel(translationProvider)} API 키를 입력해주세요`
+                    : `${getTranslationProviderLabel(translationProvider)} 연결을 확인해주세요`}
                 </p>
                 <p className="text-yellow-500/80 text-xs mt-0.5">
-                  {translationProvider === 'gemini'
+                  {translationProvider === 'gemini' || translationProvider === 'openrouter'
                     ? '키는 현재 브라우저 탭의 세션에만 보관됩니다.'
-                    : ollamaStatus?.message || '연결 상태 확인 중입니다.'}
+                    : translationProvider === 'codex'
+                      ? codexStatus?.message || '`codex login` 후 상태를 확인하세요.'
+                      : ollamaStatus?.message || '연결 상태 확인 중입니다.'}
                 </p>
               </div>
-              {translationProvider === 'gemini'
+              {translationProvider === 'gemini' || translationProvider === 'openrouter'
                 ? <KeyRound className="w-5 h-5 text-yellow-500 group-hover:text-yellow-400 ml-auto" />
+                : translationProvider === 'codex'
+                  ? <Terminal className="w-5 h-5 text-yellow-500 group-hover:text-yellow-400 ml-auto" />
                 : <Server className="w-5 h-5 text-yellow-500 group-hover:text-yellow-400 ml-auto" />}
             </button>
           </div>

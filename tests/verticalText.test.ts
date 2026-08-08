@@ -365,6 +365,19 @@ test('AA 골격과 작은 가나 조각은 자유형 세로 대사로 승격하�
   assert.equal(detectVerticalTextGroups(sample, makeLineSegments(sample)).length, 0);
 });
 
+test('좌우로 크게 튀는 특수문자 덩어리는 자유형 세로 열로 연결하지 않는다', () => {
+  const sample = [
+    '／　　こ　　　　　　　　　＼',
+    '(　　　　　　　　　れ　　　)',
+    '／　　は　　　　　　　　　＼',
+    '(　　　　　　　　　台　　　)',
+    '／　　詞　　　　　　　　　＼',
+    '(　　　　　　　　　だ　　　)',
+    '／　　！　　　　　　　　　＼',
+  ].join('\n');
+  assert.equal(detectVerticalTextGroups(sample, makeLineSegments(sample)).length, 0);
+});
+
 test('AA에도 쓰이는 二·人·ハ 문자를 실제 자유형 대사에서 누락하지 않는다', () => {
   const sample = [
     '／　　　二　　＼',
