@@ -537,9 +537,16 @@ interface SpacedHorizontalDialogueRange {
 }
 
 const SPACED_DIALOGUE_SCRIPT = 'ぁ-んァ-ヶ一-龯々〆ヵヶ\uff66-\uff9f';
+const SPACED_DIALOGUE_SPACE = '[ \\u3000\\u00A0\\u2000-\\u200B]+';
+// Some AA sources place a decorative period between two physical blank runs
+// (for example "邪   王 .  雷"). Treat only this tightly constrained form as
+// a spacing separator; a normal period attached to prose remains punctuation.
+const SPACED_DIALOGUE_SEPARATOR = `${SPACED_DIALOGUE_SPACE}(?:[.．·・]${SPACED_DIALOGUE_SPACE})?`;
+const SPACED_DIALOGUE_MARK = '[！？!?。、…ー]';
 const RE_SPACED_DIALOGUE_RUN = new RegExp(
-  `(?:[${SPACED_DIALOGUE_SCRIPT}][！？!?。、…ー]*[ \\u3000\\u00A0\\u2000-\\u200B]+){4,}`
-  + `[${SPACED_DIALOGUE_SCRIPT}][${SPACED_DIALOGUE_SCRIPT}！？!?。、…ー]*`,
+  `(?:[${SPACED_DIALOGUE_SCRIPT}]{1,2}${SPACED_DIALOGUE_MARK}*${SPACED_DIALOGUE_SEPARATOR}){4,}`
+  + `[${SPACED_DIALOGUE_SCRIPT}]{1,2}${SPACED_DIALOGUE_MARK}*`
+  + `(?:${SPACED_DIALOGUE_SEPARATOR}[！？!?。、…]+)*`,
   'gu',
 );
 

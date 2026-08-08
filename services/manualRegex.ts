@@ -166,10 +166,15 @@ export function applyManualRegexRules(
   if (normalTexts.length === 0) return withVerticalSelections;
   const ranges: ManualSelectionRange[] = [];
   for (const [segmentIndex, segment] of withVerticalSelections.entries()) {
-    // A selected segment already belongs to the current translation batch.
-    // Splitting it merely to add a persistent rule would disturb the user's
-    // current selection layout without adding another translation target.
-    if (segment.isTranslated || segment.isSelected || segment.verticalGroupId) continue;
+    // A selected or already recognized automatic segment is already a complete
+    // translation unit. Manual-regex matches inside it must not split the unit,
+    // even before the user presses "select all" and isSelected becomes true.
+    if (
+      segment.isTranslated
+      || segment.isSelected
+      || segment.verticalGroupId
+      || isAutomaticTranslationUnit(segment)
+    ) continue;
     ranges.push(...findLiteralRanges(
       withVerticalSelections,
       segmentIndex,
@@ -183,6 +188,22 @@ export function applyManualRegexRules(
     'regex',
   );
   return withVerticalSelections;
+}
+
+function isAutomaticTranslationUnit(segment: TextSegment) {
+  return segment.isJapanese
+    && !segment.isAutoSelectExcluded
+    && !segment.isPatternAutoSelectExcluded
+    && !segment.isUserExcluded
+    && Boolean(
+    segment.isAutoSelected
+    || segment.isStrictJapanese
+    || segment.isBoxedDialogue
+    || segment.isContextDialogue
+    || segment.isArrowBox
+    || segment.isIndentedDialogue
+    || segment.isIsolatedDialogue
+  );
 }
 
 function findLiteralRanges(
