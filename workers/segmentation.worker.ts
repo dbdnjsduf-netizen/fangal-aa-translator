@@ -610,6 +610,7 @@ function segmentContent(content: string, requestId: number): void {
       const hasStrongLanguage = hasStrongLexicalEvidence(part);
       const isLikelyFaceFragment = isLikelyAAFaceFragment(part);
       const hasDenseAAContext = jpCharsMatch.length <= 4
+        && !hasStrongLanguage
         && !hasVerifiedDialogueBox
         && hasDenseAADrawingContext(lines, lineIdx, currentOffset, currentOffset + part.length);
       // Guard: segments with no real Japanese script content are never selectable in any path

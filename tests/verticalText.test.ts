@@ -378,6 +378,19 @@ test('좌우로 크게 튀는 특수문자 덩어리는 자유형 세로 열로 
   assert.equal(detectVerticalTextGroups(sample, makeLineSegments(sample)).length, 0);
 });
 
+test('멀리 있는 외곽 파이프와 복잡한 AA 기호 사이의 가나 조각을 세로 대사로 연결하지 않는다', () => {
+  const sample = [
+    '|　／／　イ　＼＼　　V　|',
+    '|　／　x─v─x　＼　　　|',
+    '|　（　　ハ　　）　／　|',
+    '|　／　　ズ　　＼　V　|',
+    '|　x─／V＼─x　　／　　|',
+    '|　｛　　レ　　｝　＼　|',
+  ].join('\n');
+
+  assert.equal(detectVerticalTextGroups(sample, makeLineSegments(sample)).length, 0);
+});
+
 test('AA에도 쓰이는 二·人·ハ 문자를 실제 자유형 대사에서 누락하지 않는다', () => {
   const sample = [
     '／　　　二　　＼',
