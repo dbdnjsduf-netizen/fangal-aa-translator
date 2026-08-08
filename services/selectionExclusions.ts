@@ -14,6 +14,7 @@ export const EMPTY_SELECTION_EXCLUSIONS: SelectionExclusionRules = {
 export interface SelectionExclusionTarget {
   kind: SelectionExclusionKind;
   sourceText: string;
+  contextSignature?: string;
   selected: boolean;
 }
 
@@ -55,6 +56,9 @@ export function getSelectionExclusionTarget(
     return {
       kind: 'vertical',
       sourceText: group.map(sourceOf).join(''),
+      contextSignature: group.find(({ detectionContextSignature }) => (
+        Boolean(detectionContextSignature)
+      ))?.detectionContextSignature,
       selected: group.some((segment) => segment.isSelected),
     };
   }
@@ -62,13 +66,16 @@ export function getSelectionExclusionTarget(
   return {
     kind: 'normal',
     sourceText: sourceOf(target),
+    ...(target.detectionContextSignature
+      ? { contextSignature: target.detectionContextSignature }
+      : {}),
     selected: target.isSelected,
   };
 }
 
 export function addExactSelectionExclusion(
   rules: SelectionExclusionRules,
-  target: Pick<SelectionExclusionTarget, 'kind' | 'sourceText'>,
+  target: Pick<SelectionExclusionTarget, 'kind' | 'sourceText' | 'contextSignature'>,
   id: string,
   createdAt = Date.now(),
 ): SelectionExclusionRules {
@@ -84,6 +91,7 @@ export function addExactSelectionExclusion(
         id,
         kind: target.kind,
         sourceText: target.sourceText,
+        contextSignature: target.contextSignature,
         createdAt,
       },
     ],
@@ -159,5 +167,6 @@ function isExactRule(value: unknown): value is ExactSelectionExclusionRule {
     && (rule.kind === 'normal' || rule.kind === 'vertical')
     && typeof rule.sourceText === 'string'
     && rule.sourceText.length > 0
+    && (rule.contextSignature === undefined || typeof rule.contextSignature === 'string')
     && typeof rule.createdAt === 'number';
 }

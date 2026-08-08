@@ -1,4 +1,5 @@
 import { TextSegment } from '../types';
+import { DetectionConfidence, SpatialContextAnalyzer } from './spatialDetection';
 
 // Digits and a small set of in-sentence marks are context tokens, not enough
 // to establish a vertical group by themselves. Once Japanese text establishes
@@ -22,6 +23,7 @@ const MAX_BOX_ROW_CONTENT_GLYPHS = 8;
 const MAX_BOX_ROW_DRAWING_GLYPHS = 3;
 const MAX_LOOSE_ROW_OTHER_GLYPHS = 2;
 const VERTICAL_AA_ONLY = /^[ニィノイ二三彡一。ー（）［］]+$/u;
+const VERTICAL_AA_SHAPE_CHAR = /[一二三七彡八人入ヌノトへヘ大イムくミシツテ了心ハフソエ工口ロ日目回凵凹凸匚コ丁十小山ー│┃]/u;
 
 export interface VerticalTextToken {
   char: string;
@@ -43,6 +45,8 @@ export interface VerticalTextGroup {
   right: number;
   segmentIds: string[];
   tokens: VerticalTextToken[];
+  detectionConfidence?: DetectionConfidence;
+  detectionContextSignature?: string;
 }
 
 export interface VerticalApplyResult {
@@ -125,6 +129,8 @@ interface RawVerticalGroup {
   left: number;
   right: number;
   tokens: CandidateToken[];
+  detectionConfidence?: DetectionConfidence;
+  detectionContextSignature?: string;
 }
 
 interface VerticalSegmentMetadata {
@@ -134,6 +140,8 @@ interface VerticalSegmentMetadata {
   stringIndex: number;
   displayX: number;
   displayWidth: number;
+  confidence: DetectionConfidence;
+  contextSignature?: string;
 }
 
 export function getDisplayWidth(text: string): number {
@@ -162,7 +170,11 @@ export function detectVerticalTextGroups(
       const range = ranges.find(({ start, end }) => (
         token.stringIndex >= start && token.stringIndex < end
       ));
-      if (!range || range.segment.isManualVerticalSelection) continue;
+      if (
+        !range
+        || range.segment.isManualVerticalSelection
+        || range.segment.isManualSelection
+      ) continue;
 
       const segmentOffset = range.segmentOffset + token.stringIndex - range.start;
       if (range.segment.text[segmentOffset] !== token.char) continue;
@@ -189,6 +201,8 @@ export function detectVerticalTextGroups(
       right: rawGroup.right,
       segmentIds,
       tokens: mappedTokens,
+      detectionConfidence: rawGroup.detectionConfidence,
+      detectionContextSignature: rawGroup.detectionContextSignature,
     });
   }
 
@@ -275,6 +289,8 @@ export function annotateVerticalTextSegments(
           stringIndex: token.stringIndex,
           displayX: token.displayX,
           displayWidth: token.displayWidth,
+          confidence: group.detectionConfidence || 'high',
+          contextSignature: group.detectionContextSignature,
         });
         metadata.set(token.segmentId, segmentMetadata);
       }
@@ -322,7 +338,9 @@ export function annotateVerticalTextSegments(
         isJapanese: true,
         isVerticalBox: true,
         isVerticalText: true,
-        isAutoSelectExcluded: false,
+        isAutoSelectExcluded: vertical.confidence === 'ambiguous',
+        detectionConfidence: vertical.confidence,
+        detectionContextSignature: vertical.contextSignature,
         verticalGroupId: vertical.groupId,
         verticalOrder: vertical.order,
         verticalSourceLine: vertical.line,
@@ -643,6 +661,7 @@ function toVerticalCell(character: string): string {
 export function detectRawVerticalGroups(content: string): RawVerticalGroup[] {
   const candidates: CandidateToken[] = [];
   const lines = content.split('\n');
+  const spatialAnalyzer = new SpatialContextAnalyzer(lines);
 
   lines.forEach((line, lineIndex) => {
     const glyphs = scanLine(line);
@@ -801,6 +820,8 @@ export function detectRawVerticalGroups(content: string): RawVerticalGroup[] {
       ));
     if (verticalTokens.length < 3) continue;
     if (!isLikelyVerticalGroup(verticalTokens, verticalColumns)) continue;
+    const spatialQuality = analyzeVerticalSpatialQuality(spatialAnalyzer, verticalTokens);
+    if (spatialQuality.confidence === 'drawing') continue;
 
     groups.push({
       top: Math.min(...verticalTokens.map(({ line }) => line)),
@@ -808,6 +829,8 @@ export function detectRawVerticalGroups(content: string): RawVerticalGroup[] {
       left: verticalTokens.reduce((sum, token) => sum + token.left, 0) / verticalTokens.length,
       right: verticalTokens.reduce((sum, token) => sum + token.right, 0) / verticalTokens.length,
       tokens: verticalTokens,
+      detectionConfidence: spatialQuality.confidence,
+      detectionContextSignature: spatialQuality.contextSignature,
     });
   }
 
@@ -816,11 +839,15 @@ export function detectRawVerticalGroups(content: string): RawVerticalGroup[] {
   );
   return [
     ...groups,
-    ...detectLooseVerticalGroups(lines, claimedTokens),
+    ...detectLooseVerticalGroups(lines, claimedTokens, spatialAnalyzer),
   ];
 }
 
-function detectLooseVerticalGroups(lines: string[], claimedTokens: Set<string>): RawVerticalGroup[] {
+function detectLooseVerticalGroups(
+  lines: string[],
+  claimedTokens: Set<string>,
+  spatialAnalyzer: SpatialContextAnalyzer,
+): RawVerticalGroup[] {
   const rows: CandidateToken[][] = [];
 
   lines.forEach((line, lineIndex) => {
@@ -880,13 +907,56 @@ function detectLooseVerticalGroups(lines: string[], claimedTokens: Set<string>):
       && isStraightTokenTrack(tokens, MAX_VERTICAL_COLUMN_DRIFT, MAX_LOOSE_LINE_GAP)
       && isLikelyLooseVerticalGroup(tokens)
     ))
-    .map((tokens) => ({
+    .map((tokens) => ({ tokens, spatialQuality: analyzeVerticalSpatialQuality(spatialAnalyzer, tokens) }))
+    .filter(({ spatialQuality }) => spatialQuality.confidence !== 'drawing')
+    .map(({ tokens, spatialQuality }) => ({
       top: Math.min(...tokens.map(({ line }) => line)),
       bottom: Math.max(...tokens.map(({ line }) => line)),
       left: Math.min(...tokens.map(({ displayX }) => displayX)),
       right: Math.max(...tokens.map(({ displayX, displayWidth }) => displayX + displayWidth)),
       tokens,
+      detectionConfidence: spatialQuality.confidence,
+      detectionContextSignature: spatialQuality.contextSignature,
     }));
+}
+
+function analyzeVerticalSpatialQuality(
+  analyzer: SpatialContextAnalyzer,
+  tokens: CandidateToken[],
+) {
+  const source = tokens.map(({ char }) => normalizeSourceCharacter(char)).join('');
+  const hiragana = Array.from(source.matchAll(/[ぁ-ん]/gu), ({ 0: character }) => character);
+  const strongHiragana = hiragana.filter((character) => !/[っぅゃゅょぁぃぇぉ]/u.test(character));
+  const katakana = Array.from(source.matchAll(/[ァ-ヶーｦ-ﾟ]/gu), ({ 0: character }) => (
+    character.normalize('NFKC')
+  ));
+  const strongKanaEvidence = (
+    hiragana.length >= 3 && new Set(strongHiragana).size >= 2
+  ) || (
+    katakana.length >= 4
+    && new Set(katakana.filter((character) => !/[ーッ]/u.test(character))).size >= 3
+  );
+  const analyses = tokens.map((token) => analyzer.analyze(
+    token.line,
+    token.stringIndex,
+    token.stringIndex + token.char.length,
+  ));
+  const closedCount = analyses.filter(({ isClosedDialogueContainer }) => isClosedDialogueContainer).length;
+  const connectedDrawingCount = analyses.filter(({ isConnectedToLargeDrawing }) => isConnectedToLargeDrawing).length;
+  const denseCount = analyses.filter(({ isDenseDrawingNeighborhood }) => isDenseDrawingNeighborhood).length;
+  const drawingThreshold = Math.max(2, Math.ceil(tokens.length * 0.4));
+  const confidence: DetectionConfidence = strongKanaEvidence || closedCount > 0
+    ? 'high'
+    : connectedDrawingCount >= drawingThreshold
+      ? 'drawing'
+      : denseCount >= Math.max(2, Math.ceil(tokens.length * 0.6))
+        ? 'ambiguous'
+        : 'high';
+  const representative = analyses[Math.floor(analyses.length / 2)]?.contextSignature || '';
+  return {
+    confidence,
+    contextSignature: `v${tokens.length}:${representative}`,
+  };
 }
 
 function hasSparseLooseBubbleSlot(glyphs: RawGlyph[], sourceGlyph: RawGlyph) {
@@ -962,6 +1032,7 @@ function isStraightTokenTrack(
 
 function isLikelyLooseVerticalGroup(tokens: CandidateToken[]) {
   const source = tokens.map(({ char }) => normalizeSourceCharacter(char)).join('');
+  if (isMostlyAAStructureSource(source)) return false;
   if (/^[ぁぃぅぇぉゃゅょァィゥェォャュョッｯ]/u.test(source)) {
     return false;
   }
@@ -1066,7 +1137,11 @@ function isLikelyVerticalGroup(tokens: CandidateToken[], columns: Column[]): boo
   ) return false;
 
   const source = tokens.map(({ char }) => normalizeSourceCharacter(char)).join('');
-  if (VERTICAL_AA_ONLY.test(source) || /^[ー│┃]/u.test(source)) return false;
+  if (
+    VERTICAL_AA_ONLY.test(source)
+    || /^[ー│┃]/u.test(source)
+    || isMostlyAAStructureSource(source)
+  ) return false;
 
   const semanticCharacterCount = Array.from(
     source.matchAll(/[ぁ-んァ-ヶ一-龯々〆ヵヶ]/gu),
@@ -1095,6 +1170,19 @@ function isLikelyVerticalGroup(tokens: CandidateToken[], columns: Column[]): boo
   );
   const hasMixedWord = strongHiragana.length >= 1 && hasKatakanaWord && cjk.length >= 1;
   return hasHiraganaLanguage || hasKatakanaWord || hasPureCjkPhrase || hasMixedWord;
+}
+
+function isMostlyAAStructureSource(source: string) {
+  const semanticCharacters = Array.from(
+    source.matchAll(/[ぁ-んァ-ヶ一-龯々〆ヵヶ]/gu),
+    ({ 0: character }) => character,
+  );
+  if (semanticCharacters.length < 3 || /[ぁ-ん]{2,}/u.test(source)) return false;
+  const structuralCount = semanticCharacters.filter((character) => (
+    VERTICAL_AA_SHAPE_CHAR.test(character)
+  )).length;
+  return structuralCount >= 3
+    && structuralCount / semanticCharacters.length >= 0.7;
 }
 
 function clearVerticalMetadata(segment: TextSegment): TextSegment {

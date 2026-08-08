@@ -39,6 +39,7 @@ export const SystemReport: React.FC<SystemReportProps> = ({ isOpen, onClose }) =
               <li><strong className="text-purple-300">정밀 표시:</strong> 세로쓰기 실제 문자 슬롯만 보라색으로 분리하여 같은 행의 AA 그림을 함께 칠하지 않습니다.</li>
               <li><strong className="text-orange-300">수동 박스 선택:</strong> 자동 감지에서 빠진 가로 텍스트는 박스 안 문자 중심점만 판정해 지정 범위를 주황색 번역 세그먼트로 분리합니다.</li>
               <li><strong className="text-fuchsia-300">수동 세로 묶음:</strong> 박스 안의 세로 문자를 열 단위로 정렬해 하나의 문장으로 만들며, 기존 자동 세로 그룹도 같은 방식으로 다시 묶을 수 있습니다.</li>
+              <li><strong className="text-blue-300">감지 방향 덮어쓰기:</strong> 가로 항목은 세로수동 박스로, 세로 항목은 일반 수동 박스로 다시 지정할 수 있습니다.</li>
               <li><strong className="text-blue-300">빠른 선택 전환:</strong> 수동·세로수동 모드에서도 기존 자동 감지 항목을 짧게 클릭하면 해당 문장이나 세로 그룹 전체의 선택을 켜고 끕니다.</li>
               <li><strong className="text-cyan-300">수동 정규식:</strong> 박스로 지정한 원문을 특수문자가 이스케이프된 완전 일치 규칙으로 저장하고, 이후 파일에서도 같은 문자열만 자동 선택합니다.</li>
               <li><strong className="text-purple-300">위치 우선 적용:</strong> 세로 번역은 먼저 기존 문자 슬롯만 치환하며 다른 문자와 테두리를 수정하지 않습니다.</li>

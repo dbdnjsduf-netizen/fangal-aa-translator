@@ -4,10 +4,12 @@ import {
   SelectionExclusionRules,
   TextSegment,
 } from '../types';
+import { contextSignatureSimilarity } from './spatialDetection';
 
 interface LabeledPattern {
   kind: SelectionExclusionKind;
   source: string;
+  contextSignature?: string;
 }
 
 const AUTOMATIC_DETECTION_FLAGS: Array<keyof TextSegment> = [
@@ -35,22 +37,24 @@ export function refineAutoDetectionWithLearnedPatterns(
   exclusionRules: SelectionExclusionRules,
   manualRegexRules: ManualRegexRules,
 ): TextSegment[] {
-  const negatives = exclusionRules.exact.map(({ kind, sourceText }) => ({
+  const negatives = exclusionRules.exact.map(({ kind, sourceText, contextSignature }) => ({
     kind,
     source: normalizePattern(sourceText),
+    contextSignature,
   })).filter(({ source }) => source.length > 0);
   if (negatives.length === 0) {
     return clearLearnedExclusions(segments);
   }
-  const positives = manualRegexRules.entries.map(({ kind, sourceText }) => ({
+  const positives = manualRegexRules.entries.map(({ kind, sourceText, contextSignature }) => ({
     kind,
     source: normalizePattern(sourceText),
+    contextSignature,
   })).filter(({ source }) => source.length > 0);
 
   const verticalSourceByGroup = buildVerticalSources(segments);
   const learnedVerticalGroups = new Set<string>();
-  for (const [groupId, source] of verticalSourceByGroup) {
-    if (shouldSuppress(source, 'vertical', negatives, positives)) {
+  for (const [groupId, group] of verticalSourceByGroup) {
+    if (shouldSuppress(group.source, 'vertical', group.contextSignature, negatives, positives)) {
       learnedVerticalGroups.add(groupId);
     }
   }
@@ -68,7 +72,13 @@ export function refineAutoDetectionWithLearnedPatterns(
     const suppress = !isManual && isAutomaticCandidate && (
       segment.verticalGroupId
         ? learnedVerticalGroups.has(segment.verticalGroupId)
-        : shouldSuppress(sourceOf(segment), 'normal', negatives, positives)
+        : shouldSuppress(
+          sourceOf(segment),
+          'normal',
+          segment.detectionContextSignature,
+          negatives,
+          positives,
+        )
     );
     const learned = suppress || undefined;
     if (segment.isPatternAutoSelectExcluded === learned) return segment;
@@ -85,17 +95,18 @@ export function refineAutoDetectionWithLearnedPatterns(
 function shouldSuppress(
   sourceText: string,
   kind: SelectionExclusionKind,
+  contextSignature: string | undefined,
   negatives: LabeledPattern[],
   positives: LabeledPattern[],
 ) {
   const source = normalizePattern(sourceText);
   if (!source || !isWeakAutoDetectionCandidate(source)) return false;
 
-  const negativeScore = bestSimilarity(source, negatives, kind);
+  const negativeScore = bestSimilarity(source, contextSignature, negatives, kind);
   const threshold = source.length <= 3 ? 0.94 : source.length <= 6 ? 0.80 : 0.78;
   if (negativeScore < threshold) return false;
 
-  const positiveScore = bestSimilarity(source, positives, kind);
+  const positiveScore = bestSimilarity(source, contextSignature, positives, kind);
   return positiveScore + 0.06 < negativeScore;
 }
 
@@ -114,13 +125,22 @@ function isWeakAutoDetectionCandidate(source: string) {
 
 function bestSimilarity(
   source: string,
+  contextSignature: string | undefined,
   patterns: LabeledPattern[],
   kind: SelectionExclusionKind,
 ) {
   let best = 0;
   for (const pattern of patterns) {
     if (pattern.kind !== kind) continue;
-    best = Math.max(best, patternSimilarity(source, pattern.source));
+    const sourceSimilarity = patternSimilarity(source, pattern.source);
+    const contextSimilarity = contextSignatureSimilarity(
+      contextSignature,
+      pattern.contextSignature,
+    );
+    const score = contextSignature && pattern.contextSignature
+      ? (sourceSimilarity * 0.78) + (contextSimilarity * 0.22)
+      : sourceSimilarity;
+    best = Math.max(best, score);
   }
   return best;
 }
@@ -194,15 +214,18 @@ function buildVerticalSources(segments: TextSegment[]) {
     group.push(segment);
     groups.set(segment.verticalGroupId, group);
   }
-  const result = new Map<string, string>();
+  const result = new Map<string, { source: string; contextSignature?: string }>();
   for (const [groupId, group] of groups) {
-    result.set(groupId, [...group]
-      .sort((left, right) => (
+    const ordered = [...group].sort((left, right) => (
         (left.verticalOrder ?? Number.MAX_SAFE_INTEGER)
         - (right.verticalOrder ?? Number.MAX_SAFE_INTEGER)
-      ))
-      .map(sourceOf)
-      .join(''));
+      ));
+    result.set(groupId, {
+      source: ordered.map(sourceOf).join(''),
+      contextSignature: ordered.find(({ detectionContextSignature }) => (
+        Boolean(detectionContextSignature)
+      ))?.detectionContextSignature,
+    });
   }
   return result;
 }

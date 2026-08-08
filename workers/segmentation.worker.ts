@@ -1,3 +1,5 @@
+import { SpatialContextAnalyzer } from '../services/spatialDetection';
+
 // Web Worker for text segmentation (runs off the main UI thread)
 // All regex patterns and pure helper functions are duplicated here
 // because Web Workers run in a separate context with no shared memory.
@@ -45,6 +47,8 @@ const RE_AUTO_SELECT_EXCLUDE = /[＼＞＜]|(^[ﾆ二ニ々]+$)/;
 const RE_NOISE_ONLY = /^[\s\u3000\u00A0\u2000-\u200B从人f´￣｀ヽ_！]+$/;
 const RE_FACE_FRAME = /[()（）<>＜＞〈〉《》「」『』\[\]｛｝{}´｀'"＾^⌒ﾟ°・]/u;
 const RE_AA_CONTEXT_GLYPH = /[|│┃｜/／\\＼_＿￣─━\-~～^＾<>＜＞()（）\[\]｛｝{}´｀'"`.,:;・ﾟ°vVyYwWjJiIlLfFxX]/u;
+const RE_HORIZONTAL_AA_STROKE = /[一二三ニﾆー―‐‑‒–—−＿￣_=＝─━┄┅┈┉.．・:：]/u;
+const RE_HORIZONTAL_AA_JAPANESE = /^[一二三ニﾆー―]+$/u;
 const RE_VERTICAL_PIPES_G = /[|│┃｜]/g;
 const RE_JAPANESE_SCRIPT = /[\u3041-\u3096\u30a1-\u30f6\uff66-\uff9f\u4e00-\u9faf\u3400-\u4dbf]/;
 const RE_MEANINGFUL_JP = /[\u3041-\u3096\u30a1-\u30f6\uff66-\uff9f\u4e00-\u9faf\u3400-\u4dbf]/;
@@ -362,6 +366,98 @@ const isLikelyAAFaceFragment = (text: string): boolean => {
   return repetitiveShapes || framedLikeFace || symbolHeavyShape;
 };
 
+const hasStructuralGlyphDominance = (text: string): boolean => {
+  const normalizedCharacters = (text.normalize('NFKC').match(RE_JAPANESE_CHARS_G) || [])
+    .filter((character) => !/[・･\u3099\u309a]/u.test(character));
+  if (normalizedCharacters.length === 0 || normalizedCharacters.length > 40) return false;
+  const structuralCount = normalizedCharacters.filter((character) => (
+    RE_AA_CHARS.test(character) || /[アマニ]/u.test(character)
+  )).length;
+  return structuralCount >= 1
+    && structuralCount / normalizedCharacters.length >= 0.5;
+};
+
+const isRecognizedVocalization = (text: string): boolean => {
+  const normalized = text.normalize('NFKC').replace(/[\s　]/gu, '');
+  return /^(?:(?:ア|ガ|カ|キャ|ワ)?ハ[ハァッー!！?？]*|[ギキ]ャ[アァッー!！?？]+)$/u.test(normalized);
+};
+
+interface TextTextureSignals {
+  isCandidate: boolean;
+  hasRepeatedCjkRun: boolean;
+  hasDenseHalfwidthKana: boolean;
+  hasLowVarietyLongScript: boolean;
+  hasMixedWidthScriptNoise: boolean;
+}
+
+/**
+ * Finds Japanese-looking glyph textures used to shade Shift-JIS art.
+ * Broad candidates are not rejected here: they are sent to the 2D analyzer
+ * and become drawings only when their surroundings also look like AA.
+ */
+const getTextTextureSignals = (text: string): TextTextureSignals => {
+  const compact = text.replace(/[\s　]/gu, '');
+  const japanese = compact.match(RE_JAPANESE_CHARS_G) || [];
+  const cjk = japanese.filter((character) => /[一-龯㐀-䶿]/u.test(character));
+  const halfwidthKana = compact.match(/[\uff66-\uff9f]/gu) || [];
+  const hasHiragana = /[ぁ-ん]/u.test(compact);
+  const uniqueRatio = japanese.length > 0
+    ? new Set(japanese.map((character) => character.normalize('NFKC'))).size / japanese.length
+    : 1;
+  const hasRepeatedCjkRun = /([一-龯㐀-䶿])\1{3,}/u.test(compact);
+  const hasDenseHalfwidthKana = halfwidthKana.length >= 5
+    && (
+      halfwidthKana.length / Math.max(japanese.length, 1) >= 0.55
+      || japanese.length >= 18
+    );
+  const hasLowVarietyLongScript = japanese.length >= 18
+    && !hasHiragana
+    && (
+      uniqueRatio <= 0.55
+      || cjk.length / japanese.length >= 0.75
+    );
+  const visibleNonJapanese = Array.from(compact).filter((character) => (
+    !RE_JAPANESE_CHAR.test(character)
+  ));
+  const hasMixedWidthScriptNoise = !hasHiragana
+    && japanese.length >= 5
+    && cjk.length >= 2
+    && halfwidthKana.length >= 1
+    && visibleNonJapanese.length >= 2;
+
+  return {
+    isCandidate: hasRepeatedCjkRun
+      || hasDenseHalfwidthKana
+      || hasLowVarietyLongScript
+      || hasMixedWidthScriptNoise,
+    hasRepeatedCjkRun,
+    hasDenseHalfwidthKana,
+    hasLowVarietyLongScript,
+    hasMixedWidthScriptNoise,
+  };
+};
+
+const isPunctuationHeavyAAFragment = (text: string): boolean => {
+  const normalized = text.normalize('NFKC');
+  const japanese = normalized.match(RE_JAPANESE_CHARS_G) || [];
+  if (japanese.length === 0 || japanese.length > 2 || /[ぁ-ん]/u.test(normalized)) return false;
+  const drawingPunctuation = normalized.match(/[-―‐…・.．_:：=＝＿￣─━\/／\\＼]/gu) || [];
+  return drawingPunctuation.length >= 3 && hasStructuralGlyphDominance(normalized);
+};
+
+const hasRepeatedStructuralKana = (text: string): boolean => (
+  /(?:ニ|二|ﾆ){2,}/u.test(text.normalize('NFKC'))
+);
+
+const isHorizontalAAStructureRun = (text: string): boolean => {
+  const normalized = text.normalize('NFKC');
+  const japanese = normalized.match(RE_JAPANESE_CHARS_G) || [];
+  if (japanese.length < 2 || !RE_HORIZONTAL_AA_JAPANESE.test(japanese.join(''))) return false;
+  const visible = Array.from(normalized).filter((character) => !/\s/u.test(character));
+  return visible.length >= japanese.length
+    && visible.every((character) => RE_HORIZONTAL_AA_STROKE.test(character));
+};
+
 const RE_AA_EFFECTS = /．・｀ｰ"|｀ｰ"/;
 
 const isDrawing = (text: string) => {
@@ -428,6 +524,8 @@ interface WorkerTextSegment {
   isIndentedDialogue?: boolean;
   isIsolatedDialogue?: boolean;
   isAutoSelectExcluded?: boolean;
+  detectionConfidence?: 'high' | 'ambiguous' | 'drawing';
+  detectionContextSignature?: string;
   isSelected: boolean;
   isTranslated: boolean;
 }
@@ -435,6 +533,7 @@ interface WorkerTextSegment {
 // --- Main segmentation function ---
 function segmentContent(content: string, requestId: number): void {
   const lines = content.split('\n');
+  const spatialAnalyzer = new SpatialContextAnalyzer(lines);
   const newSegments: WorkerTextSegment[] = [];
 
   lines.forEach((line, lineIdx) => {
@@ -587,7 +686,69 @@ function segmentContent(content: string, requestId: number): void {
       const verticalPipesInLine = (line.match(RE_VERTICAL_PIPES_G) || []).length;
       const isAAStructureLine = verticalPipesInLine > 4;
       const isInsideBox = !isAAStructureLine && isBoxIsolated && (hasBothBordersWithPipe || (leftBorderIsBoxPipe && getCleanBoxCtx()));
-      const hasVerifiedDialogueBox = isInsideBox && getCleanBoxCtx();
+      const hasStrongLanguage = hasStrongLexicalEvidence(part);
+      const isLikelyFaceFragmentRaw = isLikelyAAFaceFragment(part);
+      const isHorizontalStructure = isHorizontalAAStructureRun(part);
+      const hasStructuralDominance = hasStructuralGlyphDominance(part);
+      const trimmedPart = part.trim();
+      const shortHiragana = trimmedPart.match(/[ぁ-ん]/gu) || [];
+      const strongShortHiragana = shortHiragana.filter((character) => (
+        !/[っぅゃゅょぁぃぇぉ]/u.test(character)
+      ));
+      const hasSeparatedHorizontalSlot = (
+        hasLeadingLargeGap
+        || isAtStartWithGap
+        || (partIdx > 0 && RE_SEPARATOR.test(parts[partIdx - 1]))
+      ) && (
+        hasTrailingLargeGap
+        || (partIdx < parts.length - 1 && RE_SEPARATOR.test(parts[partIdx + 1]))
+        || RE_STRICT_BLANK.test(line.substring(currentOffset + part.length))
+      );
+      const isClearlySeparatedShortUtterance = hasSeparatedHorizontalSlot && (
+        /^[ぁ-ん]{1,2}[！？!?。…]+$/u.test(trimmedPart)
+        || (
+          /^[ぁ-ん]{2,6}[！？!?。…]*$/u.test(trimmedPart)
+          && (
+            new Set(strongShortHiragana).size >= 2
+            || /^(?:ああ|わっ|くそ)[！？!?。…]*$/u.test(trimmedPart)
+          )
+        )
+        || /^(?:[一-龯々〆ヵヶ]{1,3}[ぁ-ん]{1,2}|[ぁ-ん]{1,2}[一-龯々〆ヵヶ]{1,3})[！？!?。…]*$/u.test(trimmedPart)
+      );
+      const hasMixedKanjiHiragana = /[一-龯々〆ヵヶ]/u.test(trimmedPart)
+        && /[ぁ-ん]/u.test(trimmedPart);
+      const japaneseWordChunks = trimmedPart
+        .split(/[\s　]+/u)
+        .filter((chunk) => RE_JAPANESE_SCRIPT.test(chunk));
+      const hasSeparatedJapaneseWords = japaneseWordChunks.length >= 2
+        && jpCharsMatch.length >= 6
+        && japaneseWordChunks.some((chunk) => /[ぁ-ん]/u.test(chunk));
+      const textTexture = getTextTextureSignals(part);
+      const isEmbeddedInRepeatedCjkTexture = textTexture.hasMixedWidthScriptNoise
+        && lines.slice(Math.max(0, lineIdx - 2), lineIdx + 3)
+          .some((nearbyLine) => getTextTextureSignals(nearbyLine).hasRepeatedCjkRun);
+      const isLikelyFaceFragment = isLikelyFaceFragmentRaw
+        && !isClearlySeparatedShortUtterance;
+      const shouldAnalyzeSpatialContext = isJp
+        && (!hasStrongLanguage || hasStructuralDominance || textTexture.isCandidate)
+        && !isLikelyFaceFragment
+        && !isHorizontalStructure
+        && !getIsDrawing();
+      const spatialContext = shouldAnalyzeSpatialContext
+        ? spatialAnalyzer.analyze(lineIdx, currentOffset, currentOffset + part.length)
+        : undefined;
+      const hasSpatialDrawingOverride = Boolean(
+        hasStructuralDominance
+        && spatialContext?.isConnectedToLargeDrawing
+        && spatialContext?.isDenseDrawingNeighborhood,
+      );
+      const hasVerifiedDialogueBox = (
+        (isInsideBox && getCleanBoxCtx())
+        || Boolean(spatialContext?.isClosedDialogueContainer)
+      )
+        && !hasSpatialDrawingOverride
+        && !textTexture.hasRepeatedCjkRun
+        && !textTexture.hasMixedWidthScriptNoise;
 
       let _hasVertBoxCtx: boolean | undefined;
       const getVertBoxCtx = (): boolean => {
@@ -607,10 +768,65 @@ function segmentContent(content: string, requestId: number): void {
       // Guard: when all sides are blank but text is entirely AA chars and short (≤6), it's likely an AA art fragment
       // Threshold of 6 covers most AA fragments while preserving legitimate short sound effects
       const isAllAAOnly = jpCharsMatch.length > 0 && jpCharsMatch.every(c => RE_AA_CHARS.test(c));
-      const hasStrongLanguage = hasStrongLexicalEvidence(part);
-      const isLikelyFaceFragment = isLikelyAAFaceFragment(part);
+      const hasFluentLanguage = isRecognizedVocalization(part)
+        || isClearlySeparatedShortUtterance
+        || hasMixedKanjiHiragana
+        || hasSeparatedJapaneseWords
+        || (
+        !hasStructuralDominance && !textTexture.isCandidate && (
+          hasStrongLanguage
+          || /[ぁ-ん]{3,}/u.test(part)
+          || (/[一-龯々〆ヵヶ]/u.test(part) && /[ぁ-ん]{2,}/u.test(part))
+        )
+      );
+      const isSpatialDrawing = Boolean(
+        (
+          (
+            spatialContext?.isConnectedToLargeDrawing
+            && (
+              !textTexture.isCandidate
+              || (spatialContext?.componentRows || 0) >= 2
+            )
+          )
+          || (
+            hasStructuralDominance
+            && (
+              spatialContext?.isDenseDrawingNeighborhood
+              || hasRepeatedStructuralKana(part)
+              || isPunctuationHeavyAAFragment(part)
+            )
+          )
+          || textTexture.hasRepeatedCjkRun
+          || isEmbeddedInRepeatedCjkTexture
+          || (
+            textTexture.isCandidate
+            && (
+              spatialContext?.isDenseDrawingNeighborhood
+              || (
+                spatialContext?.isConnectedToLargeDrawing
+                && (spatialContext?.componentRows || 0) >= 2
+              )
+            )
+          )
+        )
+        && !hasVerifiedDialogueBox
+        && !hasFluentLanguage,
+      );
+      const isSpatialAmbiguous = Boolean(
+        !isSpatialDrawing
+        && !hasVerifiedDialogueBox
+        && !hasFluentLanguage
+        && (
+          spatialContext?.isDenseDrawingNeighborhood
+          || (
+            jpCharsMatch.length <= 2
+            && (spatialContext?.localOccupiedRows || 0) >= 3
+            && (spatialContext?.localDrawingGlyphs || 0) >= (hasStructuralDominance ? 4 : 6)
+          )
+        ),
+      );
       const hasDenseAAContext = jpCharsMatch.length <= 4
-        && !hasStrongLanguage
+        && !hasFluentLanguage
         && !hasVerifiedDialogueBox
         && hasDenseAADrawingContext(lines, lineIdx, currentOffset, currentOffset + part.length);
       // Guard: segments with no real Japanese script content are never selectable in any path
@@ -623,6 +839,8 @@ function segmentContent(content: string, requestId: number): void {
         || RE_NOISE_ONLY.test(part)
         || !RE_MEANINGFUL_JP.test(part)
         || isLikelyFaceFragment
+        || isHorizontalStructure
+        || isSpatialDrawing
         || hasDenseAAContext
         || (!hasHiragana && isAllAAOnly && jpCharsMatch.length <= 1);
       const isAllSidesBlankQualified = isAllSidesBlank && !isNeverSelectable;
@@ -671,7 +889,16 @@ function segmentContent(content: string, requestId: number): void {
         ))
       );
 
-      const isNaturalText = isNaturalJapaneseText(part, true);
+      const isSpatiallySeparatedHalfwidthDialogue = textTexture.hasDenseHalfwidthKana
+        && RE_JAPANESE_PUNCTUATION.test(part)
+        && !spatialContext?.isDenseDrawingNeighborhood
+        && !(
+          spatialContext?.isConnectedToLargeDrawing
+          && (spatialContext?.componentRows || 0) >= 2
+        )
+        && getVertIsolated();
+      const isNaturalText = isNaturalJapaneseText(part, true)
+        || isSpatiallySeparatedHalfwidthDialogue;
 
       const hasSomeNonAAChars = jpCharsMatch.some(c => !RE_AA_CHARS.test(c));
       const hasHwDakuten = RE_HW_DAKUTEN.test(part);
@@ -726,10 +953,12 @@ function segmentContent(content: string, requestId: number): void {
         )
       );
       const hasDialogueContextEvidence = hasStrongLanguage
+        || isClearlySeparatedShortUtterance
         || jpCharsMatch.length >= 6
         || hasComfortableHorizontalSpace
         || hasPairedDialogueBorders
-        || isInsideBox;
+        || isInsideBox
+        || hasVerifiedDialogueBox;
       const isStrongBorderedNaturalText = (
         isNaturalText
         && (
@@ -831,6 +1060,8 @@ function segmentContent(content: string, requestId: number): void {
         && isNaturalText
         && hasDialogueContextEvidence
         && (
+          isClearlySeparatedShortUtterance
+          ||
           jpCharsMatch.length >= 4
           || (
             jpCharsMatch.length >= 2
@@ -845,6 +1076,8 @@ function segmentContent(content: string, requestId: number): void {
         && !isNeverSelectable
         && isNaturalText
         && (
+          isClearlySeparatedShortUtterance
+          ||
           jpCharsMatch.length >= 4
           || (
             jpCharsMatch.length >= 2
@@ -911,6 +1144,7 @@ function segmentContent(content: string, requestId: number): void {
       const isJapanese = !RE_DISQUALIFIED.test(part)
         && !RE_STRICT_BLANK.test(part)
         && !RE_NOISE_ONLY.test(part)
+        && !isSpatialDrawing
         && (
           isNaturalText
           || isStrict
@@ -922,7 +1156,16 @@ function segmentContent(content: string, requestId: number): void {
         );
       const isAutoSelectExcluded = RE_AUTO_SELECT_EXCLUDE.test(part)
         || isLikelyFaceFragment
-        || hasDenseAAContext;
+        || isHorizontalStructure
+        || hasDenseAAContext
+        || isSpatialAmbiguous;
+      const detectionConfidence = isSpatialDrawing || isLikelyFaceFragment || isHorizontalStructure
+        ? 'drawing'
+        : isJapanese && isAutoSelectExcluded
+          ? 'ambiguous'
+          : isJapanese
+            ? 'high'
+            : undefined;
 
       newSegments.push({
         id: `seg-${lineIdx}-${currentOffset}`,
@@ -937,6 +1180,8 @@ function segmentContent(content: string, requestId: number): void {
         isIndentedDialogue: isIndentedDialogue,
         isIsolatedDialogue: isIsolatedDialogue,
         isAutoSelectExcluded: isAutoSelectExcluded,
+        detectionConfidence,
+        detectionContextSignature: spatialContext?.contextSignature,
         isSelected: false,
         isTranslated: false
       });

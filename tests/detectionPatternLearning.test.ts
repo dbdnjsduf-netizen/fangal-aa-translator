@@ -85,3 +85,36 @@ test('사용자가 직접 지정한 수동·세로수동 선택에는 유사 패
   assert.equal(refined[0].isPatternAutoSelectExcluded, undefined);
   assert.equal(refined[0].isSelected, true);
 });
+
+test('같은 짧은 문자열도 금지 당시와 그림 문맥이 비슷할 때만 유사 패턴으로 억제한다', () => {
+  const context = 'DDDDCC..../DDDD.DDDD.|r5w4d5';
+  const differentContext = '........../....CC....|r1w2d1';
+  const segments = [
+    {
+      ...segment('ニニニ'),
+      id: 'same-context',
+      detectionContextSignature: context,
+    },
+    {
+      ...segment('ニニニ'),
+      id: 'different-context',
+      detectionContextSignature: differentContext,
+    },
+  ];
+  const refined = refineAutoDetectionWithLearnedPatterns(
+    segments,
+    {
+      exact: [{
+        id: 'ban-context',
+        kind: 'normal',
+        sourceText: 'ニニニ',
+        contextSignature: context,
+        createdAt: 1,
+      }],
+    },
+    { entries: [] },
+  );
+
+  assert.equal(refined[0].isPatternAutoSelectExcluded, true);
+  assert.equal(refined[1].isPatternAutoSelectExcluded, undefined);
+});
