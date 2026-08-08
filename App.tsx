@@ -1,5 +1,12 @@
 
-import React, { useState, useEffect, startTransition } from 'react';
+import React, {
+  lazy,
+  Suspense,
+  useState,
+  useEffect,
+  useRef,
+  startTransition,
+} from 'react';
 import { FileUpload } from './components/FileUpload';
 import { Editor } from './components/Editor';
 import { Toolbar } from './components/Toolbar';
@@ -9,7 +16,6 @@ import { ChangelogModal } from './components/ChangelogModal';
 import { DictionaryModal } from './components/DictionaryModal';
 import { PromptModal } from './components/PromptModal';
 import { TranslationSettingsModal } from './components/TranslationSettingsModal';
-import { ImageExportModal } from './components/ImageExportModal';
 import { SelectionExclusionModal } from './components/SelectionExclusionModal';
 import { ManualRegexModal } from './components/ManualRegexModal';
 import { UpdateModal } from './components/UpdateModal';
@@ -69,12 +75,16 @@ import {
   deserializeManualRegexRules,
   getAddedManualRegexRules,
   getManualRegexTarget,
+  ManualRegexTarget,
   MANUAL_REGEX_STORAGE_KEY,
 } from './services/manualRegex';
 import { APP_THEME_STORAGE_KEY, normalizeAppTheme } from './services/appTheme';
-import { refineAutoDetectionWithLearnedPatterns } from './services/detectionPatternLearning';
 import { AppUpdateStatus, fetchAppUpdateStatus } from './services/appUpdate';
 import { Ban, Braces, FileText, Info, Activity, Download, Image as ImageIcon, Timer, History, Book, MessageSquareQuote, Server, CheckSquare, Moon, Sun, CloudDownload } from 'lucide-react';
+
+const ImageExportModal = lazy(() => import('./components/ImageExportModal').then((module) => ({
+  default: module.ImageExportModal,
+})));
 
 type SmartTranslationUnit =
   | {
@@ -98,6 +108,8 @@ function getProviderSetupMessage(provider: TranslationProvider) {
 }
 
 function App() {
+  const manualRegexStorageTimerRef = useRef<number | null>(null);
+  const latestManualRegexRulesRef = useRef<ManualRegexRules | null>(null);
   const [content, setContent] = useState<string>("");
   const [fileName, setFileName] = useState<string>("");
   
@@ -229,8 +241,27 @@ function App() {
   }, [selectionExclusions]);
 
   useEffect(() => {
-    localStorage.setItem(MANUAL_REGEX_STORAGE_KEY, JSON.stringify(manualRegexRules));
+    // localStorage and JSON.stringify are synchronous. Coalesce rapid additions
+    // so a large learned-rule collection is not serialized on every click.
+    if (manualRegexStorageTimerRef.current !== null) {
+      window.clearTimeout(manualRegexStorageTimerRef.current);
+    }
+    latestManualRegexRulesRef.current = manualRegexRules;
+    manualRegexStorageTimerRef.current = window.setTimeout(() => {
+      localStorage.setItem(MANUAL_REGEX_STORAGE_KEY, JSON.stringify(manualRegexRules));
+      manualRegexStorageTimerRef.current = null;
+    }, 250);
   }, [manualRegexRules]);
+
+  useEffect(() => () => {
+    if (manualRegexStorageTimerRef.current !== null) {
+      window.clearTimeout(manualRegexStorageTimerRef.current);
+      const latestRules = latestManualRegexRulesRef.current;
+      if (latestRules) {
+        localStorage.setItem(MANUAL_REGEX_STORAGE_KEY, JSON.stringify(latestRules));
+      }
+    }
+  }, []);
 
   useEffect(() => {
     localStorage.setItem(APP_THEME_STORAGE_KEY, appTheme);
@@ -301,10 +332,7 @@ function App() {
 
   const handleSelectionExclusionsChange = (nextRules: SelectionExclusionRules) => {
     setSelectionExclusions(nextRules);
-    setSegments((current) => applySelectionExclusions(
-      refineAutoDetectionWithLearnedPatterns(current, nextRules, manualRegexRules),
-      nextRules,
-    ));
+    setSegments((current) => applySelectionExclusions(current, nextRules));
   };
 
   const handleBanSelection = (segmentId: string) => {
@@ -330,11 +358,7 @@ function App() {
   };
 
   const addManualRegexTargets = (
-    targets: Array<{
-      kind: 'normal' | 'vertical';
-      sourceText: string;
-      contextSignature?: string;
-    }>,
+    targets: ManualRegexTarget[],
   ) => {
     const nextRules = targets.reduce(
       (rules, target) => addManualRegexRule(
@@ -347,18 +371,11 @@ function App() {
     if (nextRules === manualRegexRules) return;
     const addedRules = getAddedManualRegexRules(manualRegexRules, nextRules);
     setManualRegexRules(nextRules);
-    // Adding a rule is an incremental operation. Keep every current segment
-    // and selection, and only select new matches instead of re-running the
-    // worker as if the entire file had just been reopened.
+    // Exact matches are cheap and visible immediately. Do not run the learned
+    // similarity pass for this episode: new examples join the immutable
+    // learning snapshot only when the app/server is opened next time.
     setSegments((current) => applySelectionExclusions(
-      applyManualRegexRules(
-        refineAutoDetectionWithLearnedPatterns(
-          current,
-          selectionExclusions,
-          nextRules,
-        ),
-        addedRules,
-      ),
+      applyManualRegexRules(current, addedRules),
       selectionExclusions,
     ));
   };
@@ -366,13 +383,6 @@ function App() {
   const handleManualRegexSelection = (segmentId: string) => {
     const target = getManualRegexTarget(segments, segmentId);
     if (target) addManualRegexTargets([target]);
-  };
-
-  const handleManualRegexTexts = (sourceTexts: string[]) => {
-    addManualRegexTargets(sourceTexts.map((sourceText) => ({
-      kind: 'normal' as const,
-      sourceText,
-    })));
   };
 
   const updateStats = (usage: { inputTokens: number; outputTokens: number; durationMs: number; requestCount?: number }) => {
@@ -801,7 +811,7 @@ function App() {
                 <button
                   onClick={() => setIsManualRegexOpen(true)}
                   className={headerControlClass}
-                  title="반복 원문을 자동 선택하도록 저장한 수동 정규식 관리"
+                  title="저장한 정확한 원문을 자동 선택하는 수동 정규식 관리"
                 >
                   <Braces className="w-3.5 h-3.5 text-cyan-500" />
                   <span className="hidden xl:inline">수동정규식 관리</span>
@@ -933,7 +943,7 @@ function App() {
             isManualRegexMode={isManualRegexMode}
             onBanSelection={handleBanSelection}
             onManualRegexSelection={handleManualRegexSelection}
-            onManualRegexTexts={handleManualRegexTexts}
+            onManualRegexTargets={addManualRegexTargets}
             selectionExclusions={selectionExclusions}
             manualRegexRules={manualRegexRules}
             isLightMode={isLightMode}
@@ -1102,13 +1112,17 @@ function App() {
         rules={manualRegexRules}
         onChange={handleManualRegexRulesChange}
       />
-      <ImageExportModal
-        isOpen={isImageExportOpen}
-        onClose={() => setIsImageExportOpen(false)}
-        content={content}
-        fileName={fileName || 'translation.txt'}
-        fontSize={fontSize}
-      />
+      {isImageExportOpen && (
+        <Suspense fallback={null}>
+          <ImageExportModal
+            isOpen
+            onClose={() => setIsImageExportOpen(false)}
+            content={content}
+            fileName={fileName || 'translation.txt'}
+            fontSize={fontSize}
+          />
+        </Suspense>
+      )}
       
       <div className="fixed bottom-4 right-4 z-40">
         <div className="group relative">
@@ -1126,7 +1140,7 @@ function App() {
                         <p className="mt-1"><span className="text-fuchsia-300 bg-slate-700 px-1 rounded">세로수동</span> 버튼은 세로 글자 열 전체를 박스로 골라 하나의 자홍색 문장으로 묶습니다. 기존 가로·수동정규식 감지와 잘못 나뉜 세로 그룹도 새 세로 그룹으로 덮어쓸 수 있습니다.</p>
                         <p className="mt-1">수동·세로수동 상태에서도 기존 자동 감지 항목을 살짝 클릭하면 해당 일반 문장이나 세로 그룹의 선택을 끄거나 다시 켤 수 있습니다.</p>
                         <p className="mt-1"><span className="text-red-300 bg-slate-700 px-1 rounded">금지하기</span>를 켜고 선택 항목을 누르면 완전히 같은 반복 원문을 모두 해제하고 다음 파일에서도 제외합니다.</p>
-                        <p className="mt-1"><span className="text-cyan-300 bg-slate-700 px-1 rounded">수동정규식</span>을 켜고 텍스트를 박스로 고르면 같은 원문을 현재·이후 파일에서 자동 선택합니다.</p>
+                        <p className="mt-1"><span className="text-cyan-300 bg-slate-700 px-1 rounded">수동정규식</span>을 켜고 텍스트를 박스로 고르면 좌우가 공백으로 분리된 같은 원문만 즉시 선택합니다. 비슷한 글자나 반복 횟수는 자동으로 일반화하지 않습니다.</p>
                     </div>
                     <div>
                         <span className="font-semibold text-green-400">사전 기능</span>
@@ -1138,7 +1152,7 @@ function App() {
                     </div>
                     <div>
                         <span className="font-semibold text-cyan-400">수동정규식 관리</span>
-                        <p>반복 자동 선택 규칙을 삭제하거나 JSON으로 백업·복원할 수 있습니다. 금지 목록과 겹치면 금지가 우선합니다.</p>
+                        <p>정확 일치 규칙을 삭제하거나 JSON으로 백업·복원할 수 있습니다. 금지 목록과 겹치면 금지가 우선합니다.</p>
                     </div>
                     <div>
                         <span className="font-semibold text-purple-400">세로쓰기</span>

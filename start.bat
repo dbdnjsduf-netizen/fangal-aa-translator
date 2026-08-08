@@ -51,12 +51,10 @@ if /I "%~1"=="--check" (
     exit /b 0
 )
 
-echo [시작] 번역기 서버를 실행합니다...
-start "" http://127.0.0.1:3000
-call npm run dev
-
-pause
-exit /b 0
+echo [시작] 번역기 서버를 백그라운드에서 실행합니다...
+echo        잠시 후 이 창은 숨겨지고 브라우저가 자동으로 열립니다.
+powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0scripts\start-hidden.ps1"
+exit /b %errorlevel%
 
 :node_missing
 echo.

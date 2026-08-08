@@ -36,6 +36,30 @@ test('번역 완료 세그먼트는 전체 선택에서 제외하고 남은 선�
   assert.equal(isSegmentTranslationSelectable(result[1]), true);
 });
 
+test('일반 한 글자는 자동선택하지 않고 수동정규식과 세로 문장 슬롯은 허용한다', () => {
+  const automatic = segment('あ！', { id: 'automatic-single' });
+  const manualRegex = segment('あ！', {
+    id: 'regex-single',
+    isManualRegexSelection: true,
+  });
+  const vertical = segment('あ', {
+    id: 'vertical-single',
+    isVerticalText: true,
+    isVerticalBox: true,
+    verticalGroupId: 'vertical-sentence',
+  });
+  const result = selectAllTranslatableSegments([automatic, manualRegex, vertical]);
+
+  assert.equal(result[0].isSelected, false);
+  assert.equal(result[1].isSelected, true);
+  assert.equal(result[2].isSelected, true);
+});
+
+test('작은 っ까지 포함한 あっ！！는 두 글자 대사로 자동선택할 수 있다', () => {
+  const [result] = selectAllTranslatableSegments([segment('あっ！！')]);
+  assert.equal(result.isSelected, true);
+});
+
 test('최종 응답에서 동일하게 돌아온 수동 항목도 처리 완료로 표시하고 선택을 해제한다', () => {
   const manual = segment('NPC', {
     isJapanese: true,

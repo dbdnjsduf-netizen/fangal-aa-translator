@@ -14,6 +14,8 @@ const AUTOMATIC_SELECTION_FLAGS: Array<keyof TextSegment> = [
   'isIsolatedDialogue',
 ];
 
+const JAPANESE_LETTER = /[ぁ-ゖァ-ヶ一-龯々〆ヵヶ\uff66-\uff9d]/gu;
+
 export interface NormalTranslationUpdate {
   segmentId: string;
   sourceText: string;
@@ -51,9 +53,20 @@ export function selectAllTranslatableSegments(segments: TextSegment[]) {
     if (!isSegmentTranslationSelectable(segment)) {
       return segment.isSelected ? { ...segment, isSelected: false } : segment;
     }
-    const shouldSelect = !segment.isAutoSelectExcluded
-      && !segment.isPatternAutoSelectExcluded
-      && !segment.isUserExcluded
+    const japaneseLetterCount = (
+      (segment.original || segment.text).match(JAPANESE_LETTER) || []
+    ).length;
+    const isExplicitSelection = Boolean(
+      segment.isManualSelection
+      || segment.isManualRegexSelection
+      || segment.isManualVerticalSelection
+      || segment.verticalGroupId,
+    );
+    const isUnapprovedSingleCharacter = japaneseLetterCount === 1
+      && !isExplicitSelection;
+    const shouldSelect = !segment.isUserExcluded
+      && !isUnapprovedSingleCharacter
+      && !segment.isAutoSelectExcluded
       && AUTOMATIC_SELECTION_FLAGS.some((flag) => Boolean(segment[flag]));
     return shouldSelect && !segment.isSelected
       ? { ...segment, isSelected: true }

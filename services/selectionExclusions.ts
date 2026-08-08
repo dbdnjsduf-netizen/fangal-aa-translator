@@ -33,7 +33,13 @@ export function normalizeSelectionExclusions(value: unknown): SelectionExclusion
   if (!value || typeof value !== 'object') return { exact: [] };
   const candidate = value as Partial<SelectionExclusionRules>;
   const exact = Array.isArray(candidate.exact)
-    ? candidate.exact.filter(isExactRule).map((rule) => ({ ...rule }))
+    ? candidate.exact.filter(isExactRule).map((rule) => ({
+        id: rule.id,
+        kind: rule.kind,
+        sourceText: rule.sourceText,
+        contextSignature: rule.contextSignature,
+        createdAt: rule.createdAt,
+      }))
     : [];
   return { exact };
 }

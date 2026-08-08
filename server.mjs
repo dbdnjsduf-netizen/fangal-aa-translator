@@ -37,6 +37,15 @@ const updateStatePath = path.join(__dirname, '.fangal-update-state.json');
 const packageMetadata = JSON.parse(await readFile(path.join(__dirname, 'package.json'), 'utf8'));
 const appVersion = String(packageMetadata.version || '0.0.0');
 let updateCheckCache = null;
+const lifecycleClients = new Map();
+const lifecycleShutdownDelayMs = readInteger('APP_SHUTDOWN_DELAY_MS', 4_000, 1_000, 30_000);
+const lifecycleAutoShutdownEnabled = process.env.APP_AUTO_SHUTDOWN == null
+  ? isLoopbackHost(appHost)
+  : !['0', 'false', 'off', 'no'].includes(process.env.APP_AUTO_SHUTDOWN.trim().toLowerCase());
+let lifecycleShutdownTimer = null;
+let httpServer = null;
+let viteServer = null;
+let isShuttingDown = false;
 
 app.disable('x-powered-by');
 app.use((_request, response, next) => {
@@ -48,6 +57,48 @@ app.use((_request, response, next) => {
   next();
 });
 app.use(express.json({ limit: '2mb' }));
+
+app.get('/api/lifecycle/events', (request, response) => {
+  if (!lifecycleAutoShutdownEnabled) return response.status(204).end();
+  if (!isLoopbackAddress(request.socket.remoteAddress)) {
+    return response.status(403).json({ error: '앱 종료 감지는 로컬 브라우저에서만 사용할 수 있습니다.' });
+  }
+
+  const clientId = typeof request.query.clientId === 'string' ? request.query.clientId.trim() : '';
+  if (!/^[A-Za-z0-9_-]{16,128}$/.test(clientId)) {
+    return response.status(400).json({ error: '올바르지 않은 앱 창 식별자입니다.' });
+  }
+
+  cancelLifecycleShutdown();
+  const previousClient = lifecycleClients.get(clientId);
+  if (previousClient) {
+    clearInterval(previousClient.keepAliveTimer);
+    previousClient.response.end();
+  }
+
+  response.status(200).set({
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  response.flushHeaders();
+  response.write('event: connected\ndata: {}\n\n');
+
+  const keepAliveTimer = setInterval(() => {
+    if (!response.writableEnded) response.write(': keep-alive\n\n');
+  }, 15_000);
+  keepAliveTimer.unref();
+  lifecycleClients.set(clientId, { response, keepAliveTimer });
+
+  request.once('close', () => {
+    const activeClient = lifecycleClients.get(clientId);
+    if (!activeClient || activeClient.response !== response) return;
+    clearInterval(activeClient.keepAliveTimer);
+    lifecycleClients.delete(clientId);
+    scheduleLifecycleShutdown();
+  });
+});
 
 app.get('/api/config', (_request, response) => {
   response.json({
@@ -450,18 +501,18 @@ app.post('/api/openrouter/chat', async (request, response) => {
 
 if (isDevelopment) {
   const { createServer: createViteServer } = await import('vite');
-  const vite = await createViteServer({
+  viteServer = await createViteServer({
     server: { middlewareMode: true },
     appType: 'spa',
   });
-  app.use(vite.middlewares);
+  app.use(viteServer.middlewares);
 } else {
   const distPath = path.join(__dirname, 'dist');
   app.use(express.static(distPath));
   app.get('*', (_request, response) => response.sendFile(path.join(distPath, 'index.html')));
 }
 
-app.listen(port, appHost, () => {
+httpServer = app.listen(port, appHost, () => {
   const displayedHost = appHost === '0.0.0.0' ? 'localhost' : appHost;
   console.log(`[Fangal AA Translator] http://${displayedHost}:${port}`);
   console.log(
@@ -470,6 +521,50 @@ app.listen(port, appHost, () => {
     }`,
   );
 });
+
+process.once('SIGINT', () => shutdownServer('SIGINT'));
+process.once('SIGTERM', () => shutdownServer('SIGTERM'));
+
+function cancelLifecycleShutdown() {
+  if (!lifecycleShutdownTimer) return;
+  clearTimeout(lifecycleShutdownTimer);
+  lifecycleShutdownTimer = null;
+}
+
+function scheduleLifecycleShutdown() {
+  if (isShuttingDown || lifecycleClients.size > 0 || lifecycleShutdownTimer) return;
+  lifecycleShutdownTimer = setTimeout(() => {
+    lifecycleShutdownTimer = null;
+    if (lifecycleClients.size === 0) shutdownServer('last-browser-window-closed');
+  }, lifecycleShutdownDelayMs);
+  lifecycleShutdownTimer.unref();
+}
+
+async function shutdownServer(reason) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  cancelLifecycleShutdown();
+  console.log(`[Fangal AA Translator] 서버를 종료합니다: ${reason}`);
+
+  for (const { response, keepAliveTimer } of lifecycleClients.values()) {
+    clearInterval(keepAliveTimer);
+    response.end();
+  }
+  lifecycleClients.clear();
+
+  const forceExitTimer = setTimeout(() => process.exit(0), 3_000);
+  forceExitTimer.unref();
+  httpServer?.closeIdleConnections?.();
+  await Promise.allSettled([
+    new Promise((resolve) => {
+      if (!httpServer?.listening) return resolve();
+      httpServer.close(() => resolve());
+    }),
+    viteServer?.close?.(),
+  ]);
+  clearTimeout(forceExitTimer);
+  process.exit(0);
+}
 
 function normalizeOllamaHost(value) {
   let normalized = value.trim().replace(/\/+$/, '');
@@ -901,6 +996,11 @@ function compareVersions(left, right) {
 function isLoopbackAddress(address = '') {
   const normalized = String(address).replace(/^::ffff:/, '');
   return normalized === '127.0.0.1' || normalized === '::1';
+}
+
+function isLoopbackHost(host = '') {
+  const normalized = String(host).trim().replace(/^\[|\]$/g, '').toLowerCase();
+  return normalized === '127.0.0.1' || normalized === 'localhost' || normalized === '::1';
 }
 
 async function fetchWithTimeout(url, init, timeoutMs) {

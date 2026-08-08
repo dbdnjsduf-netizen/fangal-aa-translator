@@ -6,6 +6,7 @@ import {
   deserializeManualRegexRules,
   escapeRegexLiteral,
   getAddedManualRegexRules,
+  getManualRegexTargetForRange,
   normalizeManualRegexRules,
 } from '../services/manualRegex';
 import { ManualRegexRules, TextSegment } from '../types';
@@ -185,23 +186,39 @@ test('자동 감지됐지만 전체선택 제외된 항목은 수동정규식으
     isStrictJapanese: true,
     isAutoSelectExcluded: true,
   });
-  const [result] = applyManualRegexRules([source], rulesFor('あ'));
+  const result = applyManualRegexRules([
+    segment('upper-space', '\n\n  '),
+    source,
+    segment('lower-space', '  \n\n'),
+  ], rulesFor('あ')).find(({ id }) => id === source.id);
 
-  assert.equal(result.isSelected, true);
-  assert.equal(result.isManualRegexSelection, true);
+  assert.equal(result?.isSelected, true);
+  assert.equal(result?.isManualRegexSelection, true);
 });
 
-test('학습 패턴 때문에 전체선택 제외된 항목도 수동정규식을 우선한다', () => {
-  const source = segment('pattern-excluded-auto', '対象', {
-    isJapanese: true,
-    isSelected: false,
-    isAutoSelected: true,
-    isPatternAutoSelectExcluded: true,
-  });
-  const [result] = applyManualRegexRules([source], rulesFor('対象'));
+test('한 글자 수동정규식은 상하좌우가 표시 폭 2칸 이상 비어 있을 때만 적용한다', () => {
+  const isolated = applyManualRegexRules([
+    segment('isolated', '\n\n  あ  \n\n'),
+  ], rulesFor('あ'));
+  assert.deepEqual(
+    isolated.filter(({ isSelected }) => isSelected).map(({ text }) => text),
+    ['あ'],
+  );
 
-  assert.equal(result.isSelected, true);
-  assert.equal(result.isManualRegexSelection, true);
+  const oneHorizontalCell = applyManualRegexRules([
+    segment('horizontal-tight', '\n\n あ \n\n'),
+  ], rulesFor('あ'));
+  assert.equal(oneHorizontalCell.some(({ isSelected }) => isSelected), false);
+
+  const occupiedAbove = applyManualRegexRules([
+    segment('vertical-tight', '  人  \n     \n  あ  \n     \n     '),
+  ], rulesFor('あ'));
+  assert.equal(occupiedAbove.some(({ isSelected }) => isSelected), false);
+
+  const onlyOneBlankRow = applyManualRegexRules([
+    segment('one-row', '     \n  あ  \n     '),
+  ], rulesFor('あ'));
+  assert.equal(onlyOneBlankRow.some(({ isSelected }) => isSelected), false);
 });
 
 test('새 규칙만 증분 적용해 기존에 직접 해제한 정규식 선택은 건드리지 않는다', () => {
@@ -225,4 +242,68 @@ test('새 규칙만 증분 적용해 기존에 직접 해제한 정규식 선택
   assert.equal(added.entries.length, 1);
   assert.equal(result.find(({ id }) => id === 'old')?.isSelected, false);
   assert.equal(result.find(({ text }) => text === '新規')?.isSelected, true);
+});
+
+test('한 글자 자동 감지 단위와 정확히 같은 수동정규식은 분할 없이 우선 표시한다', () => {
+  const source = segment('automatic-single', 'っ！！', {
+    isJapanese: true,
+    isSelected: false,
+    isAutoSelected: true,
+  });
+  const [result] = applyManualRegexRules([source], rulesFor('っ！！'));
+
+  assert.equal(result.text, 'っ！！');
+  assert.equal(result.isSelected, true);
+  assert.equal(result.isManualRegexSelection, true);
+});
+
+test('기존 저장 데이터의 학습 프로필은 버리고 정확 문자열 규칙만 복원한다', () => {
+  const restored = normalizeManualRegexRules({
+    entries: [{
+      id: 'legacy',
+      kind: 'normal',
+      sourceText: 'あああ',
+      pattern: 'stale-pattern',
+      learningProfile: { effectShape: 'unsafe-fuzzy-pattern' },
+      createdAt: 1,
+    }],
+  });
+
+  assert.equal(restored.entries[0].pattern, 'あああ');
+  assert.equal('learningProfile' in restored.entries[0], false);
+});
+
+test('드래그로 추가한 수동정규식은 선택한 정확 문자열만 저장한다', () => {
+  const source = segment('source', 'AA　あああ　BB');
+  const target = getManualRegexTargetForRange([source], {
+    segmentId: source.id,
+    start: 3,
+    end: 6,
+  });
+
+  assert.equal(target?.sourceText, 'あああ');
+  assert.deepEqual(target, { kind: 'normal', sourceText: 'あああ' });
+});
+
+test('같은 원문은 공간 문맥이 달라도 정확 문자열 규칙 하나로 중복 제거한다', () => {
+  const first = addManualRegexRule(
+    { entries: [] },
+    {
+      kind: 'normal',
+      sourceText: 'あああ',
+      contextSignature: 'first-layout',
+    },
+    'first',
+  );
+  const second = addManualRegexRule(
+    first,
+    {
+      kind: 'normal',
+      sourceText: 'あああ',
+      contextSignature: 'second-layout',
+    },
+    'second',
+  );
+
+  assert.equal(second.entries.length, 1);
 });

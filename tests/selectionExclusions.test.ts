@@ -33,11 +33,9 @@ test('금지하기로 고른 일반 원문과 완전히 같은 반복 항목을 
     segment('c', '装飾文字', { isSelected: true }),
   ];
   const target = getSelectionExclusionTarget(segments, 'a');
-  assert.deepEqual(target, {
-    kind: 'normal',
-    sourceText: '装飾文字',
-    selected: true,
-  });
+  assert.equal(target?.kind, 'normal');
+  assert.equal(target?.sourceText, '装飾文字');
+  assert.equal(target?.selected, true);
 
   const rules = addExactSelectionExclusion(
     { exact: [] },
