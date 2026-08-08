@@ -8,7 +8,19 @@ interface ChangelogModalProps {
 
 const changelogData = [
   {
+    version: '1.11.3',
+    date: '2026-08-08',
+    title: '수동 방향 우선과 띄어쓰기 대사 인식',
+    changes: [
+      '수동정규식 항목도 일반 수동·세로수동 박스로 감지 방향 덮어쓰기',
+      '사용자가 마지막으로 지정한 가로·세로 방향을 자동 규칙보다 우선',
+      '雷　龍　波　あ　あ…っ！！처럼 한 칸씩 띄운 실제 대사를 한 문장으로 자동 선택',
+      '말풍선 경계·반복 간격·문장성을 함께 검사해 띄엄띄엄한 AA 구조 행은 제외',
+    ],
+  },
+  {
     version: '1.11.2',
+    date: '2026-08-08',
     title: '2차원 AA 그림 문맥 감지',
     changes: [
       '二·ニ·ﾆ·一·ー 사이에 선과 점이 섞인 반복 가로획을 정규화해 자동 제외',
@@ -25,6 +37,7 @@ const changelogData = [
   },
   {
     version: '1.11.1',
+    date: '2026-08-08',
     title: 'AA 내부 세로열·짧은 대사 감지 보정',
     changes: [
       '멀리 떨어진 외곽 파이프 사이의 복잡한 AA 조각을 세로 말풍선으로 오인하지 않도록 행 밀도 검사 추가',
@@ -34,6 +47,7 @@ const changelogData = [
   },
   {
     version: '1.11.0',
+    date: '2026-08-08',
     title: 'GitHub 자동 업데이트',
     changes: [
       '상단 버전 버튼에서 설치본과 GitHub main의 최신 버전을 자동 비교',
@@ -44,6 +58,7 @@ const changelogData = [
   },
   {
     version: '1.10.0',
+    date: '2026-08-08',
     title: '문자·세로쓰기 자동 감지 정밀화',
     changes: [
       'AA 문자표에 잘못 섞인 한글·근거 없는 음차 문자 제거',
@@ -54,6 +69,7 @@ const changelogData = [
   },
   {
     version: '1.9.0',
+    date: '2026-08-08',
     title: 'Codex 로그인·OpenRouter 번역 엔진 추가',
     changes: [
       'Codex CLI의 ChatGPT OAuth 로그인을 재사용하는 GPT-5.6 Luna 번역 추가',
@@ -64,6 +80,7 @@ const changelogData = [
   },
   {
     version: '1.8.0',
+    date: '2026-08-06',
     title: '수동 정규식 오선택과 짧은 번역 배치 개선',
     changes: [
       '좌우가 공백·줄바꿈 또는 문서 끝으로 분리된 원문만 수동 정규식으로 자동 선택',
@@ -74,6 +91,7 @@ const changelogData = [
   },
   {
     version: '1.7.0',
+    date: '2026-08-02',
     title: '화이트 모드와 반복 원문 자동 선택',
     changes: [
       '상단에서 AA 작업 화면의 화이트·다크 모드를 즉시 전환하고 설정 유지',
@@ -84,6 +102,7 @@ const changelogData = [
   },
   {
     version: '1.6.0',
+    date: '2026-08-02',
     title: '반복 오인식 금지 목록',
     changes: [
       '선택된 일반 문장 또는 세로쓰기 덩어리를 금지하기 버튼으로 저장',
@@ -93,6 +112,7 @@ const changelogData = [
   },
   {
     version: '1.5.1',
+    date: '2026-08-01',
     title: '이미지 ZIP 다운로드와 쉬운 설치',
     changes: [
       '번역 결과를 PNG 또는 JPG 여러 장으로 나누어 ZIP으로 다운로드',
@@ -102,6 +122,7 @@ const changelogData = [
   },
   {
     version: '1.4.0',
+    date: '2026-08-01',
     title: 'AA 화면 표시 개선',
     changes: [
       '전용 AA 뷰어와 같은 Saitamaar 글꼴과 표준 줄높이 적용',
@@ -110,6 +131,7 @@ const changelogData = [
   },
   {
     version: '1.3.0',
+    date: '2026-08-01',
     title: '번역문 공백 배치 개선',
     changes: [
       '오른쪽 여유 공간을 먼저 사용하고 AA가 밀릴 때만 왼쪽 공백 사용',
@@ -118,6 +140,7 @@ const changelogData = [
   },
   {
     version: '1.2.0',
+    date: '2026-08-01',
     title: '번역 모델 선택 추가',
     changes: [
       'Ollama 구독형 Gemma와 로컬 TranslateGemma 선택 지원',
@@ -126,6 +149,7 @@ const changelogData = [
   },
   {
     version: '1.1.0',
+    date: '2026-08-01',
     title: '번역 오류와 선택 문제 해결',
     changes: [
       '일부 청크나 세로쓰기 실패가 전체 번역을 중단하지 않도록 개선',
@@ -135,6 +159,7 @@ const changelogData = [
   },
   {
     version: '1.0.0',
+    date: '2026-08-01',
     title: 'Fangal AA 번역기 공개',
     changes: [
       '일본어 AA의 그림과 대사 위치를 최대한 유지하는 한국어 번역기 공개',
@@ -167,6 +192,7 @@ export const ChangelogModal: React.FC<ChangelogModalProps> = ({ isOpen, onClose 
                 </span>
                 <div className="mb-2 flex flex-wrap items-baseline gap-2">
                   <h3 className="text-lg font-bold text-white">v{release.version}</h3>
+                  <time className="text-xs text-slate-500" dateTime={release.date}>{release.date}</time>
                   <span className="text-sm font-medium text-purple-300">{release.title}</span>
                 </div>
                 <ul className="space-y-2">

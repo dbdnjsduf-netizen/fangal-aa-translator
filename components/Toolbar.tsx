@@ -148,7 +148,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                         ? 'bg-orange-600 text-white hover:bg-orange-500'
                         : inactiveModeButtonClass
                     }`}
-                    title="가로 텍스트를 주황색 박스로 지정하며 기존 세로 감지도 가로로 덮어씀 (짧게 클릭하면 선택 전환)"
+                    title="가로 텍스트를 지정하며 기존 세로·수동정규식 감지도 가로로 덮어씀 (짧게 클릭하면 선택 전환)"
                 >
                     <Type className="w-4 h-4" />
                     수동
@@ -160,7 +160,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                         ? 'bg-fuchsia-600 text-white hover:bg-fuchsia-500'
                         : inactiveModeButtonClass
                     }`}
-                    title="세로쓰기를 박스로 묶으며 기존 가로 감지도 세로로 덮어씀 (짧게 클릭하면 선택 전환)"
+                    title="세로쓰기를 묶으며 기존 가로·수동정규식 감지도 세로로 덮어씀 (짧게 클릭하면 선택 전환)"
                 >
                     <Columns3 className="w-4 h-4" />
                     세로수동

@@ -166,3 +166,20 @@ test('일반 수동으로 덮어쓴 글자는 번역 직전 자동 세로 재탐
   assert.ok(overridden.filter(({ isManualSelection }) => isManualSelection)
     .every(({ isVerticalText, verticalGroupId }) => !isVerticalText && !verticalGroupId));
 });
+
+test('수동정규식으로 선택된 전체 항목도 일반 수동이 가로 선택으로 덮어쓴다', () => {
+  const regexSelected = segment('雷龍波', {
+    isJapanese: true,
+    isSelected: true,
+    isManualRegexSelection: true,
+  });
+  const [overridden] = applyManualSelectionRanges(
+    [regexSelected],
+    [{ segmentId: regexSelected.id, start: 0, end: regexSelected.text.length }],
+  );
+
+  assert.equal(overridden.isSelected, true);
+  assert.equal(overridden.isManualSelection, true);
+  assert.equal(overridden.isManualRegexSelection, undefined);
+  assert.equal(overridden.isVerticalText, false);
+});

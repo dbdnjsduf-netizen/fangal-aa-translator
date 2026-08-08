@@ -141,6 +141,7 @@ test('가로로 감지된 문장을 세로수동으로 덮어쓸 때 기존 가�
         isJapanese: true,
         isStrictJapanese: true,
         isIndentedDialogue: true,
+        isManualRegexSelection: true,
         isSelected: true,
       }
       : segment
@@ -160,6 +161,7 @@ test('가로로 감지된 문장을 세로수동으로 덮어쓸 때 기존 가�
     && segment.verticalGroupId === 'manual-overrides-horizontal'
     && !segment.isStrictJapanese
     && !segment.isIndentedDialogue
+    && !segment.isManualRegexSelection
   )));
   assert.equal(
     detectVerticalTextGroups(sample, selected)[0].sourceText,
