@@ -49,7 +49,7 @@ export function applyManualSelectionRanges(
       && normalized[0].end === segment.text.length
       && segment.isJapanese
     ) {
-      if (hasDirectionOverrideMetadata(segment)) {
+      if (selectionKind === 'manual' || hasDirectionOverrideMetadata(segment)) {
         const manual = makeWholeManualSegment(segment, selectionKind);
         result.push(manual);
         newlyManualSegments.add(manual);
@@ -169,40 +169,66 @@ function mergeAdjacentManualHorizontalSegments(
   newlyManualSegments: Set<TextSegment>,
 ) {
   const merged: TextSegment[] = [];
-  const mergedManualSegments = new Set<TextSegment>();
+  let index = 0;
 
-  for (const segment of segments) {
-    const previous = merged.at(-1);
-    const segmentIsNewManual = newlyManualSegments.has(segment);
-    const previousIsNewManual = previous
-      ? newlyManualSegments.has(previous) || mergedManualSegments.has(previous)
-      : false;
-    if (
-      previous
-      && previousIsNewManual
-      && segmentIsNewManual
-      && previous.isManualSelection
-      && segment.isManualSelection
-      && previous.isSelected
-      && segment.isSelected
-      && !previous.isVerticalText
-      && !segment.isVerticalText
-      && !previous.text.includes('\n')
-      && !segment.text.includes('\n')
-    ) {
-      const joined = {
-        ...previous,
-        text: previous.text + segment.text,
-        original: previous.original + segment.original,
-      };
-      merged[merged.length - 1] = joined;
-      mergedManualSegments.add(joined);
+  while (index < segments.length) {
+    const segment = segments[index];
+    if (!isNewHorizontalManual(segment, newlyManualSegments)) {
+      merged.push(segment);
+      index += 1;
       continue;
     }
-    merged.push(segment);
+
+    let joined = segment;
+    let nextIndex = index + 1;
+    while (nextIndex < segments.length) {
+      let candidateIndex = nextIndex;
+      let gapText = '';
+      let gapOriginal = '';
+
+      while (
+        candidateIndex < segments.length
+        && isAbsorbableHorizontalGap(segments[candidateIndex])
+      ) {
+        gapText += segments[candidateIndex].text;
+        gapOriginal += segments[candidateIndex].original;
+        candidateIndex += 1;
+      }
+
+      const candidate = segments[candidateIndex];
+      if (!candidate || !isNewHorizontalManual(candidate, newlyManualSegments)) break;
+
+      joined = {
+        ...joined,
+        text: joined.text + gapText + candidate.text,
+        original: joined.original + gapOriginal + candidate.original,
+      };
+      nextIndex = candidateIndex + 1;
+    }
+
+    merged.push(joined);
+    index = nextIndex;
   }
 
   return merged;
+}
+
+function isNewHorizontalManual(
+  segment: TextSegment,
+  newlyManualSegments: Set<TextSegment>,
+) {
+  return newlyManualSegments.has(segment)
+    && Boolean(segment.isManualSelection)
+    && Boolean(segment.isSelected)
+    && !segment.isVerticalText
+    && !segment.text.includes('\n');
+}
+
+function isAbsorbableHorizontalGap(segment: TextSegment) {
+  return !segment.isTranslated
+    && !segment.text.includes('\n')
+    && segment.text.length > 0
+    && segment.text.trim().length === 0;
 }
 
 function mergeRanges(ranges: ManualSelectionRange[], text: string) {

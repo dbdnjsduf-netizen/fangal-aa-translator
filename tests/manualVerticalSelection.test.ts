@@ -68,6 +68,12 @@ test('반각 가타카나도 수동 세로쓰기 원문 문자로 선택한다',
   assert.equal(isManualVerticalSourceCharacter('ｯ'), true);
 });
 
+test('세로수동은 일본어에 붙은 ASCII 영문과 문장부호도 같은 덩어리에 포함한다', () => {
+  assert.equal(isManualVerticalSourceCharacter('N'), true);
+  assert.equal(isManualVerticalSourceCharacter('!'), true);
+  assert.equal(isManualVerticalSourceCharacter('?'), true);
+});
+
 test('자유형 말풍선에서 좌우로 흔들리는 한 열도 위에서 아래 순서로 묶는다', () => {
   const sample = [
     '　　　　こ',
@@ -169,6 +175,43 @@ test('가로로 감지된 문장을 세로수동으로 덮어쓸 때 기존 가�
   );
 });
 
+test('자동·수동정규식·가로수동·기존 세로 조각을 새 세로수동 한 그룹으로 완전히 덮어쓴다', () => {
+  const initial: TextSegment[] = [
+    markedCharacter('雷', 'auto', { isAutoSelected: true, isStrictJapanese: true }),
+    newline('newline-0'),
+    markedCharacter('龍', 'regex', { isManualRegexSelection: true }),
+    newline('newline-1'),
+    markedCharacter('A', 'manual', { isManualSelection: true }),
+    newline('newline-2'),
+    markedCharacter('!', 'vertical', {
+      isVerticalText: true,
+      isVerticalBox: true,
+      verticalGroupId: 'old-vertical-group',
+      verticalOrder: 0,
+    }),
+  ];
+  const ranges = initial
+    .filter(({ text }) => text !== '\n')
+    .map(({ id, text }) => ({ segmentId: id, start: 0, end: text.length }));
+
+  const selected = applyManualVerticalSelection(initial, ranges, 'replacement-vertical-group');
+  const manual = selected.filter(({ isManualVerticalSelection }) => isManualVerticalSelection);
+  const groups = detectVerticalTextGroups(initial.map(({ text }) => text).join(''), selected);
+
+  assert.equal(manual.length, 4);
+  assert.ok(manual.every((segment) => (
+    segment.isSelected
+    && segment.isVerticalText
+    && segment.verticalGroupId === 'replacement-vertical-group'
+    && !segment.isAutoSelected
+    && !segment.isStrictJapanese
+    && !segment.isManualRegexSelection
+  )));
+  assert.equal(selected.some(({ verticalGroupId }) => verticalGroupId === 'old-vertical-group'), false);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].sourceText, '雷龍A!');
+});
+
 function makeLineSegments(content: string): TextSegment[] {
   const result: TextSegment[] = [];
   content.split('\n').forEach((line, lineIndex, lines) => {
@@ -192,4 +235,31 @@ function makeLineSegments(content: string): TextSegment[] {
     }
   });
   return result;
+}
+
+function markedCharacter(
+  text: string,
+  id: string,
+  overrides: Partial<TextSegment>,
+): TextSegment {
+  return {
+    id,
+    text,
+    original: text,
+    isJapanese: true,
+    isSelected: true,
+    isTranslated: false,
+    ...overrides,
+  };
+}
+
+function newline(id: string): TextSegment {
+  return {
+    id,
+    text: '\n',
+    original: '\n',
+    isJapanese: false,
+    isSelected: false,
+    isTranslated: false,
+  };
 }

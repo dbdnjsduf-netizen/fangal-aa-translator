@@ -20,7 +20,7 @@ interface SelectedCharacter {
 }
 
 const MANUAL_VERTICAL_SOURCE_CHARACTER =
-  /[ぁ-んァ-ヶ一-龯々〆ヵヶー！？。、…「」『』（）［］【】│┃0-9０-９:：・･\uff66-\uff9f]/u;
+  /[ぁ-んァ-ヶ一-龯々〆ヵヶー！？!?。、.，,；;…「」『』（）［］【】│┃A-Za-zＡ-Ｚａ-ｚ0-9０-９:：・･\uff66-\uff9f]/u;
 const COLUMN_CONTINUITY_TOLERANCE = 18;
 const MAX_COLUMN_LINE_GAP = 4;
 let manualVerticalSequence = 0;
