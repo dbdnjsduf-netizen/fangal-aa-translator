@@ -22,8 +22,12 @@ import {
   toggleSegmentTranslationSelection,
 } from '../services/translationApplication';
 import { applySelectionExclusions } from '../services/selectionExclusions';
-import { applyManualRegexRules } from '../services/manualRegex';
-import { refineAutoDetectionWithLearnedPatterns } from '../services/detectionPatternLearning';
+import {
+  applyManualRegexRules,
+  getManualRegexTargetForRange,
+  ManualRegexTarget,
+} from '../services/manualRegex';
+import { createVisualWidthProfile } from '../services/visualTextMetrics';
 
 interface EditorProps {
   content: string;
@@ -42,7 +46,7 @@ interface EditorProps {
   isManualRegexMode?: boolean;
   onBanSelection?: (segmentId: string) => void;
   onManualRegexSelection?: (segmentId: string) => void;
-  onManualRegexTexts?: (sourceTexts: string[]) => void;
+  onManualRegexTargets?: (targets: ManualRegexTarget[]) => void;
   selectionExclusions: SelectionExclusionRules;
   manualRegexRules: ManualRegexRules;
   isLightMode?: boolean;
@@ -65,7 +69,7 @@ export const Editor: React.FC<EditorProps> = ({
   isManualRegexMode = false,
   onBanSelection,
   onManualRegexSelection,
-  onManualRegexTexts,
+  onManualRegexTargets,
   selectionExclusions,
   manualRegexRules,
   isLightMode = false,
@@ -125,6 +129,7 @@ export const Editor: React.FC<EditorProps> = ({
     if (viewMode === 'smart' && segments.length === 0 && content) {
       const worker = workerRef.current;
       if (!worker) return;
+      let cancelled = false;
 
       // Increment request ID to ignore stale results
       const currentRequestId = ++requestIdRef.current;
@@ -135,12 +140,7 @@ export const Editor: React.FC<EditorProps> = ({
           // preventing the UI (and other Chrome tabs) from freezing on large files.
           startTransition(() => {
             const annotated = annotateVerticalTextSegments(content, e.data.segments);
-            const refined = refineAutoDetectionWithLearnedPatterns(
-              annotated,
-              selectionExclusions,
-              manualRegexRules,
-            );
-            const withManualRegex = applyManualRegexRules(refined, manualRegexRules);
+            const withManualRegex = applyManualRegexRules(annotated, manualRegexRules);
             onSegmentsChangeRef.current(
               applySelectionExclusions(withManualRegex, selectionExclusions),
             );
@@ -149,13 +149,28 @@ export const Editor: React.FC<EditorProps> = ({
       };
 
       worker.addEventListener('message', handleMessage);
-      worker.postMessage({ type: 'segment', content, requestId: currentRequestId });
+      void createVisualWidthProfile(content).then((visualWidthProfile) => {
+        if (cancelled || workerRef.current !== worker) return;
+        worker.postMessage({
+          type: 'segment',
+          content,
+          requestId: currentRequestId,
+          visualWidthProfile,
+        });
+      });
 
       return () => {
+        cancelled = true;
         worker.removeEventListener('message', handleMessage);
       };
     }
-  }, [content, viewMode, segments.length, selectionExclusions, manualRegexRules]);
+  }, [
+    content,
+    viewMode,
+    segments.length,
+    selectionExclusions,
+    manualRegexRules,
+  ]);
 
   const toggleSegmentSelection = (id: string) => {
     const newSegments = toggleSegmentTranslationSelection(segments, id);
@@ -246,14 +261,10 @@ export const Editor: React.FC<EditorProps> = ({
     if (!isManualRegexMode || viewMode !== 'smart') return;
     const ranges = collectManualTextRanges(x1, y1, x2, y2);
     if (ranges.length === 0) return;
-    const segmentById = new Map<string, TextSegment>(
-      segments.map((segment) => [segment.id, segment]),
-    );
-    const sourceTexts = ranges
-      .map(({ segmentId, start, end }) => segmentById.get(segmentId)?.text.slice(start, end) || '')
-      .map((text) => text.trim())
-      .filter(Boolean);
-    if (sourceTexts.length > 0) onManualRegexTexts?.(sourceTexts);
+    const targets = ranges
+      .map((range) => getManualRegexTargetForRange(segments, range))
+      .filter((target): target is ManualRegexTarget => Boolean(target));
+    if (targets.length > 0) onManualRegexTargets?.(targets);
     onSelectionChange(null);
   };
 

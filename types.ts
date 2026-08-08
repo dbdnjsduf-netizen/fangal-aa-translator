@@ -41,7 +41,6 @@ export interface TextSegment {
   isIndentedDialogue?: boolean;
   isIsolatedDialogue?: boolean;
   isAutoSelectExcluded?: boolean;
-  isPatternAutoSelectExcluded?: boolean;
   detectionConfidence?: 'high' | 'ambiguous' | 'drawing';
   detectionContextSignature?: string;
   isUserExcluded?: boolean;

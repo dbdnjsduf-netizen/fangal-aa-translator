@@ -1,3 +1,5 @@
+import type { VisualWidthProfile } from './visualTextMetrics';
+
 export type DetectionConfidence = 'high' | 'ambiguous' | 'drawing';
 
 export interface SpatialCandidateAnalysis {
@@ -29,16 +31,27 @@ const DRAWING_SYMBOL = /[|│┃｜/／\\＼_＿￣─━┄┅┈┉\-~～^＾<
 const DRAWING_JAPANESE = /[一二三七彡八人入ヌノトへヘ大イムマアくミシツテ了心ハフソィッェァォュョエ工乀乁口ロ日目回凵凹凸匚コ丁十小山ー―つっぅヽヾ丶〆丿乂爻巛川丈乃亅卜匕个丫儿厂厶ヲイニハヘトレリルロ]/u;
 const LEFT_CONTAINER_BOUNDARY = /[|│┃｜>＞┌└├┏┗┣╔╚╠]/u;
 const RIGHT_CONTAINER_BOUNDARY = /[|│┃｜<＜┐┘┤┓┛┫╗╝╣]/u;
-const HORIZONTAL_CAP = /[─━┄┅┈┉―‐ー＿￣_=＝⌒^＾´｀\/／＼┌┐└┘╭╮╰╯]/u;
+const HORIZONTAL_CAP = /[─━┄┅┈┉―‐ー＿￣_=＝⌒^＾´｀\/／＼┌┐└┘╭╮╰╯\-]/u;
+const LEFT_CAP_END = /[|│┃｜>＞┌└├┏┗┣╔╚╠╭╰乂（(fF]/u;
+const RIGHT_CAP_END = /[|│┃｜<＜┐┘┤┓┛┫╗╝╣╮╯ノヽ、）)]/u;
+const SPIKED_CAP_FILL = /[人从_＿YyWw⌒]/u;
 
 export class SpatialContextAnalyzer {
   private readonly glyphCache = new Map<number, SpatialGlyph[]>();
+  private readonly visualUnitWidths?: Map<string, number>;
   private readonly componentCache = new Map<
     string,
     Array<{ line: number; glyph: SpatialGlyph }>
   >();
 
-  constructor(private readonly lines: string[]) {}
+  constructor(
+    private readonly lines: string[],
+    visualWidthProfile?: VisualWidthProfile,
+  ) {
+    if (visualWidthProfile?.version === 1) {
+      this.visualUnitWidths = new Map(visualWidthProfile.unitWidths);
+    }
+  }
 
   analyze(lineIndex: number, stringStart: number, stringEnd: number): SpatialCandidateAnalysis {
     const row = this.getGlyphs(lineIndex);
@@ -121,7 +134,10 @@ export class SpatialContextAnalyzer {
     while (stringIndex < line.length) {
       const codePoint = line.codePointAt(stringIndex) ?? 0;
       const char = String.fromCodePoint(codePoint);
-      const width = characterDisplayWidth(char);
+      const measuredWidth = this.visualUnitWidths?.get(char);
+      const width = measuredWidth !== undefined
+        ? measuredWidth
+        : characterDisplayWidth(char);
       const normalized = char.normalize('NFKC');
       glyphs.push({
         char,
@@ -245,39 +261,183 @@ export class SpatialContextAnalyzer {
       && glyph.displayStart - displayEnd <= 80
       && RIGHT_CONTAINER_BOUNDARY.test(glyph.normalized)
     ));
-    if (!left || !right || right.displayStart - left.displayEnd < 4) return false;
+    if (!left || !right) return false;
+    const innerWidth = right.displayStart - left.displayEnd;
+    if (innerWidth < 4 || innerWidth > 120) return false;
 
-    let continuity = 0;
-    for (let offset = -3; offset <= 3; offset += 1) {
-      if (offset === 0) continue;
-      const row = this.getGlyphs(lineIndex + offset);
-      if (
-        hasBoundaryNear(row, left.displayStart, LEFT_CONTAINER_BOUNDARY)
-        && hasBoundaryNear(row, right.displayStart, RIGHT_CONTAINER_BOUNDARY)
-      ) continuity += 1;
-    }
-    if (continuity === 0) return false;
+    // The candidate row must really look like "wall + blank + text + blank +
+    // wall". Dense AA often has unrelated lines on both sides; those must not
+    // be combined into an imaginary dialogue box.
+    const hasGapContent = glyphs.some((glyph) => (
+      !isBlank(glyph.char)
+      && (
+        (
+          glyph.displayStart >= left.displayEnd
+          && glyph.displayEnd <= displayStart
+        )
+        || (
+          glyph.displayStart >= displayEnd
+          && glyph.displayEnd <= right.displayStart
+        )
+      )
+    ));
+    if (hasGapContent) return false;
 
-    for (let distance = 1; distance <= 12; distance += 1) {
-      for (const rowIndex of [lineIndex - distance, lineIndex + distance]) {
-        if (rowIndex < 0 || rowIndex >= this.lines.length) continue;
+    const hasWallPair = (rowIndex: number, tolerance = 4) => {
+      const row = this.getGlyphs(rowIndex);
+      return hasBoundaryNear(row, left.displayStart, LEFT_CONTAINER_BOUNDARY, tolerance)
+        && hasBoundaryNear(row, right.displayStart, RIGHT_CONTAINER_BOUNDARY, tolerance);
+    };
+    const hasUpperWallContinuity = [1, 2, 3]
+      .some((distance) => hasWallPair(lineIndex - distance));
+    const hasLowerWallContinuity = [1, 2, 3]
+      .some((distance) => hasWallPair(lineIndex + distance));
+    const hasFlexibleUpperWallContinuity = [1, 2, 3]
+      .some((distance) => hasWallPair(lineIndex - distance, 12));
+    const hasFlexibleLowerWallContinuity = [1, 2, 3]
+      .some((distance) => hasWallPair(lineIndex + distance, 12));
+    // Saitamaar's proportional spaces can shift the source/display estimate
+    // by more than twenty cells even while the rendered f-ヽ / 乂-ノ walls
+    // remain visually aligned. This wider tolerance is used only when both
+    // characteristic rounded caps are independently confirmed below.
+    const hasRoundedUpperWallContinuity = [1, 2, 3]
+      .some((distance) => hasWallPair(lineIndex - distance, 24));
+    const hasRoundedLowerWallContinuity = [1, 2, 3]
+      .some((distance) => hasWallPair(lineIndex + distance, 24));
+
+    const hasCap = (direction: -1 | 1) => {
+      for (let distance = 1; distance <= 12; distance += 1) {
+        const rowIndex = lineIndex + (distance * direction);
+        if (rowIndex < 0 || rowIndex >= this.lines.length) break;
         const row = this.getGlyphs(rowIndex);
         const interior = row.filter((glyph) => (
           glyph.displayEnd >= left.displayStart - 3
           && glyph.displayStart <= right.displayStart + 3
           && !isBlank(glyph.char)
         ));
-        const horizontalCount = interior.filter(({ normalized }) => HORIZONTAL_CAP.test(normalized)).length;
-        const hasLeftEnd = interior.some((glyph) => Math.abs(glyph.displayStart - left.displayStart) <= 4);
-        const hasRightEnd = interior.some((glyph) => Math.abs(glyph.displayStart - right.displayStart) <= 4);
-        if (
-          hasLeftEnd
-          && hasRightEnd
-          && horizontalCount >= Math.max(3, Math.floor((right.displayStart - left.displayEnd) / 8))
-        ) return true;
+        const horizontalCount = interior.filter(({ char, normalized }) => (
+          HORIZONTAL_CAP.test(char) || HORIZONTAL_CAP.test(normalized)
+        )).length;
+        const leftEnds = interior.filter((glyph) => (
+          Math.abs(glyph.displayStart - left.displayStart) <= 4
+          && LEFT_CAP_END.test(glyph.normalized)
+        ));
+        const rightEnds = interior.filter((glyph) => RIGHT_CAP_END.test(glyph.normalized));
+        for (const leftEnd of leftEnds) {
+          for (const rightEnd of rightEnds) {
+            const isNormallyAligned = Math.abs(
+              rightEnd.displayStart - right.displayStart
+            ) <= 4;
+            // Shift-JIS AA bubbles often use proportional thin spaces. Their
+            // source columns can make the right cap appear 5-16 cells away
+            // even though Saitamaar renders it directly over the wall. Allow
+            // that drift only for the characteristic paired rounded caps.
+            const isRoundedPair = (
+              ((/[fF]/u.test(leftEnd.normalized) && rightEnd.normalized === 'ヽ')
+                || (leftEnd.normalized === '乂' && rightEnd.normalized === 'ノ'))
+              && rightEnd.displayStart > leftEnd.displayEnd
+              && Math.abs(rightEnd.displayStart - right.displayStart) <= 16
+            );
+            if (!isNormallyAligned && !isRoundedPair) continue;
+            const capSpan = rightEnd.displayStart - leftEnd.displayEnd;
+            const minimumCapGlyphs = Math.max(4, Math.ceil(capSpan * 0.45));
+            if (horizontalCount >= minimumCapGlyphs) return true;
+          }
+        }
       }
-    }
-    return false;
+      return false;
+    };
+
+    const hasRoundedCap = (
+      direction: -1 | 1,
+      leftPattern: RegExp,
+      rightPattern: RegExp,
+    ) => {
+      for (let distance = 1; distance <= 12; distance += 1) {
+        const rowIndex = lineIndex + (distance * direction);
+        if (rowIndex < 0 || rowIndex >= this.lines.length) break;
+        const row = this.getGlyphs(rowIndex).filter(({ char }) => !isBlank(char));
+        const leftEnds = row.filter((glyph) => (
+          leftPattern.test(glyph.normalized)
+          && Math.abs(glyph.displayStart - left.displayStart) <= 24
+        ));
+        const rightEnds = row.filter((glyph) => (
+          rightPattern.test(glyph.normalized)
+          && Math.abs(glyph.displayStart - right.displayStart) <= 36
+        ));
+        for (const leftEnd of leftEnds) {
+          for (const rightEnd of rightEnds) {
+            const span = rightEnd.displayStart - leftEnd.displayEnd;
+            if (span < 8) continue;
+            const horizontalCount = row.filter(({ char, normalized, displayStart }) => (
+              displayStart > leftEnd.displayStart
+              && displayStart < rightEnd.displayStart
+              && (HORIZONTAL_CAP.test(char) || HORIZONTAL_CAP.test(normalized))
+            )).length;
+            if (horizontalCount >= Math.max(4, Math.ceil(span * 0.35))) return true;
+          }
+        }
+      }
+      return false;
+    };
+
+    const hasSpikedCap = (
+      direction: -1 | 1,
+      leftPattern: RegExp,
+      rightPattern: RegExp,
+    ) => {
+      for (let distance = 1; distance <= 12; distance += 1) {
+        const rowIndex = lineIndex + (distance * direction);
+        if (rowIndex < 0 || rowIndex >= this.lines.length) break;
+        const row = this.getGlyphs(rowIndex).filter(({ char }) => !isBlank(char));
+        const leftEnds = row.filter((glyph) => (
+          leftPattern.test(glyph.char)
+          && Math.abs(glyph.displayStart - left.displayStart) <= 20
+        ));
+        const rightEnds = row.filter((glyph) => (
+          rightPattern.test(glyph.char)
+          && Math.abs(glyph.displayStart - right.displayStart) <= 24
+        ));
+        for (const leftEnd of leftEnds) {
+          for (const rightEnd of rightEnds) {
+            const span = rightEnd.displayStart - leftEnd.displayEnd;
+            if (span < 12) continue;
+            const capInterior = row.filter(({ displayStart }) => (
+              displayStart > leftEnd.displayStart
+              && displayStart < rightEnd.displayStart
+            ));
+            const fillCount = capInterior.filter(({ char, normalized }) => (
+              SPIKED_CAP_FILL.test(char) || SPIKED_CAP_FILL.test(normalized)
+            )).length;
+            // Jagged shout bubbles have a very characteristic continuous
+            // 人/从/_ or Y/W/⌒ ridge. Requiring a long, dense ridge on both
+            // caps keeps unrelated face and body strokes from becoming boxes.
+            if (
+              fillCount >= 6
+              && fillCount >= Math.ceil(capInterior.length * 0.6)
+            ) return true;
+          }
+        }
+      }
+      return false;
+    };
+
+    // A real closed box needs independent top and bottom caps. The previous
+    // one-sided test was the main source of body/face AA being learned as a
+    // speech bubble.
+    const hasStrictClosedBox = hasUpperWallContinuity
+      && hasLowerWallContinuity
+      && hasCap(-1)
+      && hasCap(1);
+    const hasProportionalRoundedBox = hasRoundedUpperWallContinuity
+      && hasRoundedLowerWallContinuity
+      && hasRoundedCap(-1, /^[fF]$/u, /^ヽ$/u)
+      && hasRoundedCap(1, /^乂$/u, /^ノ$/u);
+    const hasSpikedShoutBox = hasFlexibleUpperWallContinuity
+      && hasFlexibleLowerWallContinuity
+      && hasSpikedCap(-1, /^＼$/u, /^／$/u)
+      && hasSpikedCap(1, /^／$/u, /^＼$/u);
+    return hasStrictClosedBox || hasProportionalRoundedBox || hasSpikedShoutBox;
   }
 
   private buildContextSignature(
@@ -289,13 +449,19 @@ export class SpatialContextAnalyzer {
     componentDrawingRatio: number,
   ) {
     const center = (displayStart + displayEnd) / 2;
-    const halfSpan = 20;
-    const binWidth = 4;
+    // Local learning should describe the candidate's immediate AA context,
+    // not memorize a large part of the surrounding illustration. Keep five
+    // rows (two above/below), but narrow the horizontal window from +/-20 to
+    // +/-8 display columns and encode it at two-column precision. Dialogue-box
+    // membership is stored separately in the learning layout signature.
+    const halfSpan = 8;
+    const binWidth = 2;
+    const binCount = (halfSpan * 2) / binWidth;
     const rows: string[] = [];
     for (let rowOffset = -2; rowOffset <= 2; rowOffset += 1) {
       const row = this.getGlyphs(lineIndex + rowOffset);
       let encoded = '';
-      for (let bin = 0; bin < 10; bin += 1) {
+      for (let bin = 0; bin < binCount; bin += 1) {
         const start = center - halfSpan + (bin * binWidth);
         const end = start + binWidth;
         const occupants = row.filter((glyph) => (
@@ -312,7 +478,7 @@ export class SpatialContextAnalyzer {
       }
       rows.push(encoded);
     }
-    return `${rows.join('/')}|r${bucket(componentRows, [1, 2, 4, 8])}`
+    return `s2:${rows.join('/')}|r${bucket(componentRows, [1, 2, 4, 8])}`
       + `w${bucket(componentWidth, [4, 10, 20, 40])}`
       + `d${bucket(componentDrawingRatio, [0.2, 0.4, 0.65, 0.85])}`;
   }
@@ -320,6 +486,10 @@ export class SpatialContextAnalyzer {
 
 export function contextSignatureSimilarity(left?: string, right?: string) {
   if (!left || !right) return 0;
+  return positionalSimilarity(left, right);
+}
+
+function positionalSimilarity(left: string, right: string) {
   const length = Math.max(left.length, right.length);
   if (length === 0) return 0;
   let equal = 0;
@@ -329,9 +499,14 @@ export function contextSignatureSimilarity(left?: string, right?: string) {
   return equal / length;
 }
 
-function hasBoundaryNear(glyphs: SpatialGlyph[], x: number, pattern: RegExp) {
+function hasBoundaryNear(
+  glyphs: SpatialGlyph[],
+  x: number,
+  pattern: RegExp,
+  tolerance = 4,
+) {
   return glyphs.some((glyph) => (
-    Math.abs(glyph.displayStart - x) <= 3
+    Math.abs(glyph.displayStart - x) <= tolerance
     && pattern.test(glyph.normalized)
   ));
 }

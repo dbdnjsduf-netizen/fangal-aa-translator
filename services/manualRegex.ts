@@ -8,7 +8,7 @@ import {
   applyManualSelectionRanges,
   ManualSelectionRange,
 } from './manualSelection';
-
+import { getDisplayWidth } from './verticalText';
 export const MANUAL_REGEX_STORAGE_KEY = 'aat_manual_regex_rules_v1';
 
 export const EMPTY_MANUAL_REGEX_RULES: ManualRegexRules = { entries: [] };
@@ -41,10 +41,13 @@ export function normalizeManualRegexRules(value: unknown): ManualRegexRules {
   const entries = candidate.entries
     .filter(isManualRegexRule)
     .map((rule) => ({
-      ...rule,
+      id: rule.id,
+      kind: rule.kind,
+      sourceText: rule.sourceText,
       // Imported patterns are always rebuilt from their source. This keeps the
       // feature literal and prevents unsafe or accidentally over-broad regexes.
       pattern: escapeRegexLiteral(rule.sourceText),
+      createdAt: rule.createdAt,
     }));
   return { entries };
 }
@@ -58,7 +61,8 @@ export function addManualRegexRule(
   const sourceText = target.sourceText.trim();
   if (!sourceText) return rules;
   if (rules.entries.some((rule) => (
-    rule.kind === target.kind && rule.sourceText === sourceText
+    rule.kind === target.kind
+    && rule.sourceText === sourceText
   ))) return rules;
   return {
     entries: [
@@ -68,7 +72,6 @@ export function addManualRegexRule(
         kind: target.kind,
         sourceText,
         pattern: escapeRegexLiteral(sourceText),
-        contextSignature: target.contextSignature,
         createdAt,
       },
     ],
@@ -79,13 +82,9 @@ export function getAddedManualRegexRules(
   previous: ManualRegexRules,
   next: ManualRegexRules,
 ): ManualRegexRules {
-  const previousKeys = new Set(
-    previous.entries.map(({ kind, sourceText }) => `${kind}\u0000${sourceText}`),
-  );
+  const previousIds = new Set(previous.entries.map(({ id }) => id));
   return {
-    entries: next.entries.filter(({ kind, sourceText }) => (
-      !previousKeys.has(`${kind}\u0000${sourceText}`)
-    )),
+    entries: next.entries.filter(({ id }) => !previousIds.has(id)),
   };
 }
 
@@ -106,17 +105,31 @@ export function getManualRegexTarget(
     return sourceText.trim() ? {
       kind: 'vertical',
       sourceText,
-      contextSignature: group.find(({ detectionContextSignature }) => (
-        Boolean(detectionContextSignature)
-      ))?.detectionContextSignature,
     } : null;
   }
   const sourceText = sourceOf(target);
   return sourceText.trim() ? {
     kind: 'normal',
     sourceText,
-    contextSignature: target.detectionContextSignature,
   } : null;
+}
+
+export function getManualRegexTargetForRange(
+  segments: TextSegment[],
+  range: ManualSelectionRange,
+): ManualRegexTarget | null {
+  const segmentIndex = segments.findIndex(({ id }) => id === range.segmentId);
+  if (segmentIndex < 0) return null;
+  const segment = segments[segmentIndex];
+  if (segment.isTranslated) return null;
+  const start = Math.max(0, Math.min(range.start, segment.text.length));
+  const end = Math.max(start, Math.min(range.end, segment.text.length));
+  const sourceText = segment.text.slice(start, end).trim();
+  if (!sourceText) return null;
+  return {
+    kind: 'normal',
+    sourceText,
+  };
 }
 
 export function applyManualRegexRules(
@@ -124,6 +137,7 @@ export function applyManualRegexRules(
   rules: ManualRegexRules,
 ): TextSegment[] {
   if (rules.entries.length === 0) return segments;
+  const documentLayout = createDocumentLayout(segments);
   const normalTexts = [...new Set(
     rules.entries
       .filter(({ kind }) => kind === 'normal')
@@ -166,17 +180,36 @@ export function applyManualRegexRules(
   if (normalTexts.length === 0) return withVerticalSelections;
   const ranges: ManualSelectionRange[] = [];
   for (const [segmentIndex, segment] of withVerticalSelections.entries()) {
+    if (segment.isTranslated || segment.verticalGroupId) continue;
+    const exactSourceText = sourceOf(segment);
+    const exactWholeMatch = normalTexts.includes(exactSourceText)
+      && hasRuleBoundaries(
+        withVerticalSelections,
+        documentLayout,
+        segmentIndex,
+        0,
+        segment.text.length,
+        exactSourceText,
+      );
+    if (exactWholeMatch) {
+      withVerticalSelections[segmentIndex] = {
+        ...segment,
+        isJapanese: true,
+        isSelected: true,
+        isManualRegexSelection: true,
+      };
+      continue;
+    }
     // A selected or already recognized automatic segment is already a complete
     // translation unit. Manual-regex matches inside it must not split the unit,
     // even before the user presses "select all" and isSelected becomes true.
     if (
-      segment.isTranslated
-      || segment.isSelected
-      || segment.verticalGroupId
+      segment.isSelected
       || isAutomaticTranslationUnit(segment)
     ) continue;
     ranges.push(...findLiteralRanges(
       withVerticalSelections,
+      documentLayout,
       segmentIndex,
       normalTexts,
     ));
@@ -192,9 +225,8 @@ export function applyManualRegexRules(
 
 function isAutomaticTranslationUnit(segment: TextSegment) {
   return segment.isJapanese
-    && !segment.isAutoSelectExcluded
-    && !segment.isPatternAutoSelectExcluded
     && !segment.isUserExcluded
+    && !segment.isAutoSelectExcluded
     && Boolean(
     segment.isAutoSelected
     || segment.isStrictJapanese
@@ -208,6 +240,7 @@ function isAutomaticTranslationUnit(segment: TextSegment) {
 
 function findLiteralRanges(
   segments: TextSegment[],
+  documentLayout: ManualRegexDocumentLayout,
   segmentIndex: number,
   sourceTexts: string[],
 ) {
@@ -219,7 +252,14 @@ function findLiteralRanges(
       const matchStart = segment.text.indexOf(sourceText, start);
       if (matchStart === -1) break;
       const matchEnd = matchStart + sourceText.length;
-      if (hasWhitespaceBoundaries(segments, segmentIndex, matchStart, matchEnd)) {
+      if (hasRuleBoundaries(
+        segments,
+        documentLayout,
+        segmentIndex,
+        matchStart,
+        matchEnd,
+        sourceText,
+      )) {
         candidates.push({ start: matchStart, end: matchEnd });
       }
       start = matchStart + Math.max(1, sourceText.length);
@@ -234,6 +274,117 @@ function findLiteralRanges(
     occupiedUntil = candidate.end;
   }
   return accepted;
+}
+
+interface ManualRegexDocumentLayout {
+  content: string;
+  segmentStarts: number[];
+  lines: string[];
+  lineStarts: number[];
+}
+
+function createDocumentLayout(segments: TextSegment[]): ManualRegexDocumentLayout {
+  const segmentStarts: number[] = [];
+  let content = '';
+  for (const segment of segments) {
+    segmentStarts.push(content.length);
+    content += segment.text;
+  }
+  const lines = content.split('\n');
+  const lineStarts: number[] = [];
+  let offset = 0;
+  for (const line of lines) {
+    lineStarts.push(offset);
+    offset += line.length + 1;
+  }
+  return { content, segmentStarts, lines, lineStarts };
+}
+
+function hasRuleBoundaries(
+  segments: TextSegment[],
+  documentLayout: ManualRegexDocumentLayout,
+  segmentIndex: number,
+  start: number,
+  end: number,
+  sourceText: string,
+) {
+  if (Array.from(sourceText).length === 1) {
+    return hasFourSideTwoCellIsolation(
+      documentLayout,
+      segmentIndex,
+      start,
+      end,
+    );
+  }
+  return hasWhitespaceBoundaries(segments, segmentIndex, start, end);
+}
+
+function hasFourSideTwoCellIsolation(
+  layout: ManualRegexDocumentLayout,
+  segmentIndex: number,
+  start: number,
+  end: number,
+) {
+  const absoluteStart = layout.segmentStarts[segmentIndex] + start;
+  const absoluteEnd = layout.segmentStarts[segmentIndex] + end;
+  const lineIndex = findLineIndex(layout.lineStarts, absoluteStart);
+  const lineStart = layout.lineStarts[lineIndex];
+  const line = layout.lines[lineIndex] || '';
+  const localStart = absoluteStart - lineStart;
+  const localEnd = absoluteEnd - lineStart;
+  if (localStart < 0 || localEnd > line.length) return false;
+
+  const leftWhitespace = line.slice(0, localStart)
+    .match(/[\s\u3000\u00a0\u2000-\u200b]+$/u)?.[0] || '';
+  const rightWhitespace = line.slice(localEnd)
+    .match(/^[\s\u3000\u00a0\u2000-\u200b]+/u)?.[0] || '';
+  if (getDisplayWidth(leftWhitespace) < 2 || getDisplayWidth(rightWhitespace) < 2) {
+    return false;
+  }
+
+  // Two physical rows above and below must be empty across the character's
+  // displayed columns. This rejects isolated-looking eyes/eyebrows embedded in
+  // AA even when their immediate left and right happen to be spaces.
+  if (lineIndex < 2 || lineIndex + 2 >= layout.lines.length) return false;
+  const displayStart = getDisplayWidth(line.slice(0, localStart));
+  const displayEnd = displayStart + getDisplayWidth(line.slice(localStart, localEnd));
+  for (const neighborIndex of [
+    lineIndex - 2,
+    lineIndex - 1,
+    lineIndex + 1,
+    lineIndex + 2,
+  ]) {
+    if (!isDisplayRangeBlank(layout.lines[neighborIndex], displayStart, displayEnd)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function findLineIndex(lineStarts: number[], absoluteOffset: number) {
+  let low = 0;
+  let high = lineStarts.length - 1;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    if (lineStarts[middle] <= absoluteOffset) low = middle + 1;
+    else high = middle - 1;
+  }
+  return Math.max(0, high);
+}
+
+function isDisplayRangeBlank(line: string, rangeStart: number, rangeEnd: number) {
+  let displayX = 0;
+  for (const character of line) {
+    const characterEnd = displayX + getDisplayWidth(character);
+    if (
+      displayX < rangeEnd
+      && characterEnd > rangeStart
+      && !/^[\s\u3000\u00a0\u2000-\u200b]$/u.test(character)
+    ) return false;
+    displayX = characterEnd;
+    if (displayX >= rangeEnd) break;
+  }
+  return true;
 }
 
 function hasWhitespaceBoundaries(

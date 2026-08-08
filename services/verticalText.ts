@@ -1,5 +1,6 @@
 import { TextSegment } from '../types';
 import { DetectionConfidence, SpatialContextAnalyzer } from './spatialDetection';
+import { getActiveVisualOverflowCells } from './visualTextMetrics';
 
 // Digits and a small set of in-sentence marks are context tokens, not enough
 // to establish a vertical group by themselves. Once Japanese text establishes
@@ -376,7 +377,9 @@ export function fitTranslationToDisplayWidth(
 
   const translatedWidth = getDisplayWidth(text);
   if (translatedWidth > availableWidth) {
-    const overflowWidth = translatedWidth - availableWidth;
+    const cellOverflow = translatedWidth - availableWidth;
+    const overflowWidth = getActiveVisualOverflowCells(original, text, cellOverflow)
+      ?? cellOverflow;
     return {
       applied: true,
       text,
@@ -385,9 +388,19 @@ export function fitTranslationToDisplayWidth(
     };
   }
 
+  const fittedText = text + ' '.repeat(availableWidth - translatedWidth);
+  const visualOverflowWidth = getActiveVisualOverflowCells(original, fittedText, 0) ?? 0;
+  if (visualOverflowWidth > 0) {
+    return {
+      applied: true,
+      text: fittedText,
+      reason: `실제 표시 폭이 ${visualOverflowWidth}칸 초과되어 인접 공백을 사용합니다.`,
+      overflowWidth: visualOverflowWidth,
+    };
+  }
   return {
     applied: true,
-    text: text + ' '.repeat(availableWidth - translatedWidth),
+    text: fittedText,
   };
 }
 

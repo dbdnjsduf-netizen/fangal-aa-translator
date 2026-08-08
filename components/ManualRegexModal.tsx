@@ -73,7 +73,7 @@ export const ManualRegexModal: React.FC<ManualRegexModalProps> = ({
               <Braces className="h-5 w-5 text-cyan-400" /> 수동 정규식 관리
             </h2>
             <p className="mt-1 text-xs text-slate-400">
-              선택한 원문을 문자 그대로 기억해 현재 파일과 다음 파일에서 자동 선택합니다.
+              저장한 원문과 완전히 같은 문자열만 공백 경계에서 자동 선택합니다. 한 글자는 상하좌우 2칸 여백이 필요합니다.
             </p>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-white" aria-label="수동 정규식 관리 닫기">
@@ -86,7 +86,7 @@ export const ManualRegexModal: React.FC<ManualRegexModalProps> = ({
             <div>
               <h3 className="text-sm font-bold text-slate-300">저장된 자동 선택 규칙</h3>
               <p className="mt-1 text-xs text-slate-500">
-                특수문자는 자동 이스케이프하므로 선택한 텍스트와 완전히 같은 문자열에만 적용됩니다.
+                비슷한 글자나 반복 횟수는 일반화하지 않으며, 사용자가 저장한 정확한 문자열만 적용됩니다.
               </p>
             </div>
             <div className="flex shrink-0 gap-2">
