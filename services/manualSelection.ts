@@ -29,6 +29,7 @@ export function applyManualSelectionRanges(
     rangesBySegmentId.set(range.segmentId, existing);
   }
   const result: TextSegment[] = [];
+  const newlyManualSegments = new Set<TextSegment>();
 
   for (const segment of segments) {
     const requestedRanges = rangesBySegmentId.get(segment.id);
@@ -48,11 +49,17 @@ export function applyManualSelectionRanges(
       && normalized[0].end === segment.text.length
       && segment.isJapanese
     ) {
-      result.push({
-        ...segment,
-        isSelected: true,
-        isManualRegexSelection: selectionKind === 'regex' || undefined,
-      });
+      if (hasVerticalMetadata(segment)) {
+        const manual = makeWholeManualSegment(segment, selectionKind);
+        result.push(manual);
+        newlyManualSegments.add(manual);
+      } else {
+        result.push({
+          ...segment,
+          isSelected: true,
+          isManualRegexSelection: selectionKind === 'regex' || undefined,
+        });
+      }
       continue;
     }
 
@@ -61,7 +68,9 @@ export function applyManualSelectionRanges(
       if (start > cursor) {
         result.push(sliceSegment(segment, cursor, start, `before-${index}`));
       }
-      result.push(makeManualSegment(segment, start, end, selectionKind));
+      const manual = makeManualSegment(segment, start, end, selectionKind);
+      result.push(manual);
+      newlyManualSegments.add(manual);
       cursor = end;
     });
     if (cursor < segment.text.length) {
@@ -69,7 +78,18 @@ export function applyManualSelectionRanges(
     }
   }
 
-  return result;
+  return mergeAdjacentManualHorizontalSegments(result, newlyManualSegments);
+}
+
+function hasVerticalMetadata(segment: TextSegment) {
+  return Boolean(
+    segment.isVerticalText
+    || segment.isManualVerticalSelection
+    || segment.verticalGroupId
+    || segment.verticalOrder !== undefined
+    || segment.verticalSourceLine !== undefined
+    || segment.verticalSourceIndex !== undefined,
+  );
 }
 
 function sliceSegment(
@@ -100,6 +120,20 @@ function makeManualSegment(
   selectionKind: 'manual' | 'regex',
 ): TextSegment {
   const selected = sliceSegment(segment, start, end, selectionKind);
+  return makeHorizontalManualSegment(selected, selectionKind);
+}
+
+function makeWholeManualSegment(
+  segment: TextSegment,
+  selectionKind: 'manual' | 'regex',
+) {
+  return makeHorizontalManualSegment(segment, selectionKind);
+}
+
+function makeHorizontalManualSegment(
+  selected: TextSegment,
+  selectionKind: 'manual' | 'regex',
+): TextSegment {
   const clearedFlags = Object.fromEntries(
     AUTOMATIC_FLAGS.map((flag) => [flag, false]),
   ) as Partial<TextSegment>;
@@ -121,6 +155,53 @@ function makeManualSegment(
     verticalDisplayX: undefined,
     verticalDisplayWidth: undefined,
   };
+}
+
+/**
+ * Automatic vertical annotation splits a horizontal row into one-character
+ * segments. When the user explicitly redraws that row in normal manual mode,
+ * join only newly converted adjacent cells. Newlines and untouched gaps remain
+ * hard boundaries, so separate source rows are never combined accidentally.
+ */
+function mergeAdjacentManualHorizontalSegments(
+  segments: TextSegment[],
+  newlyManualSegments: Set<TextSegment>,
+) {
+  const merged: TextSegment[] = [];
+  const mergedManualSegments = new Set<TextSegment>();
+
+  for (const segment of segments) {
+    const previous = merged.at(-1);
+    const segmentIsNewManual = newlyManualSegments.has(segment);
+    const previousIsNewManual = previous
+      ? newlyManualSegments.has(previous) || mergedManualSegments.has(previous)
+      : false;
+    if (
+      previous
+      && previousIsNewManual
+      && segmentIsNewManual
+      && previous.isManualSelection
+      && segment.isManualSelection
+      && previous.isSelected
+      && segment.isSelected
+      && !previous.isVerticalText
+      && !segment.isVerticalText
+      && !previous.text.includes('\n')
+      && !segment.text.includes('\n')
+    ) {
+      const joined = {
+        ...previous,
+        text: previous.text + segment.text,
+        original: previous.original + segment.original,
+      };
+      merged[merged.length - 1] = joined;
+      mergedManualSegments.add(joined);
+      continue;
+    }
+    merged.push(segment);
+  }
+
+  return merged;
 }
 
 function mergeRanges(ranges: ManualSelectionRange[], text: string) {

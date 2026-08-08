@@ -365,6 +365,18 @@ test('AA 골격과 작은 가나 조각은 자유형 세로 대사로 승격하�
   assert.equal(detectVerticalTextGroups(sample, makeLineSegments(sample)).length, 0);
 });
 
+test('서로 다른 한자처럼 보이는 AA 골격 열도 세로 문장으로 승격하지 않는다', () => {
+  const sample = [
+    '|　　　工　　　|',
+    '|　　　口　　　|',
+    '|　　　日　　　|',
+    '|　　　目　　　|',
+    '|　　　回　　　|',
+  ].join('\n');
+
+  assert.equal(detectVerticalTextGroups(sample, makeLineSegments(sample)).length, 0);
+});
+
 test('좌우로 크게 튀는 특수문자 덩어리는 자유형 세로 열로 연결하지 않는다', () => {
   const sample = [
     '／　　こ　　　　　　　　　＼',

@@ -132,6 +132,41 @@ test('자동으로 잘못 나뉜 세로 슬롯도 수동 박스로 한 그룹에
   );
 });
 
+test('가로로 감지된 문장을 세로수동으로 덮어쓸 때 기존 가로 플래그를 제거한다', () => {
+  const sample = ['　横', '　書'].join('\n');
+  const initial = makeLineSegments(sample).map((segment) => (
+    /[一-龯]/u.test(segment.text)
+      ? {
+        ...segment,
+        isJapanese: true,
+        isStrictJapanese: true,
+        isIndentedDialogue: true,
+        isSelected: true,
+      }
+      : segment
+  ));
+  const ranges = initial.flatMap((segment) => {
+    const index = segment.text.search(/[一-龯]/u);
+    return index === -1
+      ? []
+      : [{ segmentId: segment.id, start: index, end: index + 1 }];
+  });
+  const selected = applyManualVerticalSelection(initial, ranges, 'manual-overrides-horizontal');
+  const manual = selected.filter(({ isManualVerticalSelection }) => isManualVerticalSelection);
+
+  assert.equal(manual.length, 2);
+  assert.ok(manual.every((segment) => (
+    segment.isVerticalText
+    && segment.verticalGroupId === 'manual-overrides-horizontal'
+    && !segment.isStrictJapanese
+    && !segment.isIndentedDialogue
+  )));
+  assert.equal(
+    detectVerticalTextGroups(sample, selected)[0].sourceText,
+    '横書',
+  );
+});
+
 function makeLineSegments(content: string): TextSegment[] {
   const result: TextSegment[] = [];
   content.split('\n').forEach((line, lineIndex, lines) => {

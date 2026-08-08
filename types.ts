@@ -42,6 +42,8 @@ export interface TextSegment {
   isIsolatedDialogue?: boolean;
   isAutoSelectExcluded?: boolean;
   isPatternAutoSelectExcluded?: boolean;
+  detectionConfidence?: 'high' | 'ambiguous' | 'drawing';
+  detectionContextSignature?: string;
   isUserExcluded?: boolean;
   isSelected: boolean;
   isTranslated: boolean;
@@ -68,6 +70,7 @@ export interface ExactSelectionExclusionRule {
   id: string;
   kind: SelectionExclusionKind;
   sourceText: string;
+  contextSignature?: string;
   createdAt: number;
 }
 
@@ -80,6 +83,7 @@ export interface ManualRegexRule {
   kind: SelectionExclusionKind;
   sourceText: string;
   pattern: string;
+  contextSignature?: string;
   createdAt: number;
 }
 

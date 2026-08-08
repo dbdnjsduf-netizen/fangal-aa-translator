@@ -16,6 +16,7 @@ export const EMPTY_MANUAL_REGEX_RULES: ManualRegexRules = { entries: [] };
 export interface ManualRegexTarget {
   kind: SelectionExclusionKind;
   sourceText: string;
+  contextSignature?: string;
 }
 
 export function escapeRegexLiteral(sourceText: string) {
@@ -67,6 +68,7 @@ export function addManualRegexRule(
         kind: target.kind,
         sourceText,
         pattern: escapeRegexLiteral(sourceText),
+        contextSignature: target.contextSignature,
         createdAt,
       },
     ],
@@ -101,10 +103,20 @@ export function getManualRegexTarget(
         - (right.verticalOrder ?? Number.MAX_SAFE_INTEGER)
       ));
     const sourceText = group.map(sourceOf).join('');
-    return sourceText.trim() ? { kind: 'vertical', sourceText } : null;
+    return sourceText.trim() ? {
+      kind: 'vertical',
+      sourceText,
+      contextSignature: group.find(({ detectionContextSignature }) => (
+        Boolean(detectionContextSignature)
+      ))?.detectionContextSignature,
+    } : null;
   }
   const sourceText = sourceOf(target);
-  return sourceText.trim() ? { kind: 'normal', sourceText } : null;
+  return sourceText.trim() ? {
+    kind: 'normal',
+    sourceText,
+    contextSignature: target.detectionContextSignature,
+  } : null;
 }
 
 export function applyManualRegexRules(
@@ -251,5 +263,6 @@ function isManualRegexRule(value: unknown): value is ManualRegexRule {
     && (rule.kind === 'normal' || rule.kind === 'vertical')
     && typeof rule.sourceText === 'string'
     && rule.sourceText.trim().length > 0
+    && (rule.contextSignature === undefined || typeof rule.contextSignature === 'string')
     && typeof rule.createdAt === 'number';
 }

@@ -25,6 +25,16 @@ const COLUMN_CONTINUITY_TOLERANCE = 18;
 const MAX_COLUMN_LINE_GAP = 4;
 let manualVerticalSequence = 0;
 
+const HORIZONTAL_DETECTION_FLAGS: Array<keyof TextSegment> = [
+  'isStrictJapanese',
+  'isAutoSelected',
+  'isBoxedDialogue',
+  'isContextDialogue',
+  'isArrowBox',
+  'isIndentedDialogue',
+  'isIsolatedDialogue',
+];
+
 export function isManualVerticalSourceCharacter(character: string) {
   return MANUAL_VERTICAL_SOURCE_CHARACTER.test(character);
 }
@@ -185,11 +195,16 @@ function makeManualVerticalSegment(
   groupId: string,
 ): TextSegment {
   const sliced = sliceSegment(segment, character.start, character.end, `vertical-${character.order}`);
+  const clearedHorizontalFlags = Object.fromEntries(
+    HORIZONTAL_DETECTION_FLAGS.map((flag) => [flag, false]),
+  ) as Partial<TextSegment>;
   return {
     ...sliced,
+    ...clearedHorizontalFlags,
     isJapanese: true,
     isManualSelection: true,
     isManualVerticalSelection: true,
+    isManualRegexSelection: false,
     isAutoSelectExcluded: false,
     isSelected: true,
     isTranslated: false,

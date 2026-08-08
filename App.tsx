@@ -330,7 +330,11 @@ function App() {
   };
 
   const addManualRegexTargets = (
-    targets: Array<{ kind: 'normal' | 'vertical'; sourceText: string }>,
+    targets: Array<{
+      kind: 'normal' | 'vertical';
+      sourceText: string;
+      contextSignature?: string;
+    }>,
   ) => {
     const nextRules = targets.reduce(
       (rules, target) => addManualRegexRule(
@@ -1118,8 +1122,8 @@ function App() {
                         <span className="font-semibold text-blue-400">선택 모드</span>
                         <p>번역하려는 텍스트를 클릭하여 선택하세요.</p>
                         <p className="mt-1">하단 툴바의 <span className="text-slate-100 bg-slate-700 px-1 rounded">드래그</span> 버튼을 켜면 박스 드래그로 여러 줄을 한 번에 선택할 수 있습니다.</p>
-                        <p className="mt-1"><span className="text-orange-300 bg-slate-700 px-1 rounded">수동</span> 버튼을 켜면 자동 감지에서 빠진 가로 텍스트 전체를 주황색 박스로 간편하게 드래그해 번역 대상으로 추가할 수 있습니다.</p>
-                        <p className="mt-1"><span className="text-fuchsia-300 bg-slate-700 px-1 rounded">세로수동</span> 버튼은 세로 글자 열 전체를 박스로 골라 하나의 자홍색 문장으로 묶습니다. 잘못 나뉜 보라색 그룹도 다시 묶을 수 있습니다.</p>
+                        <p className="mt-1"><span className="text-orange-300 bg-slate-700 px-1 rounded">수동</span> 버튼을 켜면 가로 텍스트 전체를 주황색 박스로 지정합니다. 기존 세로 감지 위에 그리면 가로 번역으로 덮어씁니다.</p>
+                        <p className="mt-1"><span className="text-fuchsia-300 bg-slate-700 px-1 rounded">세로수동</span> 버튼은 세로 글자 열 전체를 박스로 골라 하나의 자홍색 문장으로 묶습니다. 기존 가로 감지와 잘못 나뉜 세로 그룹도 새 세로 그룹으로 덮어쓸 수 있습니다.</p>
                         <p className="mt-1">수동·세로수동 상태에서도 기존 자동 감지 항목을 살짝 클릭하면 해당 일반 문장이나 세로 그룹의 선택을 끄거나 다시 켤 수 있습니다.</p>
                         <p className="mt-1"><span className="text-red-300 bg-slate-700 px-1 rounded">금지하기</span>를 켜고 선택 항목을 누르면 완전히 같은 반복 원문을 모두 해제하고 다음 파일에서도 제외합니다.</p>
                         <p className="mt-1"><span className="text-cyan-300 bg-slate-700 px-1 rounded">수동정규식</span>을 켜고 텍스트를 박스로 고르면 같은 원문을 현재·이후 파일에서 자동 선택합니다.</p>
