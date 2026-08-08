@@ -49,7 +49,7 @@ export function applyManualSelectionRanges(
       && normalized[0].end === segment.text.length
       && segment.isJapanese
     ) {
-      if (hasVerticalMetadata(segment)) {
+      if (hasDirectionOverrideMetadata(segment)) {
         const manual = makeWholeManualSegment(segment, selectionKind);
         result.push(manual);
         newlyManualSegments.add(manual);
@@ -81,9 +81,10 @@ export function applyManualSelectionRanges(
   return mergeAdjacentManualHorizontalSegments(result, newlyManualSegments);
 }
 
-function hasVerticalMetadata(segment: TextSegment) {
+function hasDirectionOverrideMetadata(segment: TextSegment) {
   return Boolean(
-    segment.isVerticalText
+    segment.isManualRegexSelection
+    || segment.isVerticalText
     || segment.isManualVerticalSelection
     || segment.verticalGroupId
     || segment.verticalOrder !== undefined

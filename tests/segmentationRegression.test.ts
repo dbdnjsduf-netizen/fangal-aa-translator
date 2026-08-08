@@ -234,6 +234,32 @@ test('장음과 구조형 가타카나가 많아도 내부 공백으로 이어�
   assert.match(selectedText, /おーーい　西住戦車兵/u);
 });
 
+test('한 칸씩 규칙적으로 띄운 말풍선 대사를 하나의 가로 번역 단위로 선택한다', () => {
+  const sample = [
+    '　　　　　　　　　／￣￣￣￣￣￣￣￣￣￣￣￣￣￣＼',
+    '　　　　　　　　＞　雷　龍　波　あ　あ　あ　あ　あ　あ　あ　あ　っ！！　＜',
+    '　　　　　　　　　＼＿＿＿＿＿＿＿＿＿＿＿＿＿＿／',
+  ].join('\n');
+  const segments = segment(sample);
+  const selectable = segments.filter(isSelectable);
+
+  assert.equal(segments.map(({ text }) => text).join(''), sample);
+  assert.equal(selectable.length, 1);
+  assert.equal(selectable[0].text, '雷　龍　波　あ　あ　あ　あ　あ　あ　あ　あ　っ！！');
+  assert.equal(selectable[0].isVerticalText, undefined);
+  assert.equal(detectVerticalTextGroups(sample, segments).length, 0);
+});
+
+test('문장 근거가 없는 띄엄띄엄한 AA 모양 문자는 가로 대사로 합치지 않는다', () => {
+  const sample = '　　　　　　　　＞　ハ　人　ノ　へ　ミ　ハ　人　＜';
+  const selectedText = segment(sample)
+    .filter(isSelectable)
+    .map(({ text }) => text)
+    .join('');
+
+  assert.equal(selectedText, '');
+});
+
 test('반복 한자와 반각 가타카나로 채운 문자 질감 AA는 대사로 선택하지 않는다', () => {
   const sample = [
     '　　　　　　圭圭圭圭圭圭圭圭圭圭圭圭圭圭圭圭',

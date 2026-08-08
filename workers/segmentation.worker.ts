@@ -530,6 +530,130 @@ interface WorkerTextSegment {
   isTranslated: boolean;
 }
 
+interface SpacedHorizontalDialogueRange {
+  start: number;
+  end: number;
+  isBoxed: boolean;
+}
+
+const SPACED_DIALOGUE_SCRIPT = 'ぁ-んァ-ヶ一-龯々〆ヵヶ\uff66-\uff9f';
+const RE_SPACED_DIALOGUE_RUN = new RegExp(
+  `(?:[${SPACED_DIALOGUE_SCRIPT}][！？!?。、…ー]*[ \\u3000\\u00A0\\u2000-\\u200B]+){4,}`
+  + `[${SPACED_DIALOGUE_SCRIPT}][${SPACED_DIALOGUE_SCRIPT}！？!?。、…ー]*`,
+  'gu',
+);
+
+/**
+ * Finds horizontally written dialogue whose author inserted a regular blank
+ * cell between nearly every character. It requires both repeated spacing and
+ * language evidence; structural AA glyph rows such as "ハ　人　ノ" do not
+ * qualify merely because they are evenly spaced.
+ */
+const findSpacedHorizontalDialogue = (line: string): SpacedHorizontalDialogueRange | undefined => {
+  RE_SPACED_DIALOGUE_RUN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = RE_SPACED_DIALOGUE_RUN.exec(line)) !== null) {
+    const text = match[0];
+    const compact = text.replace(/[\s　]/gu, '');
+    const japanese = compact.match(RE_JAPANESE_CHARS_G) || [];
+    const hiraganaCount = japanese.filter((character) => /[ぁ-ん]/u.test(character)).length;
+    const katakanaCount = japanese.filter((character) => /[ァ-ヶ\uff66-\uff9f]/u.test(character)).length;
+    const cjkCount = japanese.filter((character) => /[一-龯]/u.test(character)).length;
+    const chunks = text.trim().split(/[\s　]+/u).filter(Boolean);
+    const singleCharacterChunks = chunks.filter((chunk) => (
+      (chunk.match(RE_JAPANESE_CHARS_G) || []).length === 1
+    )).length;
+    const hasSentenceEnding = /[！？!?。…]$/u.test(compact);
+    const hasLanguageEvidence = (
+      cjkCount >= 1 && (hiraganaCount >= 2 || katakanaCount >= 2)
+    ) || (
+      hiraganaCount >= 4 && hasSentenceEnding
+    ) || (
+      katakanaCount >= 5
+      && new Set(japanese.map((character) => character.normalize('NFKC'))).size >= 3
+      && hasSentenceEnding
+    );
+    if (
+      japanese.length < 5
+      || chunks.length < 5
+      || singleCharacterChunks / chunks.length < 0.7
+      || !hasLanguageEvidence
+      || hasStructuralGlyphDominance(compact)
+    ) continue;
+
+    const start = match.index;
+    const end = start + text.length;
+    const left = line.slice(0, start);
+    const right = line.slice(end);
+    const hasPairedBoxBoundaries = /[>＞|｜│┃][^>＞|｜│┃]*$/u.test(left)
+      && /^[^<＜|｜│┃]*[<＜|｜│┃]/u.test(right);
+    const isIsolated = RE_STRICT_BLANK.test(left) && RE_STRICT_BLANK.test(right);
+    if (!hasPairedBoxBoundaries && !isIsolated) continue;
+
+    return { start, end, isBoxed: hasPairedBoxBoundaries };
+  }
+  return undefined;
+};
+
+const mergeSpacedHorizontalDialogue = (
+  lineSegments: WorkerTextSegment[],
+  lineIdx: number,
+  range: SpacedHorizontalDialogueRange,
+): WorkerTextSegment[] => {
+  const result: WorkerTextSegment[] = [];
+  const fullLine = lineSegments.map(({ text }) => text).join('');
+  let cursor = 0;
+  let inserted = false;
+
+  for (const segment of lineSegments) {
+    const segmentStart = cursor;
+    const segmentEnd = segmentStart + segment.text.length;
+    cursor = segmentEnd;
+    if (segmentEnd <= range.start || segmentStart >= range.end) {
+      result.push(segment);
+      continue;
+    }
+
+    if (segmentStart < range.start) {
+      const length = range.start - segmentStart;
+      result.push({
+        ...segment,
+        id: `seg-${lineIdx}-${segmentStart}`,
+        text: segment.text.slice(0, length),
+        original: segment.original.slice(0, length),
+      });
+    }
+    if (!inserted) {
+      const text = fullLine.slice(range.start, range.end);
+      result.push({
+        id: `seg-${lineIdx}-${range.start}`,
+        text,
+        original: text,
+        isJapanese: true,
+        isStrictJapanese: true,
+        isAutoSelected: true,
+        isBoxedDialogue: range.isBoxed,
+        isIndentedDialogue: true,
+        isAutoSelectExcluded: false,
+        detectionConfidence: 'high',
+        isSelected: false,
+        isTranslated: false,
+      });
+      inserted = true;
+    }
+    if (segmentEnd > range.end) {
+      const offset = range.end - segmentStart;
+      result.push({
+        ...segment,
+        id: `seg-${lineIdx}-${range.end}`,
+        text: segment.text.slice(offset),
+        original: segment.original.slice(offset),
+      });
+    }
+  }
+  return result;
+};
+
 // --- Main segmentation function ---
 function segmentContent(content: string, requestId: number): void {
   const lines = content.split('\n');
@@ -537,6 +661,7 @@ function segmentContent(content: string, requestId: number): void {
   const newSegments: WorkerTextSegment[] = [];
 
   lines.forEach((line, lineIdx) => {
+    const lineSegmentStart = newSegments.length;
     // --- Fast path: skip per-part processing for lines with no Japanese ---
     if (!hasJapaneseChar(line)) {
       if (line.length > 0) {
@@ -1188,6 +1313,16 @@ function segmentContent(content: string, requestId: number): void {
 
       currentOffset += part.length;
     });
+
+    const spacedDialogue = findSpacedHorizontalDialogue(line);
+    if (spacedDialogue) {
+      const lineSegments = newSegments.splice(lineSegmentStart);
+      newSegments.push(...mergeSpacedHorizontalDialogue(
+        lineSegments,
+        lineIdx,
+        spacedDialogue,
+      ));
+    }
 
     newSegments.push({
       id: `seg-${lineIdx}-newline`,
