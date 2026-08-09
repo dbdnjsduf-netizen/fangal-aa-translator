@@ -8,6 +8,7 @@ import {
   applyManualSelectionRanges,
   ManualSelectionRange,
 } from './manualSelection';
+import { SpatialContextAnalyzer } from './spatialDetection';
 import { getDisplayWidth } from './verticalText';
 export const MANUAL_REGEX_STORAGE_KEY = 'aat_manual_regex_rules_v1';
 
@@ -281,6 +282,7 @@ interface ManualRegexDocumentLayout {
   segmentStarts: number[];
   lines: string[];
   lineStarts: number[];
+  spatialAnalyzer: SpatialContextAnalyzer;
 }
 
 function createDocumentLayout(segments: TextSegment[]): ManualRegexDocumentLayout {
@@ -297,7 +299,13 @@ function createDocumentLayout(segments: TextSegment[]): ManualRegexDocumentLayou
     lineStarts.push(offset);
     offset += line.length + 1;
   }
-  return { content, segmentStarts, lines, lineStarts };
+  return {
+    content,
+    segmentStarts,
+    lines,
+    lineStarts,
+    spatialAnalyzer: new SpatialContextAnalyzer(lines),
+  };
 }
 
 function hasRuleBoundaries(
@@ -309,14 +317,37 @@ function hasRuleBoundaries(
   sourceText: string,
 ) {
   if (Array.from(sourceText).length === 1) {
-    return hasFourSideTwoCellIsolation(
-      documentLayout,
-      segmentIndex,
-      start,
-      end,
-    );
+    return hasFourSideTwoCellIsolation(documentLayout, segmentIndex, start, end)
+      || isInsideVerifiedDialogueBox(documentLayout, segmentIndex, start, end);
   }
   return hasWhitespaceBoundaries(segments, segmentIndex, start, end);
+}
+
+function isInsideVerifiedDialogueBox(
+  layout: ManualRegexDocumentLayout,
+  segmentIndex: number,
+  start: number,
+  end: number,
+) {
+  const absoluteStart = layout.segmentStarts[segmentIndex] + start;
+  const absoluteEnd = layout.segmentStarts[segmentIndex] + end;
+  const lineIndex = findLineIndex(layout.lineStarts, absoluteStart);
+  const lineStart = layout.lineStarts[lineIndex];
+  const localStart = absoluteStart - lineStart;
+  const localEnd = absoluteEnd - lineStart;
+  if (
+    localStart < 0
+    || localEnd > (layout.lines[lineIndex]?.length || 0)
+    || findLineIndex(layout.lineStarts, Math.max(absoluteStart, absoluteEnd - 1)) !== lineIndex
+  ) return false;
+
+  // A one-character manual rule normally needs two completely blank rows and
+  // columns so that eyes/eyebrows in dense AA are not promoted. Inside a real
+  // speech box those rows contain the box caps, so reuse the same strict
+  // paired-wall + independent top/bottom-cap verifier as automatic detection.
+  return layout.spatialAnalyzer
+    .analyze(lineIndex, localStart, localEnd)
+    .isClosedDialogueContainer;
 }
 
 function hasFourSideTwoCellIsolation(

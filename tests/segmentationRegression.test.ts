@@ -968,6 +968,67 @@ test('밀집된 가로 AA 오른쪽의 おーーいっ！！도 독립 응답으
   assert.deepEqual(selected, ['おーーいっ！！']);
 });
 
+test('AA 오른쪽의 장음표가 섞인 가나 효과음 きりにょーん을 전체선택한다', () => {
+  const sample = [
+    '　　　　／　ヾ二ー---｀ヾ￣ヽ',
+    '　　　 /　 /　　/　/　｀ｌ　ヽ　　ヽ　|',
+    '　　　ｌ //, \'/　/　 ｌ　/　､从ﾊ │　|',
+    '　　　ﾚｌ　 {_从ノl /从Uヽｷﾘﾉ| │ │　きりにょーん',
+    '　　　 ｌ　l小ｌ●|/　　●u/l　|､|　/',
+    '　　　　ヾ| /⌒l,､ __,　イァト | /',
+  ].join('\n');
+  const selected = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text);
+
+  assert.ok(selected.includes('きりにょーん'), JSON.stringify(selected));
+});
+
+test('AA 오른쪽에서 전각 공백으로 이어진 반복 호칭 皇帝よ？　皇帝를 전체선택한다', () => {
+  const sample = [
+    '　　　　|:::::::::!l::::"l !:::::::::l:::＿___l:L___;!!::::::!:::::::|',
+    '　　　　i__::::::!i:::__! `ｰ‐┘　 r‐‐‐-､ |:::::::|:::::::::|',
+    '　　　　　ヽ::i::::!::ir\'´￣　　　　 |::::::|:::::::::::|　　　　皇帝よ？　皇帝',
+    '　　　　　|:::::!::::i ,,,　　_____　　\'\'\'\'\'\' ,:l::::::|:::::::::::::|',
+    '　　　　 |::::::!::: ゝ､　　ヽ __,ﾉ　 ,. ｲ:|::::::!::::::::::::::|',
+  ].join('\n');
+  const selected = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text);
+
+  assert.ok(selected.includes('皇帝よ？　皇帝'), JSON.stringify(selected));
+});
+
+test('엄격히 검증된 상자 안의 한자·가나·장음 표현 体ねーー를 전체선택한다', () => {
+  const sample = [
+    ':::::::::::::::::::::::::::　　　　　　　　　f´￣￣￣￣￣￣￣｀ヽ',
+    ':::::::::::::::::::::::::::　　　　　　　　　　　 |　　　　　　　　 |',
+    ':::::::::::::|　{ /| }＼＿__」:::::::::::.　　　　 |　　　体ねーー　　 |',
+    ':::::::::::::|￣￣| Ｖ :|:::::::::::::::::::::.　　　 |　　　　　　　　 |',
+    ':::::::::::::」|／￣　 ＼＿/|::::::::::::::.　　　 乂＿＿＿＿＿＿＿ノ',
+  ].join('\n');
+  const selected = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text);
+
+  assert.ok(selected.includes('体ねーー'), JSON.stringify(selected));
+});
+
+test('엄격히 검증된 상자 안의 짧은 한자·조사 문장 君は를 전체선택한다', () => {
+  const sample = [
+    ':::::::::::::::::::::::::::　　　　　　　　　f´￣￣￣￣￣￣￣｀ヽ',
+    ':::::::::::::::::::::::::::　　　　　　　　　　　 |　　　　　　　　 |',
+    ':::::::::::::|　{ /| }＼＿__」:::::::::::.　　　　 |　　　　君は　　　 |',
+    ':::::::::::::|￣￣| Ｖ :|:::::::::::::::::::::.　　　 |　　　　　　　　 |',
+    ':::::::::::::」|／￣　 ＼＿/|::::::::::::::.　　　 乂＿＿＿＿＿＿＿ノ',
+  ].join('\n');
+  const selected = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text);
+
+  assert.ok(selected.includes('君は'), JSON.stringify(selected));
+});
+
 test('문장 근거가 없는 띄엄띄엄한 AA 모양 문자는 가로 대사로 합치지 않는다', () => {
   const sample = '　　　　　　　　＞　ハ　人　ノ　へ　ミ　ハ　人　＜';
   const selectedText = segment(sample)

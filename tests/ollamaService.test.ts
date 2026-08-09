@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  buildTranslationSystemInstruction,
   chooseRecoverySplitIndex,
   createChunks,
   DEFAULT_SYSTEM_PROMPT,
@@ -61,6 +62,16 @@ test('문자열 안의 괄호를 JSON 경계로 오인하지 않는다', () => {
 test('저장된 사용자 스타일은 보존하고 빈 설정은 개선된 기본 프롬프트로 복구한다', () => {
   assert.equal(resolveStoredSystemPrompt(null), DEFAULT_SYSTEM_PROMPT);
   assert.equal(resolveStoredSystemPrompt('반말로 번역해줘.'), '반말로 번역해줘.');
+});
+
+test('커스텀 프롬프트를 사용해도 원문에 실제로 나타난 야루오 말투만 다오체로 보존한다', () => {
+  const instruction = buildTranslationSystemInstruction('문맥에 맞는 자연스러운 반말로 번역한다.');
+
+  assert.match(instruction, /だお, だおね, だおよ/u);
+  assert.match(instruction, /Korean ~다오 family/u);
+  assert.match(instruction, /only to items where the source actually carries that ending/u);
+  assert.match(instruction, /Never add ~다오 to neutral endings such as だ, です, or ます/u);
+  assert.match(instruction, /문맥에 맞는 자연스러운 반말/u);
 });
 
 test('큰 물리적 공백의 위치를 청크 문맥 힌트로 보존한다', () => {

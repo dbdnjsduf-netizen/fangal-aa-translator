@@ -560,6 +560,19 @@ const isManualPatternJapaneseShape = (text: string): boolean => {
     || isCompactJapaneseLabel;
 };
 
+/**
+ * Very short grammatical fragments such as 君は or 僕も are meaningful in a
+ * dialogue bubble (often completed by the next line), but their one CJK plus
+ * one hiragana shape is intentionally too weak for free-standing AA. Callers
+ * must therefore require a strictly verified physical dialogue container.
+ */
+const isShortBoxedCjkParticlePhrase = (text: string): boolean => {
+  const normalized = text.normalize('NFKC')
+    .replace(/[\s\u3000\u00a0\u2000-\u200b]+/gu, '');
+  return /^[一-龯々〆ヵヶ]{1,4}(?:は|が|を|に|の|も|と|へ|で|ね|よ|か|ぞ|ぜ|さ|な|だ(?:ね|よ|な)?)[!?！？。、…]*$/u
+    .test(normalized);
+};
+
 const isLeadingHesitationSingleKanaReaction = (text: string): boolean => {
   const normalized = text.normalize('NFKC').replace(/[\s\u3000\u00a0\u2000-\u200b]+/gu, '');
   return /^[.…・]{2,}[ぁ-んァ-ヶ][!?]+$/u.test(normalized);
@@ -1186,7 +1199,11 @@ function segmentContent(
         ||
         /^[ぁ-ん]{1,2}[！？!?。…]+$/u.test(trimmedPart)
         || (
-          /^[ぁ-ん]{2,6}[！？!?。…]*$/u.test(trimmedPart)
+          // Natural kana effects and calls can contain a prolonged-sound mark
+          // between hiragana (for example きりにょーん). Keep this bounded
+          // and require multiple distinct ordinary hiragana below so a row of
+          // AA dashes or a repeated eye stroke cannot qualify on shape alone.
+          /^(?=(?:.*[ぁ-ん]){2,})[ぁ-んー～〜―‐-]{2,10}[！？!?。…]*$/u.test(trimmedPart)
           && (
             new Set(strongShortHiragana).size >= 2
             || /^(?:ああ|わっ|くそ)[！？!?。…]*$/u.test(trimmedPart)
@@ -1247,7 +1264,10 @@ function segmentContent(
         && !/([一-龯々〆ヵヶ])\1{3,}/u.test(trimmedPart)
         && leadingWhitespaceWidth >= 8
         && RE_STRICT_BLANK.test(contentAfterCandidate)
-        && /^[ぁ-んァ-ヶ\uff66-\uff9f一-龯々〆ヵヶー!?！？。、…「」『』（）()]+$/u
+        // A repeated address or correction can contain a deliberate single
+        // full-width gap, e.g. "皇帝よ？　皇帝". At the verified far-right
+        // detached slot this is sentence spacing, not evidence of AA texture.
+        && /^[ぁ-んァ-ヶ\uff66-\uff9f一-龯々〆ヵヶー!?！？。、…「」『』（）()\s\u3000]+$/u
           .test(trimmedPart);
       const isRightDetachedNaturalAnnotation = isRightDetachedParentheticalGloss
         || isRightDetachedKanaStutter
@@ -1832,8 +1852,17 @@ function segmentContent(
         && hasComfortableHorizontalSpace
         && (getSafeVertCtx() || getVertBoxCtx());
       const isBoxQualifiedJapaneseShape = !isThreadNameLine
-        && isVerifiedPhysicalBoxPatternContext
-        && isManualPatternJapaneseShape(part);
+        && (
+          hasVerifiedDialogueBox
+          || isVerifiedPhysicalBoxPatternContext
+        )
+        && (
+          isManualPatternJapaneseShape(part)
+          || (
+            hasVerifiedDialogueBox
+            && isShortBoxedCjkParticlePhrase(part)
+          )
+        );
       const isContextPatternApproved = isRightmostFullyIndependentJapaneseShape
         || isFourSideIndependentHesitationReaction
         || isBoxQualifiedJapaneseShape
