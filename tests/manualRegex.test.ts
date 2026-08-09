@@ -236,6 +236,41 @@ test('한 글자 수동정규식의 오른쪽이 물리적 줄 끝이면 열린 
   assert.equal(oneSpaceBeforeContent.some(({ isSelected }) => isSelected), false);
 });
 
+test('엄격하게 검증된 말풍선 상자 안에서는 단일 한자 수동정규식을 적용한다', () => {
+  const boxed = applyManualRegexRules([
+    segment('boxed-kanji', [
+      '                              f\u00b4￣￣￣￣￣￣｀ヽ',
+      '                              |                  |',
+      '                              |        皆         |',
+      '                              |                  |',
+      '                              乂＿＿＿＿＿＿＿＿ノ',
+    ].join('\n')),
+  ], rulesFor('皆'));
+
+  assert.deepEqual(
+    boxed.filter(({ isSelected }) => isSelected).map(({ text }) => text),
+    ['皆'],
+  );
+  assert.equal(
+    boxed.find(({ text }) => text === '皆')?.isManualRegexSelection,
+    true,
+  );
+});
+
+test('위아래가 닫히지 않은 가짜 상자에서는 단일 한자 수동정규식을 허용하지 않는다', () => {
+  const openDrawing = applyManualRegexRules([
+    segment('open-kanji', [
+      '                              |                  |',
+      '                              |        人         |',
+      '                              |        皆         |',
+      '                              |                  |',
+      '                              |                  |',
+    ].join('\n')),
+  ], rulesFor('皆'));
+
+  assert.equal(openDrawing.some(({ isSelected }) => isSelected), false);
+});
+
 test('새 규칙만 증분 적용해 기존에 직접 해제한 정규식 선택은 건드리지 않는다', () => {
   const previous = rulesFor('以前');
   const next = addManualRegexRule(

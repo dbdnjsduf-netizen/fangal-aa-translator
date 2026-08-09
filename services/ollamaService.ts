@@ -49,6 +49,7 @@ NON-NEGOTIABLE OUTPUT CONTRACT:
 - Write Japanese names, titles, and terms fully in Hangul unless the supplied terminology specifies otherwise.
 - Never return an empty string for an item containing Japanese text.
 - Preserve meaningful punctuation, pauses, shouting, and leading/trailing whitespace, but do not imitate AA alignment by breaking Korean syllables.
+- Preserve source-signaled character idiolects instead of flattening them. In particular, when an input item itself uses Yaruo-style sentence endings such as だお, だおね, だおよ, or a clearly idiolectal sentence-final お, render that ending consistently with the Korean ~다오 family (for example ~다오 or ~다오네). Apply this only to items where the source actually carries that ending. Never add ~다오 to neutral endings such as だ, です, or ます merely because the speaker might be Yaruo.
 - An item may begin with ⟦VERTICAL_MAX=N⟧. Do not reproduce this marker. Translate the reconstructed vertical sentence as one natural utterance. Prefer at most N non-space Hangul characters and omit spaces when it still reads naturally. If the full meaning requires more than N characters, return the complete translation instead of dropping meaning.`;
 
 export const DEFAULT_SYSTEM_PROMPT = `Translate into fluent, idiomatic Korean that sounds written by a native speaker.
