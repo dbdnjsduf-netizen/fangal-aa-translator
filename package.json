@@ -1,7 +1,7 @@
 {
   "name": "fangal-aa-translator",
   "private": true,
-  "version": "1.11.6",
+  "version": "1.11.7",
   "type": "module",
   "engines": {
     "node": ">=20"

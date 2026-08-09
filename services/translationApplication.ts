@@ -63,7 +63,8 @@ export function selectAllTranslatableSegments(segments: TextSegment[]) {
       || segment.verticalGroupId,
     );
     const isUnapprovedSingleCharacter = japaneseLetterCount === 1
-      && !isExplicitSelection;
+      && !isExplicitSelection
+      && !segment.isContextPatternApproved;
     const shouldSelect = !segment.isUserExcluded
       && !isUnapprovedSingleCharacter
       && !segment.isAutoSelectExcluded

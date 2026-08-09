@@ -421,6 +421,22 @@ const isShortCjkSmallKanaCandidate = (text: string): boolean => {
   return cjkCount >= 2 && smallKanaCount >= 1 && smallKanaCount <= 2;
 };
 
+// Ordinary hiragana can also be used as a curved eye stroke next to two
+// CJK-shaped glyphs (for example 芸豸う). This remains only a weak candidate:
+// exclusion additionally requires a connected, dense AA component.
+const isShortCjkKanaShapeCandidate = (text: string): boolean => {
+  const trimmed = text.trim();
+  const characters = trimmed.match(RE_JAPANESE_CHARS_G) || [];
+  if (characters.length < 3 || characters.length > 5) return false;
+  if (RE_JAPANESE_PUNCTUATION.test(trimmed)) return false;
+  if (!characters.every((character) => /[一-龯々〆ヵヶぁ-んァ-ヶ\uff66-\uff9f]/u.test(character))) {
+    return false;
+  }
+  const cjkCount = characters.filter((character) => /[一-龯々〆ヵヶ]/u.test(character)).length;
+  const kanaCount = characters.length - cjkCount;
+  return cjkCount >= 2 && kanaCount >= 1 && kanaCount <= 2;
+};
+
 /**
  * A short line in a multi-line dialogue may not have enough lexical evidence
  * on its own. Accept it only when a genuinely sentence-like line immediately
@@ -500,6 +516,53 @@ const isKanaOnlyUtterance = (text: string): boolean => {
   if (kana.length === 1) return hasPunctuation;
   if (hasPunctuation || new Set(kana).size >= 2) return true;
   return kana.length >= 3;
+};
+
+/**
+ * Shapes repeatedly added through manual-regex rules. This function never
+ * decides selection by itself: callers must first prove either a rightmost,
+ * four-side-independent slot or a verified physical dialogue box. Bare single
+ * glyphs deliberately remain manual-only.
+ */
+const isManualPatternJapaneseShape = (text: string): boolean => {
+  const normalized = text.normalize('NFKC').replace(/[\s\u3000\u00a0\u2000-\u200b]+/gu, '');
+  // NFKC expands the single ellipsis glyph (…) to three ASCII periods on
+  // current JS runtimes, so periods must remain part of the normalized shape.
+  if (!normalized || !/^[ぁ-んァ-ヶ一-龯々〆ヵヶ0-9ー~～〜….!?。、・]+$/u.test(normalized)) {
+    return false;
+  }
+
+  const japanese = normalized.match(/[ぁ-んァ-ヶ一-龯々〆ヵヶ]/gu) || [];
+  const kana = normalized.match(/[ぁ-んァ-ヶ]/gu) || [];
+  const cjk = normalized.match(/[一-龯々〆ヵヶ]/gu) || [];
+  const digits = normalized.match(/[0-9]/gu) || [];
+  const hasExpressiveEnding = /[ー~～〜….!?。]+$/u.test(normalized);
+  const hasStrongSingleKanaEnding = /(?:[ー~～〜.]{2,}|[!?]{2,}|[ー~～〜.]+[!?]+)$/u
+    .test(normalized);
+  if (japanese.length === 0) return false;
+
+  const isKanaEffectOrReaction = cjk.length === 0
+    && digits.length === 0
+    && (kana.length >= 2 || (kana.length === 1 && hasStrongSingleKanaEnding));
+  const isCjkReaction = digits.length === 0
+    && cjk.length >= 1
+    && hasExpressiveEnding;
+  const isNumberedCjkReaction = digits.length >= 1
+    && cjk.length >= 1
+    && hasExpressiveEnding;
+  const isCompactJapaneseLabel = digits.length === 0
+    && japanese.length >= 2
+    && (kana.length >= 2 || cjk.length >= 2);
+
+  return isKanaEffectOrReaction
+    || isCjkReaction
+    || isNumberedCjkReaction
+    || isCompactJapaneseLabel;
+};
+
+const isLeadingHesitationSingleKanaReaction = (text: string): boolean => {
+  const normalized = text.normalize('NFKC').replace(/[\s\u3000\u00a0\u2000-\u200b]+/gu, '');
+  return /^[.…・]{2,}[ぁ-んァ-ヶ][!?]+$/u.test(normalized);
 };
 
 const INLINE_BUBBLE_LEFT_WALL = /[|｜│┃>＞]/u;
@@ -721,6 +784,7 @@ interface WorkerTextSegment {
   isVerticalBox?: boolean;
   isIndentedDialogue?: boolean;
   isIsolatedDialogue?: boolean;
+  isContextPatternApproved?: boolean;
   isAutoSelectExcluded?: boolean;
   detectionConfidence?: 'high' | 'ambiguous' | 'drawing';
   detectionContextSignature?: string;
@@ -734,6 +798,47 @@ interface SpacedHorizontalDialogueRange {
   isBoxed: boolean;
   isIsolated: boolean;
 }
+
+interface StatusWindowTextRange {
+  start: number;
+  end: number;
+}
+
+/**
+ * Detect game-like status panels framed by long `╋━━╋` separators and `┃` row
+ * walls. Requiring a separator both above and below prevents an arbitrary pair
+ * of AA strokes from turning into a status window.
+ */
+const detectStatusWindowTextRanges = (lines: string[]): Map<number, StatusWindowTextRange[]> => {
+  const borderRows = lines
+    .map((line, lineIdx) => (/╋━{12,}╋/u.test(line) ? lineIdx : -1))
+    .filter((lineIdx) => lineIdx >= 0);
+  const ranges = new Map<number, StatusWindowTextRange[]>();
+  if (borderRows.length < 2) return ranges;
+
+  lines.forEach((line, lineIdx) => {
+    const hasNearbyBorderAbove = borderRows.some((borderRow) => (
+      borderRow < lineIdx && lineIdx - borderRow <= 6
+    ));
+    const hasNearbyBorderBelow = borderRows.some((borderRow) => (
+      borderRow > lineIdx && borderRow - lineIdx <= 6
+    ));
+    if (!hasNearbyBorderAbove || !hasNearbyBorderBelow) return;
+
+    const rowRanges: StatusWindowTextRange[] = [];
+    const rowPattern = /┃([^┃]*)┃/gu;
+    let match: RegExpExecArray | null;
+    while ((match = rowPattern.exec(line)) !== null) {
+      if (!RE_JAPANESE_SCRIPT.test(match[1])) continue;
+      rowRanges.push({
+        start: match.index + 1,
+        end: match.index + match[0].length - 1,
+      });
+    }
+    if (rowRanges.length > 0) ranges.set(lineIdx, rowRanges);
+  });
+  return ranges;
+};
 
 const SPACED_DIALOGUE_SCRIPT = 'ぁ-んァ-ヶ一-龯々〆ヵヶ\uff66-\uff9f';
 const SPACED_DIALOGUE_SPACE = '[ \\u3000\\u00A0\\u2000-\\u200B]+';
@@ -868,6 +973,7 @@ function segmentContent(
 ): void {
   const lines = content.split('\n');
   const spatialAnalyzer = new SpatialContextAnalyzer(lines, visualWidthProfile);
+  const statusWindowTextRanges = detectStatusWindowTextRanges(lines);
   const newSegments: WorkerTextSegment[] = [];
 
   lines.forEach((line, lineIdx) => {
@@ -1022,7 +1128,13 @@ function segmentContent(
       const isAAStructureLine = verticalPipesInLine > 4;
       const isInsideBox = !isAAStructureLine && isBoxIsolated && (hasBothBordersWithPipe || (leftBorderIsBoxPipe && getCleanBoxCtx()));
       const hasStrongLanguage = hasStrongLexicalEvidence(part);
+      const isStatusWindowTextSegment = !isThreadNameLine
+        && isJp
+        && Boolean(statusWindowTextRanges.get(lineIdx)?.some(({ start, end }) => (
+          currentOffset >= start && currentOffset + part.length <= end
+        )));
       const isShortCjkSmallKana = isShortCjkSmallKanaCandidate(part);
+      const isShortCjkKanaShape = isShortCjkKanaShapeCandidate(part);
       const isLikelyFaceFragmentRaw = isLikelyAAFaceFragment(part);
       const isHorizontalStructure = isHorizontalAAStructureRun(part);
       const hasStructuralDominance = hasStructuralGlyphDominance(part);
@@ -1082,6 +1194,64 @@ function segmentContent(
         )
         || /^(?:[一-龯々〆ヵヶ]{1,3}[ぁ-ん]{1,2}|[ぁ-ん]{1,2}[一-龯々〆ヵヶ]{1,3})[！？!?。…]*$/u.test(trimmedPart)
       );
+      const contentBeforeCandidate = line.substring(0, currentOffset);
+      const contentAfterCandidate = line.substring(currentOffset + part.length);
+      const immediateLeftWhitespace = contentBeforeCandidate
+        .match(/[\s\u3000\u00a0\u2000-\u200b]+$/u)?.[0] || '';
+      const immediateRightWhitespace = contentAfterCandidate
+        .match(/^[\s\u3000\u00a0\u2000-\u200b]+/u)?.[0] || '';
+      const leadingWhitespaceWidth = getDisplayWidth(immediateLeftWhitespace);
+      const trailingWhitespaceWidth = getDisplayWidth(immediateRightWhitespace);
+      // Text identity is only a candidate signal. A locally empty rectangle is
+      // stronger evidence than a short CJK/kana run looking like an AA stroke.
+      // Physical line edges count as open space; otherwise require four display
+      // columns on both sides and a wide blank band above and below.
+      const hasLocalFourSideWhitespace = getStrictlyIsolated()
+        && (
+          RE_STRICT_BLANK.test(contentBeforeCandidate)
+          || leadingWhitespaceWidth >= 4
+        )
+        && (
+          RE_STRICT_BLANK.test(contentAfterCandidate)
+          || trailingWhitespaceWidth >= 4
+        );
+      const isRightmostFullyIndependentJapaneseShape = !isThreadNameLine
+        && RE_STRICT_BLANK.test(contentAfterCandidate)
+        && hasLocalFourSideWhitespace
+        && isManualPatternJapaneseShape(part);
+      const isFourSideIndependentHesitationReaction = !isThreadNameLine
+        && hasLocalFourSideWhitespace
+        && isLeadingHesitationSingleKanaReaction(part);
+      // Saitamaar's proportional spaces can shift nearby AA into the visual
+      // analysis window even when a natural note is visibly detached at the
+      // far right. A kana phrase followed by a Japanese parenthetical gloss is
+      // strong linguistic evidence, but only promote it through this escape
+      // hatch when a large physical gap and the right line edge are both real.
+      const isRightDetachedParentheticalGloss = !isThreadNameLine
+        && hasStrongLanguage
+        && leadingWhitespaceWidth >= 8
+        && RE_STRICT_BLANK.test(contentAfterCandidate)
+        && /^[ぁ-んァ-ヶ\uff66-\uff9f一-龯々〆ヵヶ]{2,}[（(][ぁ-んァ-ヶ\uff66-\uff9f一-龯々〆ヵヶ]{2,}[）)][!?！？。、…]*$/u
+          .test(trimmedPart);
+      const isRightDetachedKanaStutter = !isThreadNameLine
+        && hasStrongLanguage
+        && leadingWhitespaceWidth >= 8
+        && RE_STRICT_BLANK.test(contentAfterCandidate)
+        && /^([ぁ-んァ-ヶ]{1,3})[、,，]\1[ぁ-んァ-ヶー]{1,}[.!?！？。、…]*$/u
+          .test(trimmedPart.normalize('NFKC'));
+      const isRightDetachedNaturalJapanesePhrase = !isThreadNameLine
+        && hasStrongLanguage
+        && jpCharsMatch.length >= 4
+        && jpCharsMatch.length <= 24
+        && !/[\uff66-\uff9f]/u.test(trimmedPart)
+        && !/([一-龯々〆ヵヶ])\1{3,}/u.test(trimmedPart)
+        && leadingWhitespaceWidth >= 8
+        && RE_STRICT_BLANK.test(contentAfterCandidate)
+        && /^[ぁ-んァ-ヶ\uff66-\uff9f一-龯々〆ヵヶー!?！？。、…「」『』（）()]+$/u
+          .test(trimmedPart);
+      const isRightDetachedNaturalAnnotation = isRightDetachedParentheticalGloss
+        || isRightDetachedKanaStutter
+        || isRightDetachedNaturalJapanesePhrase;
       const hasMixedKanjiHiragana = /[一-龯々〆ヵヶ]/u.test(trimmedPart)
         && /[ぁ-ん]/u.test(trimmedPart)
         && !isShortCjkSmallKana;
@@ -1095,9 +1265,6 @@ function segmentContent(
       const isEmbeddedInRepeatedCjkTexture = textTexture.hasMixedWidthScriptNoise
         && lines.slice(Math.max(0, lineIdx - 2), lineIdx + 3)
           .some((nearbyLine) => getTextTextureSignals(nearbyLine).hasRepeatedCjkRun);
-      const isLikelyFaceFragment = isLikelyFaceFragmentRaw
-        && !isClearlySeparatedShortUtterance
-        && !isIsolatedKanaBlock;
       // Short real dialogue is normally separated by padding or enclosed by a
       // bubble. When a short Japanese-looking run is embedded directly in AA,
       // its surrounding geometry is more reliable than the glyphs themselves.
@@ -1112,14 +1279,20 @@ function segmentContent(
           || hasStructuralDominance
           || textTexture.isCandidate
           || isShortCjkSmallKana
+          || isShortCjkKanaShape
           || isShortContextSensitiveFragment
         )
-        && !isLikelyFaceFragment
+        && !isLikelyFaceFragmentRaw
         && !isHorizontalStructure
         && !getIsDrawing();
       const spatialContext = shouldAnalyzeSpatialContext
         ? spatialAnalyzer.analyze(lineIdx, currentOffset, currentOffset + part.length)
         : undefined;
+      const faceShapeSpatialContext = spatialContext || (
+        isShortCjkKanaShape
+          ? spatialAnalyzer.analyze(lineIdx, currentOffset, currentOffset + part.length)
+          : undefined
+      );
       const isClosedBubbleVocalization = isStretchedHiraganaVocalization(part)
         && hasLocalClosedDialogueCell(
           lines,
@@ -1128,19 +1301,23 @@ function segmentContent(
           currentOffset + part.length,
         );
       const hasVerifiedDialogueBox = (
-        Boolean(spatialContext?.isClosedDialogueContainer)
+        Boolean(faceShapeSpatialContext?.isClosedDialogueContainer)
         || isClosedBubbleVocalization
       )
         && !textTexture.hasRepeatedCjkRun
         && !textTexture.hasMixedWidthScriptNoise;
-      const contentBeforeCandidate = line.substring(0, currentOffset);
-      const contentAfterCandidate = line.substring(currentOffset + part.length);
-      const immediateLeftWhitespace = contentBeforeCandidate
-        .match(/[\s\u3000\u00a0\u2000-\u200b]+$/u)?.[0] || '';
-      const immediateRightWhitespace = contentAfterCandidate
-        .match(/^[\s\u3000\u00a0\u2000-\u200b]+/u)?.[0] || '';
+      const isLikelyFaceFragment = isLikelyFaceFragmentRaw
+        && !isClearlySeparatedShortUtterance
+        && !isIsolatedKanaBlock
+        && !isRightmostFullyIndependentJapaneseShape
+        && !isFourSideIndependentHesitationReaction
+        && !isRightDetachedNaturalAnnotation
+        && !isStatusWindowTextSegment
+        && !hasLocalFourSideWhitespace
+        && !hasVerifiedDialogueBox;
       const attachedDrawingGlyphCount = Array.from(part).filter((character) => (
         !RE_JAPANESE_SCRIPT.test(character)
+        && !/[A-Za-z0-9Ａ-Ｚａ-ｚ０-９]/u.test(character)
         && !RE_STRICT_BLANK.test(character)
         && (
           RE_AA_CONTEXT_GLYPH.test(character)
@@ -1148,6 +1325,9 @@ function segmentContent(
         )
       )).length;
       const hasAttachedAADrawingTexture = attachedDrawingGlyphCount >= 2;
+      const isParenthesizedNaturalDialogue = hasStrongLanguage
+        && /^[（(][ぁ-んァ-ヶ\uff66-\uff9f一-龯々〆ヵヶ!?！？。、…「」『』\s\u3000]+[）)]$/u
+          .test(trimmedPart);
       // A physical line edge is open space, not a zero-width collision. Count
       // a side as cramped only when a real non-blank glyph exists nearby. AA
       // punctuation swallowed into the same segment also counts as a neighbor.
@@ -1159,14 +1339,26 @@ function segmentContent(
         && getDisplayWidth(immediateRightWhitespace) < 4
       );
       const isContextualEmbeddedFaceFragment = (
-        isShortCjkSmallKana
-        || isShortContextSensitiveFragment
+        (
+          (
+            isShortCjkSmallKana
+            || (
+              isShortContextSensitiveFragment
+              && !isParenthesizedNaturalDialogue
+            )
+          )
+          && hasCrampedHorizontalContext
+        )
+        || (
+          isShortCjkKanaShape
+          && Boolean(faceShapeSpatialContext?.isConnectedToLargeDrawing)
+          && Boolean(faceShapeSpatialContext?.isDenseDrawingNeighborhood)
+        )
       )
-        && hasCrampedHorizontalContext
         && !hasVerifiedDialogueBox
         && (
-          Boolean(spatialContext?.isConnectedToLargeDrawing)
-          || Boolean(spatialContext?.isDenseDrawingNeighborhood)
+          Boolean(faceShapeSpatialContext?.isConnectedToLargeDrawing)
+          || Boolean(faceShapeSpatialContext?.isDenseDrawingNeighborhood)
           || hasDenseAADrawingContext(
             lines,
             lineIdx,
@@ -1196,9 +1388,13 @@ function segmentContent(
       // Threshold of 6 covers most AA fragments while preserving legitimate short sound effects
       const isAllAAOnly = jpCharsMatch.length > 0 && jpCharsMatch.every(c => RE_AA_CHARS.test(c));
       const hasFluentLanguage = isRecognizedVocalization(part)
+        || isStatusWindowTextSegment
         || isClosedBubbleVocalization
         || isIsolatedKanaBlock
         || isClearlySeparatedShortUtterance
+        || isRightmostFullyIndependentJapaneseShape
+        || isFourSideIndependentHesitationReaction
+        || isRightDetachedNaturalAnnotation
         || hasMixedKanjiHiragana
         || hasSeparatedJapaneseWords
         || (
@@ -1378,12 +1574,6 @@ function segmentContent(
         && /^[ \u3000\u00A0\u2000-\u200B\u2009:.]*$/.test(
           line.substring(currentOffset + part.length, rightBorderIdx),
         )
-      );
-      const leadingWhitespaceWidth = getDisplayWidth(
-        leftContent.match(/[\s\u3000\u00A0\u2000-\u200B]+$/u)?.[0] || '',
-      );
-      const trailingWhitespaceWidth = getDisplayWidth(
-        rightContent.match(/^[\s\u3000\u00A0\u2000-\u200B]+/u)?.[0] || '',
       );
       const hasComfortableHorizontalSpace = (
         leadingWhitespaceWidth >= 2
@@ -1585,13 +1775,17 @@ function segmentContent(
         // Reject if surrounded by drawings on both sides
         && !(lineIdx > 0 && lineIdx < lines.length - 1 && isDrawing(lines[lineIdx - 1]) && isDrawing(lines[lineIdx + 1]));
 
-      const isJapanese = !RE_DISQUALIFIED.test(part)
+      const isJapaneseCandidate = !RE_DISQUALIFIED.test(part)
         && !RE_STRICT_BLANK.test(part)
         && !RE_NOISE_ONLY.test(part)
         && !isSpatialDrawing
         && (
           isNaturalText
+          || isStatusWindowTextSegment
           || isIsolatedKanaBlock
+          || isRightmostFullyIndependentJapaneseShape
+          || isFourSideIndependentHesitationReaction
+          || isRightDetachedNaturalAnnotation
           || isStrict
           || isBoxedDialogue
           || isContextDlg
@@ -1601,8 +1795,12 @@ function segmentContent(
         );
       const hasMixedKanaWidth = /[ぁ-ん]/u.test(part)
         && /[\uff66-\uff9f]/u.test(part);
+      const hasFullwidthLatinJapanesePhrase = /[Ａ-Ｚａ-ｚ]{2,}/u.test(part)
+        && (part.match(/[ぁ-ん]/gu) || []).length >= 2
+        && jpCharsMatch.length >= 4;
       const hasLatinJapaneseDrawingMix = /[A-Za-z]/u.test(part.normalize('NFKC'))
         && RE_JAPANESE_SCRIPT.test(part)
+        && !hasFullwidthLatinJapanesePhrase
         && (
           /[\uff66-\uff9f]/u.test(part)
           || (part.match(RE_SYMBOLS_G) || []).length > 0
@@ -1622,18 +1820,33 @@ function segmentContent(
       const hasConfirmedDialogueContainer = Boolean(
         hasVerifiedDialogueBox
         || isClosedBubbleVocalization
+        || isBoxedDialogue
+        || (isArrowBox && hasComfortableHorizontalSpace)
         || hasCleanSpatialDialogueContainer,
       );
+      // Manual-rule shapes are also safe inside a real physical box. Do not use
+      // loose "box-like" texture here: require actual side walls, verified
+      // top/bottom or continuing borders, and usable inner horizontal padding.
+      const isVerifiedPhysicalBoxPatternContext = isInsideBox
+        && getCleanBoxCtx()
+        && hasComfortableHorizontalSpace
+        && (getSafeVertCtx() || getVertBoxCtx());
+      const isBoxQualifiedJapaneseShape = !isThreadNameLine
+        && isVerifiedPhysicalBoxPatternContext
+        && isManualPatternJapaneseShape(part);
+      const isContextPatternApproved = isRightmostFullyIndependentJapaneseShape
+        || isFourSideIndependentHesitationReaction
+        || isBoxQualifiedJapaneseShape
+        || isRightDetachedNaturalAnnotation
+        || isStatusWindowTextSegment;
+      const isJapanese = isJapaneseCandidate || (
+        !RE_DISQUALIFIED.test(part)
+        && !RE_STRICT_BLANK.test(part)
+        && !RE_NOISE_ONLY.test(part)
+        && isContextPatternApproved
+      );
       const hasFourSideLocalWhitespace = !isNeverSelectable
-        && getStrictlyIsolated()
-        && (
-          leadingWhitespaceWidth >= 4
-          || RE_STRICT_BLANK.test(leftContent)
-        )
-        && (
-          trailingWhitespaceWidth >= 4
-          || RE_STRICT_BLANK.test(rightContent)
-        );
+        && hasLocalFourSideWhitespace;
       const isAdjacentDialogueContinuation = !isNeverSelectable
         && isNaturalText
         && !getIsDrawing()
@@ -1647,9 +1860,11 @@ function segmentContent(
           currentOffset + part.length,
         );
       const hasDocumentSelectionEvidence = hasConfirmedDialogueContainer
+        || isContextPatternApproved
         || hasFourSideLocalWhitespace
         || isAdjacentDialogueContinuation;
       const isEmbeddedInDenseAA = !hasConfirmedDialogueContainer
+        && !isContextPatternApproved
         && !isAllSidesBlankQualified
         && (
           textTexture.isCandidate
@@ -1666,9 +1881,12 @@ function segmentContent(
           currentOffset + part.length,
         );
       const isAutoSelectExcluded = RE_AUTO_SELECT_EXCLUDE.test(part)
-        || isNeverSelectable
-        || isLikelyFaceFragment
-        || isContextualEmbeddedFaceFragment
+        || (isNeverSelectable && !hasConfirmedDialogueContainer && !isContextPatternApproved)
+        || (
+          !hasConfirmedDialogueContainer
+          && !isContextPatternApproved
+          && (isLikelyFaceFragment || isContextualEmbeddedFaceFragment)
+        )
         || isHorizontalStructure
         || isEmbeddedInDenseAA
         || (
@@ -1678,14 +1896,19 @@ function segmentContent(
             || isSpatialAmbiguous
           )
         );
-      const detectionConfidence = isSpatialDrawing
-        || isLikelyFaceFragment
-        || isContextualEmbeddedFaceFragment
-        || isHorizontalStructure
+      const detectionConfidence = (
+        !hasConfirmedDialogueContainer
+        && !isContextPatternApproved
+        && (
+          isSpatialDrawing
+          || isLikelyFaceFragment
+          || isContextualEmbeddedFaceFragment
+        )
+      ) || isHorizontalStructure
         ? 'drawing'
         : isJapanese && isAutoSelectExcluded
           ? 'ambiguous'
-          : isJapanese
+        : isJapanese
             ? 'high'
             : undefined;
       newSegments.push({
@@ -1694,6 +1917,7 @@ function segmentContent(
         original: part,
         isJapanese,
         isAutoSelected: isIsolatedKanaBlock
+          || isContextPatternApproved
           || hasFourSideLocalWhitespace
           || isAdjacentDialogueContinuation,
         isStrictJapanese: isStrict,
@@ -1703,6 +1927,7 @@ function segmentContent(
         isVerticalBox: isVerticalBox,
         isIndentedDialogue: isIndentedDialogue,
         isIsolatedDialogue: isIsolatedDialogue,
+        isContextPatternApproved,
         isAutoSelectExcluded: isAutoSelectExcluded,
         detectionConfidence,
         detectionContextSignature: spatialContext?.contextSignature,

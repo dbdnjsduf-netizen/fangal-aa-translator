@@ -40,6 +40,7 @@ export interface TextSegment {
   verticalDisplayWidth?: number;
   isIndentedDialogue?: boolean;
   isIsolatedDialogue?: boolean;
+  isContextPatternApproved?: boolean;
   isAutoSelectExcluded?: boolean;
   detectionConfidence?: 'high' | 'ambiguous' | 'drawing';
   detectionContextSignature?: string;

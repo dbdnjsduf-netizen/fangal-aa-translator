@@ -80,6 +80,231 @@ test('자동선택은 검증된 박스·사방 여백·인접 문장 근거 중 
   assert.match(selected, /もちろん進むよ/u);
 });
 
+test('최우측 사방 독립 블록은 수동정규식에서 반복된 범용 일본어 형태를 자동선택한다', () => {
+  const expected = [
+    'ｼﾞｬﾗｯ',
+    'ﾊﾟﾁﾊﾟﾁﾊﾟﾁ',
+    'おーーー',
+    'っ！！',
+    '凛…？',
+    '白……',
+    '１１歳？',
+    '了解',
+    'ロアーヌ王国',
+    'ア　ル　テ　マ　っ　！　！',
+  ];
+  const sample = expected
+    .map((text) => `\nAA　　　　　　　　　${text}\n`)
+    .join('\n');
+  const selected = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text);
+
+  assert.deepEqual(selected, expected);
+});
+
+test('범용 짧은 형태는 오른쪽 내용이 있거나 상하가 막혀 있으면 독립 블록으로 승격하지 않는다', () => {
+  const sample = [
+    '',
+    'AA　　　　　　　　　１１歳？　　　　　　　tail',
+    '',
+    'AA　　　　　　　　　１１歳？',
+    '　　　　　　　　　　^^^^^^^^',
+    '',
+  ].join('\n');
+  const selected = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text);
+
+  assert.ok(!selected.includes('１１歳？'), JSON.stringify(selected));
+});
+
+test('최우측 완전 독립이어도 장식 없는 단일 일본어 문자는 계속 수동정규식 전용이다', () => {
+  const sample = ['あ', '男', 'ナ']
+    .map((text) => `\nAA　　　　　　　　　${text}\n`)
+    .join('\n');
+  const selected = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text);
+
+  assert.deepEqual(selected, []);
+});
+
+test('사방 여백 속 말줄임표와 단일 가나 반응을 문장부호까지 전체선택한다', () => {
+  const expected = ['………　は？', '……　え！', '・・・　な？'];
+  const sample = expected
+    .map((text) => `\nAA　　　　　　　　　${text}　　　　　　　　　tail\n`)
+    .join('\n');
+  const visualWidthProfile: VisualWidthProfile = {
+    version: 1,
+    unitWidths: [...new Set(sample)].map((character): [string, number] => [
+      character,
+      character === '　'
+        ? 1
+        : character === ' '
+          ? 0.625
+          : (character.codePointAt(0) || 0) > 0xff
+            ? 2
+            : 0.75,
+    ]),
+  };
+  const selected = selectAllTranslatableSegments(segment(sample, visualWidthProfile))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text);
+
+  assert.deepEqual(selected, expected);
+});
+
+test('말줄임표와 단일 가나 반응도 상하가 AA에 막혀 있으면 자동승격하지 않는다', () => {
+  const sample = [
+    '　　　　　　　　　^^^^^^^^^^^^',
+    'AA　　　　　　　　　………　は？　　　　　　　　　tail',
+    '　　　　　　　　　vvvvvvvvvvvv',
+  ].join('\n');
+  const selected = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text);
+
+  assert.ok(!selected.includes('………　は？'), JSON.stringify(selected));
+});
+
+test('AA에서 멀리 떨어진 가나와 괄호 풀이 문장을 전체선택한다', () => {
+  const sample = [
+    '　　　　　　　　　 　 　 {　 |苹ミ、　 从苹ミメｘ}　　}',
+    '　　　　　　 　 　 　 ヽ,　　|　 i!　ヽ/　 (ツ　ﾉ　|　γΥ',
+    '　　　　　　 　 　 　 　 ヽ, ゞｰ　 　 　 　 ｰ ´　 |　 レﾞl　　 |',
+    '　　　　　　　　　　　　 　 }ﾊ　" 　｀　　　　"　 |　 |:　|　　ｉ{　　　　　　　　　わきゃる（分かる）',
+    '　　　　　　ｺｸｺｸ　（（ 　 l　)k　　　( ヽ　　　ィi|　 ﾄ､弋　八',
+    '　　　　　　 　 　 　 　 　 |　 l {≧o。_　 ィi「 ／!　:{:::≧ｧzr 、',
+  ].join('\n');
+  const segments = segment(sample);
+  const target = segments.find(({ text }) => text === 'わきゃる（分かる）');
+  const selected = selectAllTranslatableSegments(segments)
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text);
+  const visualWidthProfile: VisualWidthProfile = {
+    version: 1,
+    unitWidths: [...new Set(sample)].map((character): [string, number] => [
+      character,
+      character === '　'
+        ? 1
+        : character === ' '
+          ? 0.625
+          : (character.codePointAt(0) || 0) > 0xff
+            ? 2
+            : 0.75,
+    ]),
+  };
+  const visuallySelected = selectAllTranslatableSegments(segment(sample, visualWidthProfile))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text);
+
+  assert.ok(target, JSON.stringify(segments));
+  assert.equal(target.isAutoSelectExcluded, false, JSON.stringify(target));
+  assert.ok(selected.includes('わきゃる（分かる）'), JSON.stringify(selected));
+  assert.ok(visuallySelected.includes('わきゃる（分かる）'), JSON.stringify(visuallySelected));
+});
+
+test('AA 오른쪽의 가나 말더듬 반복 문장을 비슷한 형태까지 전체선택한다', () => {
+  const expected = ['フ、フルネーム…', 'あ、あの…', 'そ、そうですか！？'];
+  const sample = [
+    '.　　　　　　└──――八　　　　　　　　　　　　　　Ｕ　 /＼￣￣￣￣￣￣￣　　　　　　　　　　　フ、フルネーム…',
+    '　　　　　　 　 　 　 　 　 　 ＼　　 r‐-―-―v　　 　 　／|　 }　　}　',
+    '',
+    '　　　／AA＼　　　　　　　　　　　　　　　　　　　　　　　　　　　　あ、あの…',
+    '',
+    '　　　＼AA／　　　　　　　　　　　　　　　　　　　　　　　　　　　　そ、そうですか！？',
+  ].join('\n');
+  const visualWidthProfile: VisualWidthProfile = {
+    version: 1,
+    unitWidths: [...new Set(sample)].map((character): [string, number] => [
+      character,
+      character === '　'
+        ? 1
+        : character === ' '
+          ? 0.625
+          : (character.codePointAt(0) || 0) > 0xff
+            ? 2
+            : 0.75,
+    ]),
+  };
+  const selected = selectAllTranslatableSegments(segment(sample, visualWidthProfile))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text);
+
+  assert.deepEqual(selected, expected);
+});
+
+test('AA 오른쪽의 히라가나 구절과 가타카나 이름 혼합 문장을 전체선택한다', () => {
+  const expected = ['ほら、シャルティア', 'ねえ、アルベド', 'だから、アインズ様'];
+  const sample = [
+    "　　.　　　　　/'　　　　　|:l::::::::l::::::ヽﾍ　　 　 r　´ 　 /　　|:l::::::|ﾟ｡::::::::::::::ヽ:::::ヽヽ::::ヽ　　　　　　　ほら、シャルティア",
+    '',
+    '　　　／AA＼　　　　　　　　　　　　　　　　　　　　　　　　　　　　ねえ、アルベド',
+    '',
+    '　　　＼AA／　　　　　　　　　　　　　　　　　　　　　　　　　　　　だから、アインズ様',
+  ].join('\n');
+  const visualWidthProfile: VisualWidthProfile = {
+    version: 1,
+    unitWidths: [...new Set(sample)].map((character): [string, number] => [
+      character,
+      character === '　'
+        ? 1
+        : character === ' '
+          ? 0.625
+          : (character.codePointAt(0) || 0) > 0xff
+            ? 2
+            : 0.75,
+    ]),
+  };
+  const selected = selectAllTranslatableSegments(segment(sample, visualWidthProfile))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text);
+
+  assert.deepEqual(selected, expected);
+});
+
+test('긴 이중 경계로 닫힌 상태창의 일본어 라벨과 값을 전체선택한다', () => {
+  const sample = [
+    '　　　　　　　 　 /´}ｰ}　 {二ﾆ=-　-‐ﾆ二 　 _-=ﾆ二三〉　　　　　　　　　　  ╋━━━━━━━━━━━━━━━━━━━━━━━━━━━╋',
+    '　 　 　 　 　 /´{´ {　}　 {=ﾆ二三三二ﾆ=- _ ‐=ﾆ二 _′　　　　 　 　 　 　 ┃ 種族　超越者　 名前　★女傑のアール　　 　 レベル３０１　　　　 ┃',
+    '　　　　　　　{___{=_{　}_　{三三三三三三二ﾆ=- -‐=ﾆ　　　　　　　　　　　  ╋━━━━━━━━━━━━━━━━━━━━━━━━━━━╋',
+    '　　　　　　/二ﾆ=- ミ }｀ヽf≠ミx　 ,ｨf≠彡￣ 二ﾆ=-}　　　　　　　　　　　 ┃ 耐久力　１０００００　攻撃力　１０００００　 素早さ　１０００００　  　┃',
+    '. 　 　 　 /二ﾆ=‐-=厶} 　} ｰrｯ､:}　::...ｨrｯﾃ-=ﾆ二三ﾆ_　　　　　　　　　　　┃　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　 　 　 　 　 ┃',
+    '..　　　　｛二ﾆ=‐ -=ニﾑ　}二=-┴--=ﾆ二三三三二ﾆ= _　　　　　　　　　 ┃ 精神力　１０００００　運　　 　 １０００００　経験値　 ０００００００　  ┃',
+    '..　　　　｛二ﾆ=‐-=ﾆ二ﾑﾉﾏﾆ=- -=ﾆニ三三三二ﾆ７二ﾆ=-_　　　　 　 　 ┃　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　 　 　 　 　 ┃',
+    '.　　　 　 ﾏﾆ=- -=ﾆ二ﾆ｝　ﾏﾆ=- -=ﾆ二三三二ﾆ７ﾆ 二ﾆ=- _　　　　　　 ╋━━━━━━━━━━━━━━━━━━━━━━━━━━━╋',
+  ].join('\n');
+  const visualWidthProfile: VisualWidthProfile = {
+    version: 1,
+    unitWidths: [...new Set(sample)].map((character): [string, number] => [
+      character,
+      character === '　'
+        ? 1
+        : character === ' '
+          ? 0.625
+          : (character.codePointAt(0) || 0) > 0xff
+            ? 2
+            : 0.75,
+    ]),
+  };
+  const selected = selectAllTranslatableSegments(segment(sample, visualWidthProfile))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text)
+    .join('');
+
+  assert.match(selected, /種族　超越者/u);
+  assert.match(selected, /名前/u);
+  assert.match(selected, /女傑のアール/u);
+  assert.match(selected, /レベル３０１/u);
+  assert.match(selected, /耐久力/u);
+  assert.match(selected, /攻撃力/u);
+  assert.match(selected, /素早さ/u);
+  assert.match(selected, /精神力/u);
+  assert.match(selected, /経験値/u);
+  assert.doesNotMatch(selected, /[╋━┃]/u);
+});
+
 test('자연스러운 일반·경계형 일본어 대사를 자동 선택한다', () => {
   const sample = [
     'うーん薄幸の少女（）やってた反動か前よりも言動ヤベーなｗ',
@@ -206,6 +431,35 @@ test('눈 주변 AA에 밀착된 짧은 혼합 일본어 조각을 눈썹 대사
   assert.match(selectedText, /本当の台詞です。/u);
 });
 
+test('AA 눈 모양의 한자·가나 조각은 제외하고 전각 영문이 포함된 실제 문장은 선택한다', () => {
+  const sample = [
+    "　　　　 ＼＼　| |　　　.|.,' i　　 .,' .|　　 /　　,' |　|　',厶斗-- 　 |　|／i　’,",
+    "　　　　　./>、`| | 　 　.|'__|_____,'_　|,'i ./　　 ,'　ｔ '^｀ ',　 |　　　　|　|　 | 　 ',",
+    "　　　　 / /　 i.| | 　 　.|　|　　,'　 T /＿＿/ 　|_,!,,ィZZZ　　　　|　|::　 |　　 ',",
+    "　　 　 / /|　 .|　',　i　 .|,,,ィzzzzzzn 、 　 　　 イ芸豸ぅ |　　　　|　::: 　}　　　',",
+    "　　　 / / |　 .|　 ', |.　 |　　 芸豸う　　　　 　　 ` 丐ク |　 　 　.| .|:::.　}　　　 i",
+    '　　　/ /　|　 .|　 .\',| \', .ヽ　　`ー　\'　　　 .　　　 / / / /|　　　 | | .|::::　}　　　 |',
+    '　　　{ .{　 |　 .|　　.\',　＞iヽ_/ / / /　 ., === 、　　　　/／　　　.| .|:::: /　／ /',
+    '　　　\',　\'- |　 .|　　　　　.\',　　　　　　 .i　　　　i　　　／/　　　　/ .|::::/／/／　　　　　　　　　　ＲＰを崩さない　ＲＰを',
+    '　　　　　　|　 .’、　 　 　 ’、し　　　　|　　　　|　　　　,\'　　　 ./　 |::::　　|',
+    '　　　　　　`---| ＼　　 \',　.＼　　　　.ヽ　 　 \'　　　／　　 ,i/／＼::　i、|',
+  ].join('\n');
+  const selected = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text);
+
+  assert.ok(!selected.some((text) => /芸豸[ぅう]/u.test(text)), JSON.stringify(selected));
+  assert.ok(selected.includes('ＲＰを崩さない　ＲＰを'), JSON.stringify(selected));
+});
+
+test('같은 芸豸う라도 AA와 분리된 독립 블록이면 문자열만으로 제외하지 않는다', () => {
+  const selected = selectAllTranslatableSegments(segment('\n\n　　芸豸う　　\n\n'))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text);
+
+  assert.deepEqual(selected, ['芸豸う']);
+});
+
 test('검증된 말풍선 박스 안의 한자+작은 가나+!? 짧은 대사를 선택한다', () => {
   const sample = [
     '　　　┌────────────────────┐',
@@ -218,6 +472,35 @@ test('검증된 말풍선 박스 안의 한자+작은 가나+!? 짧은 대사를
     .join('');
 
   assert.match(selectedText, /婿っ!?/u);
+});
+
+test('수동정규식에서 일반화한 짧은 형태는 검증된 상자 안에서도 자동선택한다', () => {
+  const expected = ['っ！！', '１１歳？', '神……？', 'ﾎﾟﾝ'];
+  const sample = expected
+    .map((text) => [
+      '　　　┌────────────────────┐',
+      `　　　│　　　${text}　　　│`,
+      '　　　└────────────────────┘',
+    ].join('\n'))
+    .join('\n\n');
+  const selected = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text);
+
+  assert.deepEqual(selected, expected);
+});
+
+test('검증된 상자 안이어도 장식 없는 단일 일본어 문자는 자동 승격하지 않는다', () => {
+  const sample = [
+    '　　　┌────────────────────┐',
+    '　　　│　　　男　　　│',
+    '　　　└────────────────────┘',
+  ].join('\n');
+  const selected = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text);
+
+  assert.deepEqual(selected, []);
 });
 
 test('둥근 AA 말풍선 안의 자연스러운 狂ってる… 단문을 전체 선택에 포함한다', () => {
@@ -532,6 +815,75 @@ test('삐죽한 화살표 말풍선의 한자 혼합 장음 대사를 전체선�
   assert.ok(target, JSON.stringify(segments));
   assert.equal(target.isAutoSelectExcluded, false, JSON.stringify(target));
   assert.deepEqual(selected, ['やる夫様ーーーっ！！']);
+});
+
+test('주변 AA가 밀집해도 좌우 벽과 상하 닫힘이 검증된 말풍선 대사를 우선한다', () => {
+  const sample = [
+    '＼＼/⌒)　　　　　　　　　　　　　|　|｜　!|　|　　　　　　　　　　 　 　 　 　 　 　 　 　 　 ＼人_从人人_从人人 _／',
+    '　　　　　　　　　　　 |　|｜　||　| ! 　　.／　　　　　　　　　　　　　　　　　　　　　＞　　　　　　　　　　　　 ＜',
+    '＼＼　　　､,､-\'　 /　　　　　　　　　　　 |　|｜　||　| ! 　　.／　　　　　　　　　　　　　　　　　　　　　＞　　　あっ！！　　　 ＜',
+    '　　＿,､-\'　　 　 （　　　　　　　　　　　　　 ! |｜　||　| | 　 ／　　　　　　　　　　　　　　　　　　　　　＞　　　　　　　　　　　　 ＜',
+    '　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　／Y⌒YWY⌒YWY⌒Y＼',
+    '',
+    '　　　　　　　　　　 　 　,...-─‐￣￣乂＿..‐..._　　　　　　　　 　 　 　 f´￣￣￣￣￣￣￣￣￣￣￣￣￣￣￣￣￣￣｀ヽ',
+    '　　　　　　　　 　 　／..:..:..:..:..:..:..:..:..:..:..:..:..:`､..:..ヽ..　　　　　　 　 　 |　　　　　　　　　　　　　　　　　　　　　　　　　　 　 |',
+    '　　　　　　　　　／..:..:..:..:..:..:..:..:..:..:..:..:..:..:..:..:..:..:..:..:..＼　　　　　　　|　　それよりここから立ち去る事は　　　　 　 　 |',
+    '　　　　　　 　 　 ,..\'..:..:.／..:..:..:.,..:..:..:..:..:..:..:..:.\',..:..:..:..\':..,　 　 　 　 　 　 |　　　　　　　　　　　　　　許さないわよっ！！　 |',
+    '　　　　　　　　 /..:..:../..:..:..:..:./..:..:..:..|..:..:..:l..:..:..:\',..\',..:..:..:...\',　　　　　　　 |　　　　　　　　　　　　　　　　　　　　　　　　　　 　 |',
+    '　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　 　 　 乂＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿ノ',
+  ].join('\n');
+  const selected = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text);
+
+  assert.match(selected.join('\n'), /あっ！！/u);
+  assert.match(selected.join('\n'), /それよりここから立ち去る事は/u);
+  assert.match(selected.join('\n'), /許さないわよっ！！/u);
+});
+
+test('문자 모양보다 사방의 큰 독립 여백을 우선해 짧은 한자 표기를 선택한다', () => {
+  const sample = [
+    '　　　　　　　　　　　　　　Ⅵ､从:::¨´　　　＼　　　::::::::::　 ｌ　　｜ｲ/　，',
+    '　　　　　　　　　　　　　　 |ヾ|人　　｀ ､＿＿__　　　　　..ｨ　　　|　′ i　　　　　　　　　　　　　　今日',
+    '　　　　　　　　　　　　　　/ /|　个s､.　.ゞ\'::::::ノ.　　　｡s"/　　/｜ |　｜',
+  ].join('\n');
+  const selected = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text);
+
+  assert.deepEqual(selected, ['今日']);
+});
+
+test('비례 글꼴에서 괄호가 AA 획처럼 겹쳐도 자연스러운 괄호형 독백은 선택한다', () => {
+  const sample = [
+    '　　　　 　 　 /　　　　 　 i　　 |　ﾒ､ 　 { 　　　　 　 \',',
+    '. 　 　 　 　 /　/　 ./}: 　 |　　,,z\'___.＼.:!　　 　/ ノ　.',
+    '　 　 　 　 /　/ 　./ﾉ}: 　 |　 ;‘ん仔从j　　`メ\'　 .,　}',
+    '　　　　　/　/　　;}′!{ ﾊ ! 　 |夊ﾚ゜　 |_,∠_ _.,／　;　　 　 　 　 　 　 げ、げんしゅこっきゃのおはなちっ！！',
+    '.　　　　/　　　　.ﾊ　　｀ヽ| 　 .!""　　 　んｸ》　　 /',
+    '　　　 ,:　 /　　:/　 :､　　\',!　　|　　へ　 ヾﾞ / 　 ,.\'　　　　　　　　　　　（原種国家のお話っ！！）',
+    '　　／　　 　　/　　ﾒ,丶　}　　|／ 　 }ゝ　"/　／;',
+    '　　　　　 }　 　 _.ノi//ミ､ﾊ:　 {　　／　　イ　 ｉ　|',
+  ].join('\n');
+  const visualWidthProfile: VisualWidthProfile = {
+    version: 1,
+    unitWidths: [...new Set(sample)].map((character): [string, number] => [
+      character,
+      character === '　'
+        ? 1
+        : character === ' '
+          ? 0.625
+          : (character.codePointAt(0) || 0) > 0xff
+            ? 2
+            : 0.75,
+    ]),
+  };
+  const selected = selectAllTranslatableSegments(segment(sample, visualWidthProfile))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text);
+
+  assert.ok(selected.includes('げ、げんしゅこっきゃのおはなちっ！！'), JSON.stringify(selected));
+  assert.ok(selected.includes('（原種国家のお話っ！！）'), JSON.stringify(selected));
 });
 
 test('사방에 여백이 있는 히라가나·가타카나 독립 블록을 한자 없이도 적극 자동선택한다', () => {

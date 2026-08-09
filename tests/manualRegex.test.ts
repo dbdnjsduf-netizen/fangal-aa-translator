@@ -221,6 +221,21 @@ test('한 글자 수동정규식은 상하좌우가 표시 폭 2칸 이상 비�
   assert.equal(onlyOneBlankRow.some(({ isSelected }) => isSelected), false);
 });
 
+test('한 글자 수동정규식의 오른쪽이 물리적 줄 끝이면 열린 여백으로 허용한다', () => {
+  const lineEnd = applyManualRegexRules([
+    segment('line-end', '\n\n  あ\n\n'),
+  ], rulesFor('あ'));
+  assert.deepEqual(
+    lineEnd.filter(({ isSelected }) => isSelected).map(({ text }) => text),
+    ['あ'],
+  );
+
+  const oneSpaceBeforeContent = applyManualRegexRules([
+    segment('not-line-end', '\n\n  あ X\n\n'),
+  ], rulesFor('あ'));
+  assert.equal(oneSpaceBeforeContent.some(({ isSelected }) => isSelected), false);
+});
+
 test('새 규칙만 증분 적용해 기존에 직접 해제한 정규식 선택은 건드리지 않는다', () => {
   const previous = rulesFor('以前');
   const next = addManualRegexRule(
