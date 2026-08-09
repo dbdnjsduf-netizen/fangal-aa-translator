@@ -338,7 +338,11 @@ function hasFourSideTwoCellIsolation(
     .match(/[\s\u3000\u00a0\u2000-\u200b]+$/u)?.[0] || '';
   const rightWhitespace = line.slice(localEnd)
     .match(/^[\s\u3000\u00a0\u2000-\u200b]+/u)?.[0] || '';
-  if (getDisplayWidth(leftWhitespace) < 2 || getDisplayWidth(rightWhitespace) < 2) {
+  const isAtOpenRightEdge = localEnd === line.length;
+  if (
+    getDisplayWidth(leftWhitespace) < 2
+    || (!isAtOpenRightEdge && getDisplayWidth(rightWhitespace) < 2)
+  ) {
     return false;
   }
 

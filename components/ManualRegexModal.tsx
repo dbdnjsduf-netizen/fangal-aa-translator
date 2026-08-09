@@ -73,7 +73,7 @@ export const ManualRegexModal: React.FC<ManualRegexModalProps> = ({
               <Braces className="h-5 w-5 text-cyan-400" /> 수동 정규식 관리
             </h2>
             <p className="mt-1 text-xs text-slate-400">
-              저장한 원문과 완전히 같은 문자열만 공백 경계에서 자동 선택합니다. 한 글자는 상하좌우 2칸 여백이 필요합니다.
+              저장한 원문과 완전히 같은 문자열만 공백 경계에서 자동 선택합니다. 한 글자는 상하좌우 2칸 여백이 필요하며, 오른쪽 줄 끝은 열린 여백으로 봅니다.
             </p>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-white" aria-label="수동 정규식 관리 닫기">
