@@ -38,33 +38,7 @@ STRICT 1:1 MAPPING (NO MERGING):
 - Never return an empty translation for an item that contains Japanese text.
 - Return no explanations or commentary.`;
 
-export const CORE_TRANSLATION_RULES = `You are translating Japanese dialogue extracted from ASCII Art (AA) / Shift-JIS Art into Korean.
-
-NON-NEGOTIABLE OUTPUT CONTRACT:
-- Return only the JSON value requested by the user message. Do not add Markdown or commentary.
-- Produce exactly one translated string for every input item, at the same zero-based index.
-- Never merge, omit, split, duplicate, or reorder items.
-- Use neighboring array entries only as context; each output item must still correspond solely to its source item.
-- Never return Japanese source text unchanged. Do not leave Japanese kana or CJK ideographs in the output.
-- Write Japanese names, titles, and terms fully in Hangul unless the supplied terminology specifies otherwise.
-- Never return an empty string for an item containing Japanese text.
-- Preserve meaningful punctuation, pauses, shouting, and leading/trailing whitespace, but do not imitate AA alignment by breaking Korean syllables.
-- An item may begin with ⟦VERTICAL_MAX=N⟧. Do not reproduce this marker. Translate the reconstructed vertical sentence as one natural utterance. Prefer at most N non-space Hangul characters and omit spaces when it still reads naturally. If the full meaning requires more than N characters, return the complete translation instead of dropping meaning.`;
-
-export const CHARACTER_VOICE_RULES = `SOURCE-TRIGGERED CHARACTER VOICES:
-- Preserve recurring character idiolects instead of flattening them into generic Korean. Apply a mapping only when the current source item actually contains its listed speech marker. A distinctive marker such as だお, ですぅ, かしら, っていうｗ, or にょろーん can itself establish the voice. Generic だろ, でしょ, and ordinary polite language require the ordered scene or supplied terminology to identify the named speaker.
-- やる夫: sentence-final だお / だおね / だおよ, or an unmistakably idiolectal final お -> ~다오 / ~다오네. Never add ~다오 to neutral だ, です, or ます.
-- やらない夫: source-final だろ / だろ？ -> ~겠지 / ~겠지? when he is the identified speaker.
-- やらない子: source-final でしょ / でしょ？ -> choose ~겠지? or ~잖아? according to the line's intent when she is the identified speaker.
-- できる夫: when his source line uses polite speech, preserve it with natural ~입니다 / ~군요 / ~겠죠 rather than flattening it into banmal.
-- 翠星石: source-final ですぅ -> ~예요오 / ~라구요오, choosing the natural Korean form for the sentence.
-- 金糸雀: source-final かしら -> ~까나.
-- でっていう: source-final っていうｗ / っていうww -> ~라능ㅋㅋ, preserving comic laughter naturally.
-- 鶴屋さん: source-final にょろ -> ~뇨로.
-- ちゅるやさん: にょろーん -> 뇨롱~.
-- Do not spread one character's voice to neighboring items, other speakers, or lines without the corresponding source marker. Preserve punctuation and emotional intensity while using these endings.`;
-
-export const DEFAULT_SYSTEM_PROMPT = `Translate into fluent, idiomatic Korean that sounds written by a native speaker.
+const LEGACY_DEFAULT_SYSTEM_PROMPT_1_11_9 = `Translate into fluent, idiomatic Korean that sounds written by a native speaker.
 - Read the array as an ordered scene and use adjacent lines to resolve omitted subjects, references, and tone.
 - Preserve each speaker's personality, politeness level, honorifics, emotional intensity, and recurring verbal habits when the source supports them.
 - Prefer natural Korean phrasing over word-for-word Japanese syntax without adding facts, jokes, relationships, or gender that are not evident.
@@ -74,8 +48,56 @@ export const DEFAULT_SYSTEM_PROMPT = `Translate into fluent, idiomatic Korean th
 - When the Japanese is genuinely ambiguous, choose the reading best supported by adjacent dialogue instead of explaining alternatives.
 - Do not censor profanity, threats, dark humor, or informal speech present in the source.`;
 
+export const CORE_TRANSLATION_RULES = `ROLE AND PRIORITIES:
+You are the Korean localizer for Japanese dialogue, narration, captions, sound effects, and internet language extracted from ASCII Art (AA) / Shift-JIS Art.
+Follow this priority order: output contract, supplied terminology, complete source meaning, source-marked voice and register, then natural Korean fluency.
+
+OUTPUT CONTRACT — NEVER BREAK:
+- Return only the JSON value requested by the user message, with no Markdown, labels, notes, or commentary.
+- Return exactly one string for each input item at the same zero-based index.
+- Never merge, split, omit, duplicate, move, or reorder items. Neighboring items are context only and must not donate words to the current output.
+- Every item containing Japanese meaning must receive a non-empty Korean translation. Never copy the Japanese source as the answer.
+- Leave no Japanese kana, half-width katakana, or CJK ideographs in translated output. Write Japanese names and terms in Hangul unless supplied terminology explicitly requires another form.
+
+SOURCE FIDELITY:
+- Translate the complete meaning, including negation, modality, titles, honorific force, jokes, insults, threats, uncertainty, and emotional intensity. Do not summarize or censor.
+- Do not invent a speaker, subject, relationship, gender, name, explanation, joke, or information absent from the source and usable context.
+- Preserve meaningful punctuation, pauses, ellipses, repeated cries, stutters, laughter, and deliberate exaggeration. Naturalize Japanese typography into readable Korean typography.
+- Do not reproduce source spacing that merely separated AA glyphs or individual Japanese characters. Do not insert padding spaces or split Korean syllables to imitate the picture.
+
+AA AND CONTEXT:
+- The program has already detected each translatable region. Translate its language; do not reinterpret surrounding AA geometry or describe the artwork.
+- Read the input array as an ordered scene. Use nearby items to resolve omitted references, tone, and consistent terminology, while keeping every output index independent.
+- Treat announced thread headers and large physical gaps as context boundaries unless the text clearly continues across them.`;
+
+export const CHARACTER_VOICE_RULES = `SOURCE-MARKER VOICE AND REGISTER:
+- AA often provides no reliable speaker label. Therefore apply the following mappings from the ending or speech marker present in the CURRENT source item; do not require speaker identification.
+- Match the most specific and longest marker first. Preserve its function naturally in Korean rather than appending a second, redundant ending.
+- だお / だおね / だおよ, and unmistakably idiolectal sentence-final お -> ~다오 / ~다오네 / ~다오. Never convert neutral だ, です, or ます into ~다오.
+- だろ / だろ？ -> ~겠지 / ~겠지? while retaining assertion, challenge, or question force from the source.
+- でしょ / でしょ？ -> ~겠지? or ~잖아? according to whether the line asks for agreement or presses a point.
+- Ordinary です / ます polite speech -> natural Korean polite or formal speech such as ~요, ~입니다, ~군요, or ~겠죠. Do not flatten it into banmal.
+- ですぅ -> ~예요오 / ~라구요오, choosing the grammatically natural form.
+- かしら -> ~까나, preserving uncertainty or self-questioning.
+- っていうｗ / っていうww -> ~라능ㅋㅋ, preserving the comic laughter.
+- にょろーん -> 뇨롱~. A distinct sentence-final にょろ -> ~뇨로.
+- Apply a voice marker only to the item that actually contains it. Do not spread it to adjacent lines, and do not add a gimmick ending when the source has no corresponding marker.`;
+
+export const DEFAULT_SYSTEM_PROMPT = `KOREAN LOCALIZATION STYLE:
+- Write fluent, idiomatic Korean that reads as dialogue or narration originally composed in Korean, not as word-for-word Japanese syntax.
+- Preserve the source register: banmal, polite speech, formal speech, archaic tone, rough speech, childish speech, role language, and recurring verbal tics must remain distinguishable.
+- Prefer the line's communicative intent and emotional rhythm over literal word order, without weakening or embellishing its meaning.
+- Render Japanese internet slang, memes, laughter, sound effects, and onomatopoeia with concise Korean equivalents familiar to the same kind of audience.
+- Keep names, titles, pronouns, terminology, and speech level consistent across the ordered scene. Supplied terminology overrides every stylistic preference.
+- Preserve purposeful repetition, stuttering, long vowels, ellipses, and comic escalation when they affect the performance of the line.
+- When wording is genuinely ambiguous, choose the interpretation best supported by nearby text and established terminology; never explain alternatives in the output.`;
+
 export function resolveStoredSystemPrompt(storedPrompt: string | null): string {
-  if (!storedPrompt || storedPrompt === LEGACY_DEFAULT_SYSTEM_PROMPT_2_2) {
+  if (
+    !storedPrompt
+    || storedPrompt === LEGACY_DEFAULT_SYSTEM_PROMPT_2_2
+    || storedPrompt === LEGACY_DEFAULT_SYSTEM_PROMPT_1_11_9
+  ) {
     return DEFAULT_SYSTEM_PROMPT;
   }
   return storedPrompt;
@@ -778,7 +800,7 @@ async function requestChat(
 }
 
 export function buildTranslationSystemInstruction(systemInstruction: string) {
-  return `${CORE_TRANSLATION_RULES}\n\n${CHARACTER_VOICE_RULES}\n\nTRANSLATION STYLE:\n${
+  return `${CORE_TRANSLATION_RULES}\n\n${CHARACTER_VOICE_RULES}\n\nUSER-EDITABLE LOCALIZATION STYLE:\n${
     systemInstruction.trim() || DEFAULT_SYSTEM_PROMPT
   }`;
 }
@@ -791,14 +813,13 @@ export function buildTranslationRetryCorrection(
   const rejectedOutput = rejectedTranslations
     ? `\nREJECTED_OUTPUT_JSON:\n${JSON.stringify(rejectedTranslations)}`
     : '';
-  return `\n\nRETRY_CORRECTION:
-The previous response was rejected: ${message}${rejectedOutput}
-Rewrite every rejected item from scratch as Korean.
-- Return exactly ${expectedCount} strings in one JSON array and preserve all indices.
-- Convert every Japanese kana and every CJK ideograph to Hangul.
-- Never append the Japanese source as a note, reading aid, or parenthetical annotation.
-- Keep Latin letters, numbers, and punctuation only when they belong in the Korean translation.
-- Do not merge adjacent dialogue and do not add an explanation.`;
+  return `\n\nREPAIR THE REJECTED RESPONSE:
+Validation failed because: ${message}${rejectedOutput}
+Translate the requested input again from the source, not by editing or defending the rejected output.
+- Return one JSON array containing exactly ${expectedCount} Korean strings at their original indices.
+- Fully translate every Japanese kana, half-width katakana, and CJK ideograph; do not copy or annotate the source.
+- Preserve source meaning and source-marked voice while keeping Latin letters, numbers, and punctuation only where semantically appropriate.
+- Do not merge adjacent items, return an empty Japanese item, or add any explanation outside the JSON array.`;
 }
 
 export function buildTranslationPrompt(
@@ -808,6 +829,11 @@ export function buildTranslationPrompt(
   useDefaultDict: boolean,
 ) {
   const dictionaryPrompt = generateDictionaryPrompt(customDict, useDefaultDict);
+  // Vertical layout metadata is needed by the application, not by the model.
+  // The detector has already reconstructed every vertical group in reading order.
+  const translationSources = chunk.map((text) => (
+    text.replace(/^⟦VERTICAL_MAX=\d+⟧/i, '')
+  ));
   const threadHeaders = chunk
     .map((text, index) => (/^\d{4}\s*：\s*◆/.test(text) ? index : -1))
     .filter((index) => index >= 0);
@@ -821,13 +847,18 @@ export function buildTranslationPrompt(
       : '',
   ].filter(Boolean).join('\n');
 
-  return `Translate the following JSON array from Japanese into Korean.
-Return ONLY one valid JSON array of strings. It MUST contain exactly ${chunk.length} items in the same order.
-Do not use Markdown fences. Never combine, omit, or reorder indices.
-${contextHints}
-${dictionaryPrompt}
+  return `TASK:
+Localize INPUT_JSON from Japanese into Korean under the system rules.
+Return only one valid JSON array containing exactly ${chunk.length} strings in the same order.
+Every output index must translate only the source at that index; never combine, omit, duplicate, or reorder items.
+
+CONTEXT BOUNDARIES:
+${contextHints || 'No additional physical context boundary was detected in this chunk.'}
+
+${dictionaryPrompt || 'TERMINOLOGY: No additional terminology was supplied.'}
+
 INPUT_JSON:
-${JSON.stringify(chunk)}`;
+${JSON.stringify(translationSources)}`;
 }
 
 export function generateDictionaryPrompt(customDict: DictionaryEntry[], useDefault: boolean) {

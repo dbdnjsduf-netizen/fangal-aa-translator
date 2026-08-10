@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  buildTranslationPrompt,
   buildTranslationSystemInstruction,
   chooseRecoverySplitIndex,
   createChunks,
@@ -64,26 +65,38 @@ test('저장된 사용자 스타일은 보존하고 빈 설정은 개선된 기�
   assert.equal(resolveStoredSystemPrompt('반말로 번역해줘.'), '반말로 번역해줘.');
 });
 
-test('커스텀 프롬프트를 사용해도 원문 표식 기반 캐릭터 말투 대응표를 함께 전달한다', () => {
+test('커스텀 프롬프트를 사용해도 화자 추측 없이 원문 어미 기반 말투 대응표를 함께 전달한다', () => {
   const instruction = buildTranslationSystemInstruction('문맥에 맞는 자연스러운 반말로 번역한다.');
 
   for (const mapping of [
-    'やる夫: sentence-final だお',
-    'やらない夫: source-final だろ',
-    'やらない子: source-final でしょ',
-    'できる夫: when his source line uses polite speech',
-    '翠星石: source-final ですぅ',
-    '金糸雀: source-final かしら',
-    'でっていう: source-final っていうｗ',
-    '鶴屋さん: source-final にょろ',
-    'ちゅるやさん: にょろーん',
+    'だお / だおね / だおよ',
+    'だろ / だろ？',
+    'でしょ / でしょ？',
+    'Ordinary です / ます polite speech',
+    'ですぅ -> ~예요오 / ~라구요오',
+    'かしら -> ~까나',
+    'っていうｗ / っていうww -> ~라능ㅋㅋ',
+    'にょろーん -> 뇨롱~',
+    'sentence-final にょろ -> ~뇨로',
   ]) assert.ok(instruction.includes(mapping), mapping);
-  assert.match(instruction, /Generic だろ, でしょ, and ordinary polite language require/u);
-  assert.match(instruction, /Do not spread one character's voice to neighboring items/u);
-  assert.match(instruction, /Never add ~다오 to neutral だ, です, or ます/u);
-  assert.match(instruction, /~라능ㅋㅋ/u);
-  assert.match(instruction, /뇨롱~/u);
+  assert.match(instruction, /do not require speaker identification/u);
+  assert.doesNotMatch(instruction, /when (?:he|she) is the identified speaker/iu);
+  assert.match(instruction, /Do not spread it to adjacent lines/u);
+  assert.match(instruction, /Never convert neutral だ, です, or ます into ~다오/u);
+  assert.doesNotMatch(instruction, /VERTICAL_MAX|vertical column|Prefer at most N non-space/u);
+  assert.match(instruction, /USER-EDITABLE LOCALIZATION STYLE:/u);
   assert.match(instruction, /문맥에 맞는 자연스러운 반말/u);
+});
+
+test('세로쓰기 배치 메타데이터는 모델에 보내지 않고 복원된 문장만 전달한다', () => {
+  const prompt = buildTranslationPrompt(
+    ['⟦VERTICAL_MAX=7⟧ここでは薬草', '次の台詞'],
+    [],
+    [],
+    false,
+  );
+  assert.doesNotMatch(prompt, /VERTICAL_MAX/u);
+  assert.match(prompt, /\["ここでは薬草","次の台詞"\]/u);
 });
 
 test('큰 물리적 공백의 위치를 청크 문맥 힌트로 보존한다', () => {
@@ -144,8 +157,8 @@ test('항목 수가 틀린 큰 응답은 자동 분할하고 성공한 앞부분
     };
     assert.equal(request.model, 'translategemma:4b');
     const protectedPrompt = request.messages.find(({ role }) => role === 'system')?.content || '';
-    assert.match(protectedPrompt, /NON-NEGOTIABLE OUTPUT CONTRACT/);
-    assert.match(protectedPrompt, /TRANSLATION STYLE:\nTranslate\./);
+    assert.match(protectedPrompt, /OUTPUT CONTRACT — NEVER BREAK/);
+    assert.match(protectedPrompt, /USER-EDITABLE LOCALIZATION STYLE:\nTranslate\./);
     const userPrompt = request.messages.find(({ role }) => role === 'user')?.content || '';
     const marker = 'INPUT_JSON:\n';
     const chunk = JSON.parse(userPrompt.slice(userPrompt.indexOf(marker) + marker.length)) as string[];
@@ -221,14 +234,14 @@ test('일본어가 남은 소수 항목만 격리 재번역하고 정상 항목�
     const userPrompt = request.messages.find(({ role }) => role === 'user')?.content || '';
     const inputJson = userPrompt
       .split('INPUT_JSON:\n')[1]
-      .split('\n\nRETRY_CORRECTION:')[0];
+      .split('\n\nREPAIR THE REJECTED RESPONSE:')[0];
     const chunk = JSON.parse(inputJson) as string[];
     requestedChunks.push(chunk);
 
     let output: string[];
     if (chunk.length > 1) {
       output = ['가', '나', '용사 勇者', '라'];
-    } else if (userPrompt.includes('RETRY_CORRECTION:')) {
+    } else if (userPrompt.includes('REPAIR THE REJECTED RESPONSE:')) {
       correctionPrompt = userPrompt;
       output = ['용사다'];
     } else {
@@ -263,7 +276,7 @@ test('일본어가 남은 소수 항목만 격리 재번역하고 정상 항목�
     ]);
     assert.equal(result.usage.requestCount, 3);
     assert.match(correctionPrompt, /REJECTED_OUTPUT_JSON/);
-    assert.match(correctionPrompt, /every CJK ideograph to Hangul/);
+    assert.match(correctionPrompt, /CJK ideograph; do not copy or annotate the source/);
     assert.ok(partialSnapshots.some((items) => (
       items[0] === '가'
       && items[1] === '나'

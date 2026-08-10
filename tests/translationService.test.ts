@@ -147,13 +147,13 @@ test('Gemini도 일본어가 남은 항목만 구조화 응답으로 다시 번�
     const prompt = String(body.contents[0].parts[0].text);
     const inputJson = prompt
       .split('INPUT_JSON:\n')[1]
-      .split('\n\nRETRY_CORRECTION:')[0];
+      .split('\n\nREPAIR THE REJECTED RESPONSE:')[0];
     const chunk = JSON.parse(inputJson) as string[];
     requestedChunks.push(chunk);
 
     const output = chunk.length > 1
       ? ['가', '나', '용사 勇者', '라']
-      : prompt.includes('RETRY_CORRECTION:')
+      : prompt.includes('REPAIR THE REJECTED RESPONSE:')
         ? ['용사다']
         : ['용사 勇者'];
     return new Response(JSON.stringify({
