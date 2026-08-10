@@ -64,13 +64,25 @@ test('저장된 사용자 스타일은 보존하고 빈 설정은 개선된 기�
   assert.equal(resolveStoredSystemPrompt('반말로 번역해줘.'), '반말로 번역해줘.');
 });
 
-test('커스텀 프롬프트를 사용해도 원문에 실제로 나타난 야루오 말투만 다오체로 보존한다', () => {
+test('커스텀 프롬프트를 사용해도 원문 표식 기반 캐릭터 말투 대응표를 함께 전달한다', () => {
   const instruction = buildTranslationSystemInstruction('문맥에 맞는 자연스러운 반말로 번역한다.');
 
-  assert.match(instruction, /だお, だおね, だおよ/u);
-  assert.match(instruction, /Korean ~다오 family/u);
-  assert.match(instruction, /only to items where the source actually carries that ending/u);
-  assert.match(instruction, /Never add ~다오 to neutral endings such as だ, です, or ます/u);
+  for (const mapping of [
+    'やる夫: sentence-final だお',
+    'やらない夫: source-final だろ',
+    'やらない子: source-final でしょ',
+    'できる夫: when his source line uses polite speech',
+    '翠星石: source-final ですぅ',
+    '金糸雀: source-final かしら',
+    'でっていう: source-final っていうｗ',
+    '鶴屋さん: source-final にょろ',
+    'ちゅるやさん: にょろーん',
+  ]) assert.ok(instruction.includes(mapping), mapping);
+  assert.match(instruction, /Generic だろ, でしょ, and ordinary polite language require/u);
+  assert.match(instruction, /Do not spread one character's voice to neighboring items/u);
+  assert.match(instruction, /Never add ~다오 to neutral だ, です, or ます/u);
+  assert.match(instruction, /~라능ㅋㅋ/u);
+  assert.match(instruction, /뇨롱~/u);
   assert.match(instruction, /문맥에 맞는 자연스러운 반말/u);
 });
 

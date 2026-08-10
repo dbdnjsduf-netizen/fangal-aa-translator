@@ -49,8 +49,20 @@ NON-NEGOTIABLE OUTPUT CONTRACT:
 - Write Japanese names, titles, and terms fully in Hangul unless the supplied terminology specifies otherwise.
 - Never return an empty string for an item containing Japanese text.
 - Preserve meaningful punctuation, pauses, shouting, and leading/trailing whitespace, but do not imitate AA alignment by breaking Korean syllables.
-- Preserve source-signaled character idiolects instead of flattening them. In particular, when an input item itself uses Yaruo-style sentence endings such as だお, だおね, だおよ, or a clearly idiolectal sentence-final お, render that ending consistently with the Korean ~다오 family (for example ~다오 or ~다오네). Apply this only to items where the source actually carries that ending. Never add ~다오 to neutral endings such as だ, です, or ます merely because the speaker might be Yaruo.
 - An item may begin with ⟦VERTICAL_MAX=N⟧. Do not reproduce this marker. Translate the reconstructed vertical sentence as one natural utterance. Prefer at most N non-space Hangul characters and omit spaces when it still reads naturally. If the full meaning requires more than N characters, return the complete translation instead of dropping meaning.`;
+
+export const CHARACTER_VOICE_RULES = `SOURCE-TRIGGERED CHARACTER VOICES:
+- Preserve recurring character idiolects instead of flattening them into generic Korean. Apply a mapping only when the current source item actually contains its listed speech marker. A distinctive marker such as だお, ですぅ, かしら, っていうｗ, or にょろーん can itself establish the voice. Generic だろ, でしょ, and ordinary polite language require the ordered scene or supplied terminology to identify the named speaker.
+- やる夫: sentence-final だお / だおね / だおよ, or an unmistakably idiolectal final お -> ~다오 / ~다오네. Never add ~다오 to neutral だ, です, or ます.
+- やらない夫: source-final だろ / だろ？ -> ~겠지 / ~겠지? when he is the identified speaker.
+- やらない子: source-final でしょ / でしょ？ -> choose ~겠지? or ~잖아? according to the line's intent when she is the identified speaker.
+- できる夫: when his source line uses polite speech, preserve it with natural ~입니다 / ~군요 / ~겠죠 rather than flattening it into banmal.
+- 翠星石: source-final ですぅ -> ~예요오 / ~라구요오, choosing the natural Korean form for the sentence.
+- 金糸雀: source-final かしら -> ~까나.
+- でっていう: source-final っていうｗ / っていうww -> ~라능ㅋㅋ, preserving comic laughter naturally.
+- 鶴屋さん: source-final にょろ -> ~뇨로.
+- ちゅるやさん: にょろーん -> 뇨롱~.
+- Do not spread one character's voice to neighboring items, other speakers, or lines without the corresponding source marker. Preserve punctuation and emotional intensity while using these endings.`;
 
 export const DEFAULT_SYSTEM_PROMPT = `Translate into fluent, idiomatic Korean that sounds written by a native speaker.
 - Read the array as an ordered scene and use adjacent lines to resolve omitted subjects, references, and tone.
@@ -766,7 +778,7 @@ async function requestChat(
 }
 
 export function buildTranslationSystemInstruction(systemInstruction: string) {
-  return `${CORE_TRANSLATION_RULES}\n\nTRANSLATION STYLE:\n${
+  return `${CORE_TRANSLATION_RULES}\n\n${CHARACTER_VOICE_RULES}\n\nTRANSLATION STYLE:\n${
     systemInstruction.trim() || DEFAULT_SYSTEM_PROMPT
   }`;
 }
