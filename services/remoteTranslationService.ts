@@ -12,6 +12,7 @@ import {
   parseIndexedTranslations,
   TranslationProgress,
   TranslationResponseData,
+  TranslationBatchInput,
   validateTranslatedItems,
 } from './ollamaService';
 
@@ -71,7 +72,7 @@ export async function translateRemoteSelection(
 
 export async function translateRemoteBatch(
   config: RemoteTranslationConfig,
-  texts: (string | null)[],
+  texts: TranslationBatchInput[],
   customDict: DictionaryEntry[] = [],
   useDefaultDict = true,
   systemInstruction = DEFAULT_SYSTEM_PROMPT,
