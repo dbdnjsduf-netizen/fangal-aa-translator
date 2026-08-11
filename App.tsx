@@ -47,7 +47,10 @@ import {
   getOllamaRuntimeInfo,
   getCodexRuntimeInfo,
   resolveStoredSystemPrompt,
+  TRANSLATION_POST_BOUNDARY,
+  isTranslationPostHeader,
 } from './services/translationService';
+import type { TranslationBatchInput } from './services/translationService';
 import {
   applyVerticalTranslations,
   detectVerticalTextGroups,
@@ -511,10 +514,12 @@ function App() {
         group.segmentIds.forEach((segmentId) => verticalGroupBySegmentId.set(segmentId, group));
       });
 
-      const textsToTranslate: (string | null)[] = [];
+      const textsToTranslate: TranslationBatchInput[] = [];
       const translationUnits: SmartTranslationUnit[] = [];
       const addedVerticalGroups = new Set<string>();
       let lastUnitSegmentIndex = -1;
+      let sourceLine = '';
+      let pendingPostBoundary = false;
 
       const addUnit = (unit: SmartTranslationUnit, segmentIndex: number) => {
         if (lastUnitSegmentIndex !== -1) {
@@ -527,12 +532,23 @@ function App() {
             textsToTranslate.push(null);
           }
         }
+        if (pendingPostBoundary && translationUnits.length > 0) {
+          textsToTranslate.push(TRANSLATION_POST_BOUNDARY);
+        }
+        pendingPostBoundary = false;
         translationUnits.push(unit);
         textsToTranslate.push(unit.requestText);
         lastUnitSegmentIndex = segmentIndex;
       };
 
       segments.forEach((segment, segmentIndex) => {
+        const sourceFragment = segment.original || segment.text;
+        if (sourceFragment === '\n') {
+          if (isTranslationPostHeader(sourceLine)) pendingPostBoundary = true;
+          sourceLine = '';
+          return;
+        }
+        sourceLine += sourceFragment;
         if (!segment.isSelected || !isSegmentTranslationSelectable(segment)) return;
         const verticalGroup = verticalGroupBySegmentId.get(segment.id);
         if (verticalGroup) {

@@ -4,6 +4,7 @@ import {
   DEFAULT_SYSTEM_PROMPT,
   TranslationProgress,
   TranslationResponseData,
+  TranslationBatchInput,
 } from './ollamaService';
 import {
   createRemoteHttpError,
@@ -48,7 +49,7 @@ export async function translateSelection(
 }
 
 export async function translateBatch(
-  texts: (string | null)[],
+  texts: TranslationBatchInput[],
   apiKey: string,
   customDict: DictionaryEntry[] = [],
   useDefaultDict = true,

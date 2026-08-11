@@ -55,26 +55,33 @@ Follow this priority order: output contract, supplied terminology, complete sour
 OUTPUT CONTRACT — NEVER BREAK:
 - Return only the JSON value requested by the user message, with no Markdown, labels, notes, or commentary.
 - Return exactly one string for each input item at the same zero-based index.
-- Never merge, split, omit, duplicate, move, or reorder items. Neighboring items are context only and must not donate words to the current output.
+- Never merge, split, omit, duplicate, move, or reorder array items. Array slots are layout boundaries, not guaranteed sentence boundaries: neighboring items may be grammatically continuous parts of one sentence. Keep the meaning contributed by each source item at its own index without forcing that index to become a complete sentence.
 - Every item containing Japanese meaning must receive a non-empty Korean translation. Never copy the Japanese source as the answer.
 - Leave no Japanese kana, half-width katakana, or CJK ideographs in translated output. Write Japanese names and terms in Hangul unless supplied terminology explicitly requires another form.
 
 SOURCE FIDELITY:
 - Translate the complete meaning, including negation, modality, titles, honorific force, jokes, insults, threats, uncertainty, and emotional intensity. Do not summarize or censor.
+- Match lexical intensity as well as dictionary meaning. Rough slang, blunt contempt, disgust, insults, and deliberately abrasive wording must remain equally rough, blunt, contemptuous, disgusting, or abrasive in Korean; natural fluency never licenses euphemizing them into neutral explanatory language.
+- Choose a Korean expression from the same social register as the source. For example, rough ムカツク may call for 빡치다 rather than a softened 짜증이 나다, and insulting キモイ may call for 역겹다 or 징그럽다 rather than the weaker 기분 나쁘다. These are intensity guides, not fixed glossary substitutions: use the scene to choose the exact Korean word.
 - Do not invent a speaker, subject, relationship, gender, name, explanation, joke, or information absent from the source and usable context.
+- For a recognizable work, character, place, item, technique, or other media proper noun, use its established official Korean localization first. If none exists, use the spelling overwhelmingly established in Korean fandom or community usage. Directly transliterate the Japanese only when no established Korean form is known. Supplied terminology always overrides both official and common usage.
 - Preserve meaningful punctuation, pauses, ellipses, repeated cries, stutters, laughter, and deliberate exaggeration. Naturalize Japanese typography into readable Korean typography.
 - Do not reproduce source spacing that merely separated AA glyphs or individual Japanese characters. Do not insert padding spaces or split Korean syllables to imitate the picture.
 
 AA AND CONTEXT:
 - The program has already detected each translatable region. Translate its language; do not reinterpret surrounding AA geometry or describe the artwork.
-- Read the input array as an ordered scene. Use nearby items to resolve omitted references, tone, and consistent terminology, while keeping every output index independent.
+- Read the input array as an ordered scene. Use nearby items to resolve omitted references, tone, consistent terminology, and cross-item grammar while preserving the one-output-slot-per-input-slot contract.
+- Detect sentence continuation across adjacent items. When the current Japanese item is an attributive, connective, quotation-leading, or otherwise incomplete clause whose noun or predicate appears in the next item, preserve that continuation with the natural Korean modifier or connective ending. Do not add a sentence-final ending merely because the array item ends.
+- In particular, when a plain negative such as ...ない is shown by the following item to modify a noun, translate it as an attributive form such as ...없는 rather than closing it as ...없어. Apply the grammatical principle generally; do not treat this illustration as a fixed phrase substitution.
 - Treat announced thread headers and large physical gaps as context boundaries unless the text clearly continues across them.`;
 
 export const CHARACTER_VOICE_RULES = `SOURCE-MARKER VOICE AND REGISTER:
 - AA often provides no reliable speaker label. Therefore apply the following mappings from the ending or speech marker present in the CURRENT source item; do not require speaker identification.
 - Match the most specific and longest marker first. Preserve its function naturally in Korean rather than appending a second, redundant ending.
+- Preserve recognizable Japanese 2channel/VIP AA register when it is marked by the current wording: terse delivery, blunt assertions, rough slang, mockery, internet laughter, intentionally formulaic phrasing, and character-specific endings are part of the voice. Do not polish them into generic literary dialogue, polite prose, or emotionally milder Korean merely because that reads more smoothly.
+- A meme-like or deliberately awkward stock phrase may remain slightly formulaic in Korean when smoothing it would erase its AA/VIP identity. Do not invent VIP slang when the source item is neutral.
 - だお / だおね / だおよ, and unmistakably idiolectal sentence-final お -> ~다오 / ~다오네 / ~다오. Never convert neutral だ, です, or ます into ~다오.
-- だろ / だろ？ -> ~겠지 / ~겠지? while retaining assertion, challenge, or question force from the source.
+- だろ / だろ？ -> prefer ~겠지 / ~겠지? for the characteristic AA/VIP delivery, while retaining assertion, challenge, recollection, or question force from the source. Other natural Korean forms such as ~잖아 are allowed when the immediate context clearly fits them better; never reject an otherwise valid translation solely for choosing a different ending.
 - でしょ / でしょ？ -> ~겠지? or ~잖아? according to whether the line asks for agreement or presses a point.
 - Ordinary です / ます polite speech -> natural Korean polite or formal speech such as ~요, ~입니다, ~군요, or ~겠죠. Do not flatten it into banmal.
 - ですぅ -> ~예요오 / ~라구요오, choosing the grammatically natural form.
@@ -83,7 +90,7 @@ export const CHARACTER_VOICE_RULES = `SOURCE-MARKER VOICE AND REGISTER:
 - にょろーん -> 뇨롱~. A distinct sentence-final にょろ -> ~뇨로.
 - Apply a voice marker only to the item that actually contains it. Do not spread it to adjacent lines, and do not add a gimmick ending when the source has no corresponding marker.`;
 
-export const DEFAULT_SYSTEM_PROMPT = `KOREAN LOCALIZATION STYLE:
+const LEGACY_DEFAULT_SYSTEM_PROMPT_1_11_10 = `KOREAN LOCALIZATION STYLE:
 - Write fluent, idiomatic Korean that reads as dialogue or narration originally composed in Korean, not as word-for-word Japanese syntax.
 - Preserve the source register: banmal, polite speech, formal speech, archaic tone, rough speech, childish speech, role language, and recurring verbal tics must remain distinguishable.
 - Prefer the line's communicative intent and emotional rhythm over literal word order, without weakening or embellishing its meaning.
@@ -92,11 +99,22 @@ export const DEFAULT_SYSTEM_PROMPT = `KOREAN LOCALIZATION STYLE:
 - Preserve purposeful repetition, stuttering, long vowels, ellipses, and comic escalation when they affect the performance of the line.
 - When wording is genuinely ambiguous, choose the interpretation best supported by nearby text and established terminology; never explain alternatives in the output.`;
 
+export const DEFAULT_SYSTEM_PROMPT = `KOREAN LOCALIZATION STYLE:
+- Write fluent, idiomatic Korean, but never make a line smoother by weakening its insult, vulgarity, emotional force, internet register, character tic, or deliberately formulaic AA/VIP delivery.
+- Preserve the source register: banmal, polite speech, formal speech, archaic tone, rough speech, childish speech, role language, Japanese 2channel/VIP language, and recurring verbal tics must remain distinguishable.
+- Prefer the line's communicative intent, lexical intensity, and emotional rhythm over literal word order. Naturalize syntax, not personality or force.
+- Render Japanese internet slang, memes, laughter, sound effects, and onomatopoeia with concise Korean equivalents from the same level of roughness and the same kind of online audience.
+- Keep terse dialogue terse. Do not expand a blunt phrase into explanatory prose, and do not replace a harsh colloquial word with a safe or neutral description.
+- Keep names, titles, pronouns, terminology, and speech level consistent across the ordered scene. Supplied terminology overrides every stylistic preference.
+- Preserve purposeful repetition, stuttering, long vowels, ellipses, comic escalation, and recognizable stock delivery when they affect the performance of the line.
+- When wording is genuinely ambiguous, choose the interpretation best supported by nearby text and established terminology; never explain alternatives in the output.`;
+
 export function resolveStoredSystemPrompt(storedPrompt: string | null): string {
   if (
     !storedPrompt
     || storedPrompt === LEGACY_DEFAULT_SYSTEM_PROMPT_2_2
     || storedPrompt === LEGACY_DEFAULT_SYSTEM_PROMPT_1_11_9
+    || storedPrompt === LEGACY_DEFAULT_SYSTEM_PROMPT_1_11_10
   ) {
     return DEFAULT_SYSTEM_PROMPT;
   }
@@ -198,7 +216,7 @@ export async function translateSelection(
 }
 
 export async function translateBatch(
-  texts: (string | null)[],
+  texts: TranslationBatchInput[],
   customDict: DictionaryEntry[] = [],
   useDefaultDict = true,
   systemInstruction = DEFAULT_SYSTEM_PROMPT,
@@ -329,7 +347,26 @@ export interface ChunkLimits {
   hardItems?: number;
 }
 
-export function createChunks(texts: (string | null)[], limits: ChunkLimits = {}) {
+export interface TranslationPostBoundary {
+  kind: 'post-boundary';
+}
+
+export type TranslationBatchInput = string | null | TranslationPostBoundary;
+
+export const TRANSLATION_POST_BOUNDARY: TranslationPostBoundary = Object.freeze({
+  kind: 'post-boundary',
+});
+
+export function isTranslationPostHeader(line: string) {
+  return /^\s*\d+\s*[：:]\s*(?:\*\*\s*)?◆.+?(?:ID\s*[：:]|\d{4}[/-]\d{1,2}[/-]\d{1,2})/u
+    .test(line);
+}
+
+function isPostBoundary(value: TranslationBatchInput): value is TranslationPostBoundary {
+  return typeof value === 'object' && value !== null && value.kind === 'post-boundary';
+}
+
+export function createChunks(texts: TranslationBatchInput[], limits: ChunkLimits = {}) {
   // Gemma cloud is much less likely to merge, omit, or truncate indexed
   // translations around 50 items. Physical AA gaps are preferred as soft
   // boundaries; 64 items remains the absolute fallback when no gap exists.
@@ -337,45 +374,95 @@ export function createChunks(texts: (string | null)[], limits: ChunkLimits = {})
   const HARD_CHARS_LIMIT = Math.max(limits.hardChars ?? 3_200, SOFT_CHARS_LIMIT);
   const SOFT_ITEMS_LIMIT = limits.softItems ?? 50;
   const HARD_ITEMS_LIMIT = Math.max(limits.hardItems ?? 64, SOFT_ITEMS_LIMIT);
-  const chunks: string[][] = [];
-  const chunkGaps: number[][] = [];
-  let currentChunk: string[] = [];
-  let currentGaps: number[] = [];
-  let currentLength = 0;
-  let pendingGap = false;
-
-  const flush = () => {
-    if (currentChunk.length === 0) return;
-    chunks.push(currentChunk);
-    chunkGaps.push(currentGaps);
-    currentChunk = [];
-    currentGaps = [];
-    currentLength = 0;
-    pendingGap = false;
-  };
-
-  for (const text of texts) {
-    if (text === null) {
-      pendingGap = true;
-      if (currentLength >= SOFT_CHARS_LIMIT || currentChunk.length >= SOFT_ITEMS_LIMIT) flush();
+  const sourceTexts: string[] = [];
+  const physicalBoundaries = new Set<number>();
+  const postBoundaries = new Set<number>();
+  for (const input of texts) {
+    if (input === null) {
+      if (sourceTexts.length > 0) physicalBoundaries.add(sourceTexts.length);
       continue;
     }
-
-    if (
-      currentChunk.length > 0
-      && (currentLength + text.length > HARD_CHARS_LIMIT || currentChunk.length >= HARD_ITEMS_LIMIT)
-    ) {
-      flush();
+    if (isPostBoundary(input)) {
+      if (sourceTexts.length > 0) {
+        postBoundaries.add(sourceTexts.length);
+        physicalBoundaries.add(sourceTexts.length);
+      }
+      continue;
     }
-
-    if (pendingGap && currentChunk.length > 0) {
-      currentGaps.push(currentChunk.length);
-    }
-    pendingGap = false;
-    currentChunk.push(text);
-    currentLength += text.length;
+    sourceTexts.push(input);
   }
-  flush();
+
+  const chunks: string[][] = [];
+  const chunkGaps: number[][] = [];
+  const findLimitEnd = (start: number, itemLimit: number, charLimit: number) => {
+    let end = start;
+    let chars = 0;
+    while (end < sourceTexts.length && end - start < itemLimit) {
+      const nextLength = sourceTexts[end].length;
+      if (end > start && chars + nextLength > charLimit) break;
+      chars += nextLength;
+      end += 1;
+    }
+    return Math.max(start + 1, end);
+  };
+  const nearestBoundary = (
+    boundaries: Set<number>,
+    start: number,
+    hardEnd: number,
+    targetEnd: number,
+  ) => {
+    // A header roughly one quarter of the soft item limit to either side of
+    // the target is close enough to preserve a post without producing tiny
+    // requests. With the default 50-item target this is ±13 items.
+    const radius = Math.max(
+      4,
+      HARD_ITEMS_LIMIT - SOFT_ITEMS_LIMIT,
+      Math.ceil(SOFT_ITEMS_LIMIT * 0.25),
+    );
+    const candidates = [...boundaries].filter((boundary) => (
+      boundary > start
+      && boundary <= hardEnd
+      && Math.abs(boundary - targetEnd) <= radius
+    ));
+    if (candidates.length === 0) return undefined;
+    return candidates.sort((left, right) => (
+      Math.abs(left - targetEnd) - Math.abs(right - targetEnd)
+      || left - right
+    ))[0];
+  };
+
+  let start = 0;
+  while (start < sourceTexts.length) {
+    const hardEnd = Math.min(
+      sourceTexts.length,
+      findLimitEnd(start, HARD_ITEMS_LIMIT, HARD_CHARS_LIMIT),
+    );
+    const softEnd = Math.min(
+      hardEnd,
+      findLimitEnd(start, SOFT_ITEMS_LIMIT, SOFT_CHARS_LIMIT),
+    );
+    let end = softEnd;
+    if (softEnd < sourceTexts.length) {
+      // Post headers outrank ordinary large layout gaps. Only when there is no
+      // nearby header do we use a physical gap or the exact soft limit.
+      end = nearestBoundary(postBoundaries, start, hardEnd, softEnd)
+        ?? nearestBoundary(physicalBoundaries, start, hardEnd, softEnd)
+        // Preserve the previous request count when no meaningful boundary is
+        // available: the soft target guides boundary choice, while the hard
+        // limit remains the final fallback.
+        ?? hardEnd;
+    } else {
+      end = sourceTexts.length;
+    }
+    if (end <= start) end = Math.min(sourceTexts.length, start + 1);
+
+    chunks.push(sourceTexts.slice(start, end));
+    chunkGaps.push([...physicalBoundaries]
+      .filter((boundary) => boundary > start && boundary < end)
+      .map((boundary) => boundary - start)
+      .sort((left, right) => left - right));
+    start = end;
+  }
 
   return { chunks, chunkGaps };
 }
@@ -834,23 +921,20 @@ export function buildTranslationPrompt(
   const translationSources = chunk.map((text) => (
     text.replace(/^⟦VERTICAL_MAX=\d+⟧/i, '')
   ));
-  const threadHeaders = chunk
-    .map((text, index) => (/^\d{4}\s*：\s*◆/.test(text) ? index : -1))
-    .filter((index) => index >= 0);
-
-  const contextHints = [
-    threadHeaders.length > 0
-      ? `Thread headers occur at indices: ${threadHeaders.join(', ')}. Treat posts as separate contexts.`
-      : '',
-    gaps.length > 0
-      ? `Large physical gaps occur immediately before indices: ${gaps.join(', ')}.`
-      : '',
-  ].filter(Boolean).join('\n');
+  const contextHints = gaps.length > 0
+    ? `Post-header or large-layout context boundaries occur immediately before indices: ${gaps.join(', ')}.`
+    : '';
 
   return `TASK:
 Localize INPUT_JSON from Japanese into Korean under the system rules.
 Return only one valid JSON array containing exactly ${chunk.length} strings in the same order.
 Every output index must translate only the source at that index; never combine, omit, duplicate, or reorder items.
+
+SEQUENTIAL CONTEXT:
+- Read the complete ordered chunk before translating individual items.
+- Items inside each uninterrupted boundary range are consecutive excerpts from the same local scene. Use their preceding and following items to resolve omitted subjects, pronouns, references, word sense, register, and recurring terminology.
+- Separate array slots may form one Korean sentence. Preserve cross-item relative clauses, modifiers, connectives, quotations, and unfinished syntax instead of mechanically closing every item with a sentence-final ending.
+- Preserve the meaning contributed by each individual index: context may determine its grammatical form but must never move words or information from one output index to another.
 
 CONTEXT BOUNDARIES:
 ${contextHints || 'No additional physical context boundary was detected in this chunk.'}

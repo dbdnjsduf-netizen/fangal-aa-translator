@@ -11,7 +11,7 @@ import type { VisualWidthProfile } from '../services/visualTextMetrics';
 // Japanese even though the visible letter is Latin.
 const RE_JAPANESE_CHAR = /[\u3040-\u309f\u30a0-\u30ff\uff66-\uff9d\u4e00-\u9faf\u3400-\u4dbf]/;
 const RE_JAPANESE_CHARS_G = /[\u3040-\u309f\u30a0-\u30ff\uff66-\uff9d\u4e00-\u9faf\u3400-\u4dbf]/g;
-const RE_JAPANESE_PUNCTUATION = /[!?！？。、…「」『』（）［］【】]/;
+const RE_JAPANESE_PUNCTUATION = /[!?！？。、…「」『』（）［］【】♥♡]/;
 const RE_INLINE_DRAWING = /[|│┃｜\/／\\＼_＿￣─━≦≧=＝<＜>＞∫∬\u2500-\u257F\u2580-\u259F]/;
 const RE_GAP = /([\s\u3000\u00A0\u2000-\u200B]*(?:[|│┃｜＞＜\u2500-\u257F／＼\[\]｛｝［］★◆]+|[\s\u3000\u00A0\u2000-\u200B]{2,})[\s\u3000\u00A0\u2000-\u200B]*)/;
 const RE_SEPARATOR = /^[\s\u3000\u00A0\u2000-\u200B]*(?:[|│┃｜＞＜\u2500-\u257F／＼\[\]｛｝［］★◆]+|[\s\u3000\u00A0\u2000-\u200B]{2,})[\s\u3000\u00A0\u2000-\u200B]*$/;
@@ -37,7 +37,7 @@ const RE_DRAWING_MARKS = /[ヽヾ丶〆丿乂爻巛川]/;
 // this list evidence-based: no Hangul lookalikes or invented transliterations.
 const RE_AA_CHARS = /[二三七彡八人入ヌノト一へヘ大イムくミシツテ了心ハフソィッェァォュョエ工乀乁口ロ日目回凵凹凸匚コ丁十小山ー―つっぅヽヾ丶〆丿乂爻巛川芹云ゝゞ冖宀冂广廴廾彐彳忄扌氵犭纟艹辶阝丈乃亅卜匕个丫儿厂厶ヲｲﾉﾆﾊﾍﾄﾚﾘﾙﾛｯｪｧｫｭｮ]/u;
 const RE_NON_JP_G = /[^\u3040-\u309f\u30a0-\u30ff\uff66-\uff9f\u4e00-\u9faf\u3400-\u4dbf]/g;
-const RE_SYMBOLS_G = /[^\u3040-\u309f\u30a0-\u30ff\uff66-\uff9f\u4e00-\u9faf\u3400-\u4dbf!?！？。、…「」『』（）［］【】\s]/g;
+const RE_SYMBOLS_G = /[^\u3040-\u309f\u30a0-\u30ff\uff66-\uff9f\u4e00-\u9faf\u3400-\u4dbf!?！？。、…「」『』（）［］【】♥♡\s]/g;
 const RE_HALFWIDTH_PUNCT = /[\uff61-\uff65]/;
 const RE_THREAD_NAME = /^\s*\d+\s*[:：].*?(?:◆|ID[:：]\w|\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2})/;
 // Box border chars: horiz ─━ (U+2500-01), vert │┃ (U+2502-03), dashed (U+2504-05,2508-09), corners/intersections (U+250C-254D), double (U+2550,2552-2573), ASCII/fullwidth pipes (|｜)
@@ -287,6 +287,70 @@ const hasDenseAADrawingContext = (
     && occupiedRows >= 2
     && occupiedSides.size >= 2
     && hasVerticalDrawingNeighbor;
+};
+
+// Eye and eyebrow strokes in Shift-JIS art sometimes form a deceptively
+// language-like run such as `,ｘぅ竿竿刃ア`: a Latin curve, a small kana and a
+// few CJK/kana glyphs are used as pixels rather than words. Keep this as a
+// shape signal only; the caller must also prove that the run sits in a broad,
+// multi-row AA neighborhood. This avoids banning the same scripts in an
+// isolated annotation or a verified speech bubble.
+const isMixedScriptEyebrowTextureCandidate = (text: string): boolean => {
+  const compact = text.normalize('NFKC').replace(/[\s　]/gu, '');
+  const japanese = compact.match(RE_JAPANESE_CHARS_G) || [];
+  if (japanese.length < 4 || japanese.length > 8) return false;
+
+  const cjkCount = japanese.filter((character) => /[一-龯㐀-䶿]/u.test(character)).length;
+  const smallKanaCount = japanese.filter((character) => /[ぁぃぅぇぉゃゅょ]/u.test(character)).length;
+  const otherKanaCount = japanese.filter((character) => (
+    /[ぁ-んァ-ヶ\uff66-\uff9d]/u.test(character)
+    && !/[ぁぃぅぇぉゃゅょ]/u.test(character)
+  )).length;
+  const latinCount = (compact.match(/[A-Za-z]/gu) || []).length;
+  const hasNaturalKanaRun = /[ぁ-んァ-ヶ]{3,}/u.test(compact);
+
+  return latinCount >= 1
+    && cjkCount >= 2
+    && smallKanaCount >= 1
+    && otherKanaCount >= 1
+    && !hasNaturalKanaRun;
+};
+
+const hasBroadAADrawingNeighborhood = (
+  lines: string[],
+  lineIdx: number,
+  colStart: number,
+  colEnd: number,
+): boolean => {
+  const currentLine = lines[lineIdx] || '';
+  const displayStart = getDisplayWidth(currentLine.substring(0, colStart));
+  const displayEnd = displayStart + getDisplayWidth(currentLine.substring(colStart, colEnd));
+  const checkStart = Math.max(0, displayStart - 28);
+  const checkEnd = displayEnd + 28;
+  let drawingGlyphs = 0;
+  let occupiedRows = 0;
+  let hasAbove = false;
+  let hasBelow = false;
+
+  for (let offset = -2; offset <= 2; offset += 1) {
+    const row = lines[lineIdx + offset];
+    if (row === undefined) continue;
+    const nearby = substringByDisplayCols(row, checkStart, checkEnd);
+    const count = Array.from(nearby).filter((character) => (
+      RE_AA_CONTEXT_GLYPH.test(character) || RE_AA_CHARS.test(character)
+    )).length;
+    drawingGlyphs += count;
+    if (count >= 3) {
+      occupiedRows += 1;
+      if (offset < 0) hasAbove = true;
+      if (offset > 0) hasBelow = true;
+    }
+  }
+
+  return drawingGlyphs >= 16
+    && occupiedRows >= 3
+    && hasAbove
+    && hasBelow;
 };
 
 const hasJapaneseChar = (text: string) => RE_JAPANESE_CHAR.test(text);
@@ -573,6 +637,65 @@ const isShortBoxedCjkParticlePhrase = (text: string): boolean => {
     .test(normalized);
 };
 
+/**
+ * Compact mixed-script phrases such as 離せ, 待て, 行け, 来い, 止まれ and
+ * 逃げろ do not have enough letters to prove natural language by themselves.
+ * The caller must additionally prove either a closed dialogue container or a
+ * strictly empty local rectangle, so eyebrow/eye fragments embedded in AA do
+ * not become selectable merely because their glyphs resemble this shape.
+ */
+const isShortMixedJapanesePhrase = (text: string): boolean => {
+  const normalized = text.normalize('NFKC')
+    .replace(/[\s\u3000\u00a0\u2000-\u200b]+/gu, '');
+  if (!/^[一-龯々〆ヵヶぁ-んァ-ヶ]{2,5}[!?！？。、…]*$/u.test(normalized)) {
+    return false;
+  }
+  const japanese = normalized.match(/[一-龯々〆ヵヶぁ-んァ-ヶ]/gu) || [];
+  const cjkCount = japanese.filter((character) => /[一-龯々〆ヵヶ]/u.test(character)).length;
+  const kanaCount = japanese.length - cjkCount;
+  return cjkCount >= 1 && kanaCount >= 1;
+};
+
+const isAcronymCjkPhrase = (text: string): boolean => {
+  const normalized = text.normalize('NFKC')
+    .replace(/[\s\u3000\u00a0\u2000-\u200b]+/gu, '');
+  return /^[A-Z][A-Z0-9]{1,7}[一-龯々〆ヵヶ]{1,8}[.!?！？。、…]*$/u.test(normalized);
+};
+
+const isShortNumericJapanesePhrase = (text: string): boolean => {
+  const normalized = text.normalize('NFKC')
+    .replace(/[\s\u3000\u00a0\u2000-\u200b]+/gu, '');
+  if (!/^[0-9ぁ-んァ-ヶ一-龯々〆ヵヶー]{2,12}[!?！？。、…]*$/u.test(normalized)) {
+    return false;
+  }
+  const digits = normalized.match(/[0-9]/gu) || [];
+  const japanese = normalized.match(/[ぁ-んァ-ヶ一-龯々〆ヵヶ]/gu) || [];
+  return digits.length >= 1
+    && digits.length <= 4
+    && japanese.length >= 1
+    && japanese.length <= 8;
+};
+
+// A compact count/status shout can be linguistically weak even though its
+// layout is unambiguous (for example `12人！？` or `第100話？`). NFKC keeps
+// full-width digits and punctuation on the same path. This remains a shape
+// predicate: callers must separately prove a closed box or a four-side empty
+// display slot before promoting it.
+const isPunctuatedNumericCjkPhrase = (text: string): boolean => {
+  const normalized = text.normalize('NFKC')
+    .replace(/[\s\u3000\u00a0\u2000-\u200b]+/gu, '');
+  if (!/^[0-9ぁ-んァ-ヶ一-龯々〆ヵヶー]{2,20}(?:[!?]+|\.{2,})$/u.test(normalized)) {
+    return false;
+  }
+  const digits = normalized.match(/[0-9]/gu) || [];
+  const cjk = normalized.match(/[一-龯々〆ヵヶ]/gu) || [];
+  const japanese = normalized.match(/[ぁ-んァ-ヶ一-龯々〆ヵヶ]/gu) || [];
+  return digits.length >= 1
+    && digits.length <= 6
+    && cjk.length >= 1
+    && japanese.length <= 12;
+};
+
 const isLeadingHesitationSingleKanaReaction = (text: string): boolean => {
   const normalized = text.normalize('NFKC').replace(/[\s\u3000\u00a0\u2000-\u200b]+/gu, '');
   return /^[.…・]{2,}[ぁ-んァ-ヶ][!?]+$/u.test(normalized);
@@ -582,6 +705,21 @@ const INLINE_BUBBLE_LEFT_WALL = /[|｜│┃>＞]/u;
 const INLINE_BUBBLE_RIGHT_WALL = /[|｜│┃<＜]/u;
 const INLINE_BUBBLE_PIPE = /[|｜│┃]/u;
 const LOCAL_BUBBLE_WALL_TOLERANCE = 18;
+
+const hasPotentialDottedDialogueBox = (lines: string[], lineIdx: number): boolean => {
+  const wallCount = lines[lineIdx]?.match(/[:：]/gu)?.length || 0;
+  if (wallCount < 4) return false;
+  const hasCap = (direction: -1 | 1) => {
+    for (let distance = 1; distance <= 8; distance += 1) {
+      const row = lines[lineIdx + (distance * direction)];
+      if (row === undefined) break;
+      const dottedCount = row.match(/[.:：．]/gu)?.length || 0;
+      if (dottedCount >= 8 && /(?:[.:：．]\s*){8,}/u.test(row)) return true;
+    }
+    return false;
+  };
+  return hasCap(-1) && hasCap(1);
+};
 
 /**
  * Detects a locally closed pipe or inward-arrow cell around a candidate
@@ -1148,6 +1286,7 @@ function segmentContent(
         )));
       const isShortCjkSmallKana = isShortCjkSmallKanaCandidate(part);
       const isShortCjkKanaShape = isShortCjkKanaShapeCandidate(part);
+      const isMixedScriptEyebrowTexture = isMixedScriptEyebrowTextureCandidate(part);
       const isLikelyFaceFragmentRaw = isLikelyAAFaceFragment(part);
       const isHorizontalStructure = isHorizontalAAStructureRun(part);
       const hasStructuralDominance = hasStructuralGlyphDominance(part);
@@ -1267,11 +1406,19 @@ function segmentContent(
         // A repeated address or correction can contain a deliberate single
         // full-width gap, e.g. "皇帝よ？　皇帝". At the verified far-right
         // detached slot this is sentence spacing, not evidence of AA texture.
-        && /^[ぁ-んァ-ヶ\uff66-\uff9f一-龯々〆ヵヶー!?！？。、…「」『』（）()\s\u3000]+$/u
+        // Hearts are ordinary terminal emotion marks in AA dialogue. Keep them
+        // inside this far-right, large-gap natural-language path instead of
+        // letting dense AA elsewhere on the same source row veto the slot.
+        && /^[ぁ-んァ-ヶ\uff66-\uff9f一-龯々〆ヵヶー!?！？。、…♥♡「」『』（）()\s\u3000]+$/u
           .test(trimmedPart);
+      const isRightDetachedAcronymCjkPhrase = !isThreadNameLine
+        && leadingWhitespaceWidth >= 8
+        && RE_STRICT_BLANK.test(contentAfterCandidate)
+        && isAcronymCjkPhrase(part);
       const isRightDetachedNaturalAnnotation = isRightDetachedParentheticalGloss
         || isRightDetachedKanaStutter
-        || isRightDetachedNaturalJapanesePhrase;
+        || isRightDetachedNaturalJapanesePhrase
+        || isRightDetachedAcronymCjkPhrase;
       const hasMixedKanjiHiragana = /[一-龯々〆ヵヶ]/u.test(trimmedPart)
         && /[ぁ-ん]/u.test(trimmedPart)
         && !isShortCjkSmallKana;
@@ -1292,9 +1439,12 @@ function segmentContent(
         && jpCharsMatch.length <= 8
         && !isClearlySeparatedShortUtterance
         && !isIsolatedKanaBlock;
+      const isPotentialDottedBox = isJp
+        && hasPotentialDottedDialogueBox(lines, lineIdx);
       const shouldAnalyzeSpatialContext = isJp
         && (
           isInsideBox
+          || isPotentialDottedBox
           || !hasStrongLanguage
           || hasStructuralDominance
           || textTexture.isCandidate
@@ -1303,29 +1453,57 @@ function segmentContent(
           || isShortContextSensitiveFragment
         )
         && !isLikelyFaceFragmentRaw
-        && !isHorizontalStructure
-        && !getIsDrawing();
+        && (!isHorizontalStructure || isPotentialDottedBox)
+        && (!getIsDrawing() || isPotentialDottedBox);
+      const firstJapaneseInPart = isPotentialDottedBox
+        ? part.search(RE_JAPANESE_CHAR)
+        : -1;
+      let lastJapaneseInPart = -1;
+      if (firstJapaneseInPart >= 0) {
+        for (let index = part.length - 1; index >= firstJapaneseInPart; index -= 1) {
+          if (RE_JAPANESE_CHAR.test(part[index])) {
+            lastJapaneseInPart = index;
+            break;
+          }
+        }
+      }
       const spatialContext = shouldAnalyzeSpatialContext
-        ? spatialAnalyzer.analyze(lineIdx, currentOffset, currentOffset + part.length)
+        ? spatialAnalyzer.analyze(
+          lineIdx,
+          firstJapaneseInPart >= 0 ? currentOffset + firstJapaneseInPart : currentOffset,
+          lastJapaneseInPart >= 0 ? currentOffset + lastJapaneseInPart + 1 : currentOffset + part.length,
+        )
         : undefined;
       const faceShapeSpatialContext = spatialContext || (
         isShortCjkKanaShape
           ? spatialAnalyzer.analyze(lineIdx, currentOffset, currentOffset + part.length)
           : undefined
       );
-      const isClosedBubbleVocalization = isStretchedHiraganaVocalization(part)
-        && hasLocalClosedDialogueCell(
+      const hasLocallyClosedDialogueCell = hasLocalClosedDialogueCell(
           lines,
           lineIdx,
           currentOffset,
           currentOffset + part.length,
         );
+      const isClosedBubbleVocalization = isStretchedHiraganaVocalization(part)
+        && hasLocallyClosedDialogueCell;
+      const isClosedBubblePatternPhrase = hasLocallyClosedDialogueCell
+        && isManualPatternJapaneseShape(part);
       const hasVerifiedDialogueBox = (
         Boolean(faceShapeSpatialContext?.isClosedDialogueContainer)
         || isClosedBubbleVocalization
+        || isClosedBubblePatternPhrase
       )
         && !textTexture.hasRepeatedCjkRun
         && !textTexture.hasMixedWidthScriptNoise;
+      const isEmbeddedMixedScriptEyebrowTexture = isMixedScriptEyebrowTexture
+        && !hasVerifiedDialogueBox
+        && hasBroadAADrawingNeighborhood(
+          lines,
+          lineIdx,
+          currentOffset,
+          currentOffset + part.length,
+        );
       const isLikelyFaceFragment = isLikelyFaceFragmentRaw
         && !isClearlySeparatedShortUtterance
         && !isIsolatedKanaBlock
@@ -1489,6 +1667,7 @@ function segmentContent(
         || !RE_MEANINGFUL_JP.test(part)
         || isLikelyFaceFragment
         || isContextualEmbeddedFaceFragment
+        || isEmbeddedMixedScriptEyebrowTexture
         || isHorizontalStructure
         || (isSpatialDrawing && !isClosedBubbleVocalization)
         || isShortBarAttachedFragment
@@ -1529,7 +1708,13 @@ function segmentContent(
       // Guard: segments composed entirely of fullwidth structural/border chars (＿ ＝) are never dialogue
       const isAllStructuralBorder = jpCharsMatch.length > 0 && jpCharsMatch.every(c => /[＿＝]/.test(c));
 
-      const isBoxedDialogue = !isThreadNameLine
+      const isVerifiedDottedBoxDialogue = isPotentialDottedBox
+        && hasVerifiedDialogueBox
+        && isJp
+        && !isNeverSelectable
+        && !hasExcessiveSymbols
+        && !isAllStructuralBorder;
+      const isBoxedDialogue = isVerifiedDottedBoxDialogue || (!isThreadNameLine
         && !isNeverSelectable
         && (isInsideBox || isClosedBubbleVocalization)
         && isJp
@@ -1547,7 +1732,7 @@ function segmentContent(
           (isEdgePositioned && (hasNoAAChars || uniqueJpChars.size >= 3)) ||
           (isTouchingBar && (uniqueJpChars.size >= 3 || hasNoAAChars))
         ))
-      );
+      ));
 
       const isSpatiallySeparatedHalfwidthDialogue = textTexture.hasDenseHalfwidthKana
         && RE_JAPANESE_PUNCTUATION.test(part)
@@ -1798,6 +1983,7 @@ function segmentContent(
       const isJapaneseCandidate = !RE_DISQUALIFIED.test(part)
         && !RE_STRICT_BLANK.test(part)
         && !RE_NOISE_ONLY.test(part)
+        && !isEmbeddedMixedScriptEyebrowTexture
         && !isSpatialDrawing
         && (
           isNaturalText
@@ -1863,9 +2049,51 @@ function segmentContent(
             && isShortBoxedCjkParticlePhrase(part)
           )
         );
+      const isSpatiallyQualifiedShortMixedPhrase = !isThreadNameLine
+        && isShortMixedJapanesePhrase(part)
+        && (
+          hasVerifiedDialogueBox
+          || isVerifiedPhysicalBoxPatternContext
+          || hasLocalFourSideWhitespace
+        );
+      // The general four-side detector deliberately examines a wide 12-column
+      // vertical window. That is useful for kana/kanji eyebrow fragments, but
+      // it was too conservative for unmistakable number+CJK exclamations: AA
+      // several cells away could veto an otherwise empty status/dialogue slot.
+      // Require four visible blank columns on both horizontal sides (or a real
+      // line edge) and a tighter four-column blank range immediately above and
+      // below. Attached number-shaped AA still fails these physical checks.
+      const hasIndependentPunctuatedNumericSlot = isPunctuatedNumericCjkPhrase(part)
+        && (
+          leadingWhitespaceWidth >= 4
+          || RE_STRICT_BLANK.test(contentBeforeCandidate)
+        )
+        // "Independent" also means that no later AA/text exists on this row;
+        // a four-cell gap followed by another token is merely an inline label.
+        && RE_STRICT_BLANK.test(contentAfterCandidate)
+        && isVerticallyIsolatedAt(
+          lines,
+          lineIdx,
+          currentOffset,
+          currentOffset + part.length,
+          4,
+        );
+      const isSpatiallyQualifiedShortNumericPhrase = !isThreadNameLine
+        && isShortNumericJapanesePhrase(part)
+        && (
+          hasVerifiedDialogueBox
+          || isVerifiedPhysicalBoxPatternContext
+          || hasIndependentPunctuatedNumericSlot
+          || (
+            hasLocalFourSideWhitespace
+            && RE_STRICT_BLANK.test(contentAfterCandidate)
+          )
+        );
       const isContextPatternApproved = isRightmostFullyIndependentJapaneseShape
         || isFourSideIndependentHesitationReaction
         || isBoxQualifiedJapaneseShape
+        || isSpatiallyQualifiedShortMixedPhrase
+        || isSpatiallyQualifiedShortNumericPhrase
         || isRightDetachedNaturalAnnotation
         || isStatusWindowTextSegment;
       const isJapanese = isJapaneseCandidate || (

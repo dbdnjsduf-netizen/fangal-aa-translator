@@ -1085,6 +1085,27 @@ test('실제 밀집 AA 내부의 혼합 가나·한자 조각은 박스로 오�
   assert.match(selectedText, /ｻﾗｻﾗｻﾗ/u);
 });
 
+test('눈썹 AA의 라틴·작은 가나·반복 한자 혼합 질감을 일본어로 선택하지 않는다', () => {
+  const sample = [
+    "　　　　　| :|. : .:|. : . :| : |ヽ . : . : . : .|. :.| :.:ヽ＞''|　| ::!　 !:::| 　 .|. :／| . : |",
+    '　　　　　ヽ|. : .:|. :＿|__.|　ヽ . : . : . |. :.| ／ ヽ__|　|__|　 |__| 　 .|:/ｱ..| . : |',
+    '.　 　 　 　 |. : .:|.: .:|　ヽ|￣`ヽ:. : . :.ﾄ.._| 　 　 ,ｘぅ竿竿刃ア　 .|　　 | . : |',
+    '.　　　　　八. : :|. :｜|ｘr芹ミく＼. : .| 　　　 イ　　代::ｿﾉノ 　　　　　| . : |',
+    '　　 　 　 　 ＼. : : N从　 {:::::心 ￣　　　　　｀ ー　 ""´　　　　　.ノ| . : |',
+  ].join('\n');
+  const segments = segment(sample);
+  const selectedText = selectAllTranslatableSegments(segments)
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text)
+    .join('');
+  const target = segments.find(({ text }) => text.includes('ｘぅ竿竿刃ア'));
+
+  assert.ok(target);
+  assert.equal(target.isJapanese, false);
+  assert.equal(target.isAutoSelectExcluded, true);
+  assert.doesNotMatch(selectedText, /ｘぅ竿竿刃ア|竿竿刃/u);
+});
+
 test('고립된 실제 반각 가타카나 문장은 문자 질감 후보여도 유지한다', () => {
   const sample = [
     '',
@@ -1112,6 +1133,223 @@ test('자연스러운 장문 대사는 위아래 줄에 연속되어 있어도 �
   assert.match(selectedText, /これは上の行/u);
   assert.match(selectedText, /上下に余白/u);
   assert.match(selectedText, /最後の行/u);
+});
+
+test('검증된 말풍선 안의 짧은 한자·가나 명령형 離せ를 전체선택한다', () => {
+  const sample = [
+    '　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　 　 　 　 　 　 　 　 f´￣￣￣￣￣￣￣｀ヽ',
+    '　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　 　 　 　 　 　 　 　 |　　　　　　　　　　 　 |',
+    '　　　　　　　　　　　　 　 　 /⌒ヽ　＿＿＿ 　　 /⌒ヽ　　　　　　　　　　　　　 |　　　　離せ　　　　　|',
+    '　　　　　　　 　 　 　 　 　 人　　\'´　　　　　￣｀`　　 ﾉ　　　　　　　　　　　　　 |　　　　　　　　　　 　 |',
+    '　　　　　　　 　 　 　 　 ／　　　　　　　　　　　 　 　 　 ＼　 　 　 　 　 　 　 　 乂＿＿＿＿＿＿＿ノ',
+  ].join('\n');
+  const selectedText = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text)
+    .join('');
+
+  assert.match(selectedText, /離せ/u);
+});
+
+test('사방 여백으로 독립된 짧은 한자·가나 구절 待て와 유사 명령형을 전체선택한다', () => {
+  const sample = [
+    '',
+    '',
+    '　　　　　　　　　　　　　　　　 　 r\'\'"　-=ニ二二二二ニ=-.＼　　　　　　　　　　　　　待て　　　　　 乂＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿＿ノ',
+    '　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　',
+    '　　　　　　　　　　　　　　　　　　　　　　止まれ　　　　　　　　　　　　　　　　',
+    '　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　',
+  ].join('\n');
+  const selectedText = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text)
+    .join('');
+
+  assert.match(selectedText, /待て/u);
+  assert.match(selectedText, /止まれ/u);
+});
+
+test('검증된 일반 말풍선 안의 가타카나 질문과 장음 가나 반응을 전체선택한다', () => {
+  const sample = [
+    '　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　 　 　 　 　 　 f´￣￣￣￣￣￣￣￣｀ヽ',
+    '　　　　　　　　　　　　　　 }: : : : : : : :／ : : : : : : : : : : : : : : : :乂 : : :｀\'´ : : / : : r ､__ノ　　　　　　　　　　　　　　　|　　　　　　　　　　 　 　 |',
+    '　　　　　　 　 　 　 　 r<ノ: : : : : :/／: : : : : : : :ハ : : : : : : : : : : : : : : : : :/ : : :弋＿_　r一\'\'ー ､＿ ノ}　　　 　 　 |　　　　アイス？　　　　 |',
+    '　　　　　　　　/　 ）､丿 : : : : : : 〃.: .: .: .: : _,.ィ┬ ､ : : : : : : : : : : : : .: .:/: : : : : : : : :乂 : : : : : : : : : /　　　　　　  |　　　　　　　　　　 　 　 |',
+    '.　　　　　 　 /ﾑ 〈 : :｀: : : : : : : :{{: : : : : :,イニニ|ニ＞ ､: : : : : : : : : : .:/: : : : : : : : : : : : :__ｨ´￣｀ｰ \' ,ﾊ　　　　　 乂＿＿＿＿＿＿＿＿ノ',
+    '',
+    '　　　　　　　　　　　　　　　　　　　　　　　　　　　 　 　 　 　 　 　 　 f´￣￣￣￣￣￣￣￣｀ヽ',
+    '　　　　　　　　　 　 　 　 [)￣ミﾒ､　　　　　　　 　 　 　 　 　 　 　 　 |　　　　　　　　　　 　 　 |',
+    '　　　　　　　　　　　 　 　 ￣￣| |　　　　　　　　　　 　 　 　 　 　 　 |　　　へーーーー　　　 |',
+    '　　　　　　　　　　　 　 　 　 　 | |　　 _,､、　　　　　　　　　　　 　 　 |　　　　　　　　　　 　 　 |',
+    '　　　　　　　　　　　 ⌒＼　 　 | |,．\'´　　｀ヽ、　　　　　　　　　　　　 乂＿＿＿＿＿＿＿＿ノ',
+  ].join('\n');
+  const selectedText = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text)
+    .join('');
+
+  assert.match(selectedText, /アイス？/u);
+  assert.match(selectedText, /へーーーー/u);
+});
+
+test('AA에서 크게 떨어진 영문 약어+한자 상태 문구를 말줄임표까지 전체선택한다', () => {
+  const sample = [
+    '',
+    '＼ l:::::::::::::::..　　　　　　　　　　　　　　　　　　　　　　　　　　　-=ﾆﾆs｡, 　　　＞ uLノ／　　　　　　　 MS撃破…　',
+    '',
+    '　　　　　　　　　　　　　　　　　　　　　　　　　　　　　　HP回復！　　　　　　',
+    '',
+  ].join('\n');
+  const selectedText = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text)
+    .join('');
+
+  assert.match(selectedText, /MS撃破…/u);
+  assert.match(selectedText, /HP回復！/u);
+});
+
+test('검증된 말풍선과 사방 여백 속 숫자+짧은 일본어 대사를 전체선택한다', () => {
+  const sample = [
+    '　　　　　　　　　　　　　　　　　　　　　　　　　 f´￣￣￣￣￣｀ヽ',
+    '　　　　　　　　　　　　　　　　　　　　　　　　　 |　　　　　　　　|',
+    '　　　　　　　　　　　　　　　　　　　　　　　　　 |　　あと3分　　 |',
+    '　　　　　　　　　　　　　　　　　　　　　　　　　 |　　　　　　　　|',
+    '　　　　　　　　　　　　　　　　　　　　　　　　　 乂＿＿＿＿＿ノ',
+    '',
+    '　　　　　　　　　　　　　　第2波！　　　　　　　　　　　　　　',
+    '',
+    '　　　　　　　　　　　　　　3人？　　　　　　　　　　　　　　　',
+    '',
+  ].join('\n');
+  const selectedText = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text)
+    .join('');
+
+  assert.match(selectedText, /あと3分/u);
+  assert.match(selectedText, /第2波！/u);
+  assert.match(selectedText, /3人？/u);
+});
+
+test('가까운 AA가 넓은 검사를 가로막아도 4칸 독립 숫자+한자 감탄문을 전체선택한다', () => {
+  const sample = [
+    '　　　　　／￣￣￣＼',
+    '　　　　　　　　　　　　　12人！？',
+    '　　　　　＼＿＿＿／',
+    '',
+    '　　　　　|:::::::|',
+    '　　　　　　　　　　　　　第100話？',
+    '　　　　　|:::::::|',
+    '',
+    '　　　　　　　　　　　　　３機撃破！　　　　　　　　　',
+    '',
+    '　　　　　　　　　　　　　10回くらい！　　　　　　　　　',
+    '',
+    '　　　　　　　　　　　　　第2波なの？　　　　　　　　　',
+  ].join('\n');
+  const selectedText = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text)
+    .join('');
+
+  assert.match(selectedText, /12人！？/u);
+  assert.match(selectedText, /第100話？/u);
+  assert.match(selectedText, /３機撃破！/u);
+  assert.match(selectedText, /10回くらい！/u);
+  assert.match(selectedText, /第2波なの？/u);
+});
+
+test('숫자가 섞여도 밀집 AA에 붙어 있는 짧은 모양 조각은 자동선택하지 않는다', () => {
+  const sample = [
+    '　　　　／二二2人二二＼',
+    '　　　＜三三3人三三三＞',
+    '　　　　＼二二2人二二／',
+  ].join('\n');
+  const selectedText = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text)
+    .join('');
+
+  assert.doesNotMatch(selectedText, /[23]人/u);
+});
+
+test('사방이 비어 있는 하트 종결 호칭 대사를 하트까지 한 덩어리로 전체선택한다', () => {
+  const sample = [
+    '',
+    '　　　　　　旦那様♥　私の旦那様♥　　　　　　',
+    '',
+  ].join('\n');
+  const selected = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text);
+
+  assert.deepEqual(selected, ['旦那様♥　私の旦那様♥']);
+});
+
+test('밀집 AA와 같은 줄의 맨 오른쪽에 떨어진 하트 종결 대사를 전체선택한다', () => {
+  const sample = [
+    '　／-=ﾆ.V::::::::::ヽ:::}u∥u|:::::ｬ\'´　　　　ヽ::::从　　　　　　　　　　　　　　　旦那様♥　私の旦那様♥',
+    ',ｲ-=ニニ ＼\{｀\'\'＜:::ﾒi/ｉ/|::/　　　　　　　Ⅳ',
+    '',
+    '　　　）　　　/ィ.:.:.:/__ ∨.:.:}:. : :}:.:.:.／＼-=ﾆニニニニﾆ=-乂二二二二二二二＼二 八 二二二二二二二 し 二　　　　　　　  私の旦那様♥',
+  ].join('\n');
+  const selected = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text);
+
+  assert.ok(selected.includes('旦那様♥　私の旦那様♥'));
+  assert.ok(selected.includes('私の旦那様♥'));
+});
+
+test('단독 하트와 한 글자 AA 모양 뒤의 하트는 대사로 자동선택하지 않는다', () => {
+  const sample = [
+    '',
+    '　　　　　　♥　　　　　　',
+    '',
+    '　　　　　　人♥　　　　　　',
+    '',
+  ].join('\n');
+  const selectedText = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text)
+    .join('');
+
+  assert.doesNotMatch(selectedText, /♥/u);
+});
+
+test('이중 점 벽과 상하 점선 덮개로 닫힌 AA 상자 안의 대사를 전체선택한다', () => {
+  const sample = [
+    '　　　　　　　　　　　　　　　　　　　　　　　　　　　　 　 　 　 　 　 　 　 　 　 ::.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.\u200A: .',
+    '　　　　　　　　　　　　　　　　　　　　　　　　　　　 　 　 　 　 　 　 　 　 　 : :　　　　　　　 　 　 　 　 　 　 : : .',
+    '　　　　　　　　　　　　　 　 , . - ── .- .｡ .　　　 ＿_　　 　 　 　 　 　 　 : :　　　　　　　 　 　 　 　 　 　 : : .',
+    '　　　　　　　　　　　　, : ´ : : : : : : : : : : : : : :.｀ ＜: :∠　　　　　　 　 　 　 : :　　臣民の諸君　私は　　　: : .',
+    '　　　　　　　　　　 ／: : : : :/: : : : : : : : :＼: : :ヽ: :＼ : ＼　　　 　 　 　 　 : :　　　　　　　 　 　 　 　 　 　 : : .',
+    '　　　　　　　.　　 r ､: : : : z!: : : : :ヽ ､::::: : ‘, : : \' : : ‘, : : ヽ　　 　 　 　 　 : :　　　　　　　 　 　 　 　 　 　 : : .',
+    '　　　　　　　　r‐┘ ヽ l: / l: : : : : :|ヽヽ:.::::.:| : : |:､__:.‘,`t､j　　　　 　 　 　 : ::.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.\u200A: :',
+  ].join('\n');
+  const segments = segment(sample);
+  const selected = selectAllTranslatableSegments(segments)
+    .filter(({ isSelected }) => isSelected);
+
+  assert.equal(segments.map(({ text }) => text).join(''), sample);
+  assert.deepEqual(selected.map(({ text }) => text), ['臣民の諸君　私は']);
+  assert.equal(selected[0].isBoxedDialogue, true);
+  assert.equal(selected[0].isAutoSelectExcluded, false);
+});
+
+test('상하 점선 덮개가 없는 콜론 AA는 닫힌 대사 상자로 오인하지 않는다', () => {
+  const sample = [
+    '　　　　　　　 : :　　　　　　　　　　　　　　　 : : .',
+    '　　　　　　　 : :　　　　　　　　　　　　　　　 : : .',
+    '　　　　　　　 : :　　　　 臣民　　　　　　　　 : : .',
+    '　　　　　　　 : :　　　　　　　　　　　　　　　 : : .',
+    '　　　　　　　 : :　　　　　　　　　　　　　　　 : : .',
+  ].join('\n');
+  const dialogue = segment(sample).find(({ text }) => text.includes('臣民'));
+
+  assert.ok(dialogue);
+  assert.equal(dialogue.isBoxedDialogue, false);
 });
 
 test('가로 두 줄 대사를 세로쓰기로 뒤집어 읽지 않는다', () => {

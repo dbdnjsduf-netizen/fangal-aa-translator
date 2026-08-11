@@ -11,6 +11,7 @@ import {
   parseIndexedTranslations,
   TranslationProgress,
   TranslationResponseData,
+  TranslationBatchInput,
   validateTranslatedItems,
 } from './ollamaService';
 
@@ -93,7 +94,7 @@ export async function translateSelection(
 }
 
 export async function translateBatch(
-  texts: (string | null)[],
+  texts: TranslationBatchInput[],
   apiKey: string,
   customDict: DictionaryEntry[] = [],
   useDefaultDict = true,

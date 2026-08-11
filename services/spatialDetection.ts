@@ -35,6 +35,8 @@ const HORIZONTAL_CAP = /[─━┄┅┈┉―‐ー＿￣_=＝⌒^＾´｀\/／
 const LEFT_CAP_END = /[|│┃｜>＞┌└├┏┗┣╔╚╠╭╰乂（(fF]/u;
 const RIGHT_CAP_END = /[|│┃｜<＜┐┘┤┓┛┫╗╝╣╮╯ノヽ、）)]/u;
 const SPIKED_CAP_FILL = /[人从_＿YyWw⌒]/u;
+const DOTTED_CONTAINER_WALL = /[:：]/u;
+const DOTTED_CONTAINER_CAP = /[.:：．]/u;
 
 export class SpatialContextAnalyzer {
   private readonly glyphCache = new Map<number, SpatialGlyph[]>();
@@ -248,6 +250,9 @@ export class SpatialContextAnalyzer {
   }
 
   private hasClosedDialogueContainer(lineIndex: number, displayStart: number, displayEnd: number) {
+    if (this.hasDottedDialogueContainer(lineIndex, displayStart, displayEnd)) {
+      return true;
+    }
     const glyphs = this.getGlyphs(lineIndex);
     const left = [...glyphs]
       .reverse()
@@ -438,6 +443,99 @@ export class SpatialContextAnalyzer {
       && hasSpikedCap(-1, /^＼$/u, /^／$/u)
       && hasSpikedCap(1, /^／$/u, /^＼$/u);
     return hasStrictClosedBox || hasProportionalRoundedBox || hasSpikedShoutBox;
+  }
+
+  private hasDottedDialogueContainer(
+    lineIndex: number,
+    displayStart: number,
+    displayEnd: number,
+  ) {
+    const glyphs = this.getGlyphs(lineIndex);
+    const left = [...glyphs].reverse().find((glyph) => (
+      glyph.displayEnd <= displayStart
+      && displayStart - glyph.displayEnd <= 40
+      && DOTTED_CONTAINER_WALL.test(glyph.normalized)
+    ));
+    const right = glyphs.find((glyph) => (
+      glyph.displayStart >= displayEnd
+      && glyph.displayStart - displayEnd <= 40
+      && DOTTED_CONTAINER_WALL.test(glyph.normalized)
+    ));
+    if (!left || !right) return false;
+
+    const innerWidth = right.displayStart - left.displayEnd;
+    if (innerWidth < 6 || innerWidth > 120) return false;
+
+    // This AA box uses an unmistakable double wall on both sides:
+    // ": :    dialogue    : : .". Requiring the paired colons prevents an
+    // ordinary prose colon or dotted face shading from becoming a boundary.
+    const hasLeftPartner = glyphs.some((glyph) => (
+      glyph.displayEnd <= left.displayStart
+      && left.displayStart - glyph.displayEnd <= 6
+      && DOTTED_CONTAINER_WALL.test(glyph.normalized)
+    ));
+    const hasRightPartner = glyphs.some((glyph) => (
+      glyph.displayStart >= right.displayEnd
+      && glyph.displayStart - right.displayEnd <= 6
+      && DOTTED_CONTAINER_WALL.test(glyph.normalized)
+    ));
+    if (!hasLeftPartner || !hasRightPartner) return false;
+
+    const gapContainsGlyph = glyphs.some((glyph) => (
+      !isBlank(glyph.char)
+      && (
+        (
+          glyph.displayStart >= left.displayEnd
+          && glyph.displayEnd <= displayStart
+        )
+        || (
+          glyph.displayStart >= displayEnd
+          && glyph.displayEnd <= right.displayStart
+        )
+      )
+    ));
+    if (gapContainsGlyph) return false;
+
+    const hasWallPair = (rowIndex: number) => {
+      const row = this.getGlyphs(rowIndex);
+      // Proportional full-width and thin spaces make these decorative walls
+      // wander more than pipe boxes even though they render as one frame.
+      return hasBoundaryNear(row, left.displayStart, DOTTED_CONTAINER_WALL, 14)
+        && hasBoundaryNear(row, right.displayStart, DOTTED_CONTAINER_WALL, 14);
+    };
+    const upperWallRows = [1, 2, 3]
+      .filter((distance) => hasWallPair(lineIndex - distance)).length;
+    const lowerWallRows = [1, 2, 3]
+      .filter((distance) => hasWallPair(lineIndex + distance)).length;
+    if (upperWallRows < 2 || lowerWallRows < 2) return false;
+
+    const hasDottedCap = (direction: -1 | 1) => {
+      for (let distance = 1; distance <= 8; distance += 1) {
+        const rowIndex = lineIndex + (distance * direction);
+        if (rowIndex < 0 || rowIndex >= this.lines.length) break;
+        const capGlyphs = this.getGlyphs(rowIndex).filter((glyph) => (
+          !isBlank(glyph.char)
+          && glyph.displayEnd >= left.displayStart - 8
+          && glyph.displayStart <= right.displayStart + 12
+        ));
+        const dottedGlyphs = capGlyphs.filter(({ normalized }) => (
+          DOTTED_CONTAINER_CAP.test(normalized)
+        ));
+        if (dottedGlyphs.length < 8) continue;
+        if (dottedGlyphs.length < Math.ceil(capGlyphs.length * 0.8)) continue;
+        const capStart = Math.min(...dottedGlyphs.map(({ displayStart: start }) => start));
+        const capEnd = Math.max(...dottedGlyphs.map(({ displayEnd: end }) => end));
+        if (Math.abs(capStart - left.displayStart) > 16) continue;
+        // A decorative dotted cap may intentionally overhang the side wall.
+        // It must cover the right wall, but does not need to end on it.
+        if (capEnd < right.displayEnd - 12) continue;
+        if (capEnd - capStart < innerWidth * 0.75) continue;
+        return true;
+      }
+      return false;
+    };
+
+    return hasDottedCap(-1) && hasDottedCap(1);
   }
 
   private buildContextSignature(

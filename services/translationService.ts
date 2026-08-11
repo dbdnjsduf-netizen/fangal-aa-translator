@@ -8,6 +8,9 @@ import {
   translateSelection as translateSelectionWithOllama,
   TranslationProgress,
   TranslationResponseData,
+  TranslationBatchInput,
+  TRANSLATION_POST_BOUNDARY,
+  isTranslationPostHeader,
 } from './ollamaService';
 import {
   GEMINI_MODEL,
@@ -41,7 +44,10 @@ export {
   normalizeGeminiModel,
   OPENROUTER_MODEL,
   resolveStoredSystemPrompt,
+  TRANSLATION_POST_BOUNDARY,
+  isTranslationPostHeader,
 };
+export type { TranslationBatchInput } from './ollamaService';
 export type { GeminiModel } from './geminiService';
 
 export const DEFAULT_TRANSLATION_PROVIDER: TranslationProvider = 'ollama';
@@ -135,7 +141,7 @@ export async function translateSelection(
 export async function translateBatch(
   provider: TranslationProvider,
   apiKey: string,
-  texts: (string | null)[],
+  texts: TranslationBatchInput[],
   customDict: DictionaryEntry[] = [],
   useDefaultDict = true,
   systemInstruction = DEFAULT_SYSTEM_PROMPT,

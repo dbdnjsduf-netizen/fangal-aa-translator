@@ -138,7 +138,6 @@ export function applyManualRegexRules(
   rules: ManualRegexRules,
 ): TextSegment[] {
   if (rules.entries.length === 0) return segments;
-  const documentLayout = createDocumentLayout(segments);
   const normalTexts = [...new Set(
     rules.entries
       .filter(({ kind }) => kind === 'normal')
@@ -150,9 +149,19 @@ export function applyManualRegexRules(
       .filter(({ kind }) => kind === 'vertical')
       .map(({ sourceText }) => sourceText),
   );
+  // Automatic detection and older one-character rules can split a later,
+  // longer exact rule into several segments. Rebuild those cross-segment
+  // matches first so longest-rule precedence is structural, not merely visual.
+  // Exact exclusion rules run afterwards and therefore only ban this rebuilt
+  // unit when the exclusion itself equals the complete long source text.
+  const withCrossSegmentSelections = applyCrossSegmentNormalMatches(
+    segments,
+    normalTexts,
+  );
+  const documentLayout = createDocumentLayout(withCrossSegmentSelections);
 
   const verticalGroups = new Map<string, TextSegment[]>();
-  for (const segment of segments) {
+  for (const segment of withCrossSegmentSelections) {
     if (!segment.verticalGroupId) continue;
     const current = verticalGroups.get(segment.verticalGroupId) || [];
     current.push(segment);
@@ -169,7 +178,7 @@ export function applyManualRegexRules(
       .join('');
     verticalGroupTexts.set(groupId, sourceText);
   }
-  let withVerticalSelections = segments.map((segment) => {
+  let withVerticalSelections = withCrossSegmentSelections.map((segment) => {
     if (
       !segment.verticalGroupId
       || !verticalTexts.has(verticalGroupTexts.get(segment.verticalGroupId) || '')
@@ -222,6 +231,175 @@ export function applyManualRegexRules(
     'regex',
   );
   return withVerticalSelections;
+}
+
+interface CrossSegmentMatch {
+  start: number;
+  end: number;
+  firstSegmentIndex: number;
+  lastSegmentIndex: number;
+}
+
+function applyCrossSegmentNormalMatches(
+  segments: TextSegment[],
+  sourceTexts: string[],
+): TextSegment[] {
+  if (sourceTexts.length === 0 || segments.length < 2) return segments;
+  const starts: number[] = [];
+  let content = '';
+  for (const segment of segments) {
+    starts.push(content.length);
+    content += sourceOf(segment);
+  }
+  const ends = starts.map((start, index) => start + sourceOf(segments[index]).length);
+  const candidates: CrossSegmentMatch[] = [];
+
+  for (const sourceText of sourceTexts) {
+    if (!sourceText || sourceText.includes('\n')) continue;
+    let searchStart = 0;
+    while (searchStart <= content.length - sourceText.length) {
+      const matchStart = content.indexOf(sourceText, searchStart);
+      if (matchStart === -1) break;
+      const matchEnd = matchStart + sourceText.length;
+      const left = matchStart > 0 ? content.slice(matchStart - 1, matchStart) : undefined;
+      const right = matchEnd < content.length ? content.slice(matchEnd, matchEnd + 1) : undefined;
+      if (isWhitespaceOrDocumentEdge(left) && isWhitespaceOrDocumentEdge(right)) {
+        const firstSegmentIndex = findSegmentAtOffset(starts, ends, matchStart);
+        const lastSegmentIndex = findSegmentAtOffset(starts, ends, matchEnd - 1);
+        if (
+          firstSegmentIndex >= 0
+          && lastSegmentIndex > firstSegmentIndex
+          && canRebuildCrossSegmentMatch(
+            segments,
+            firstSegmentIndex,
+            lastSegmentIndex,
+          )
+        ) {
+          candidates.push({
+            start: matchStart,
+            end: matchEnd,
+            firstSegmentIndex,
+            lastSegmentIndex,
+          });
+        }
+      }
+      searchStart = matchStart + Math.max(1, sourceText.length);
+    }
+  }
+
+  candidates.sort((left, right) => (
+    left.start - right.start
+    || (right.end - right.start) - (left.end - left.start)
+  ));
+  const accepted: CrossSegmentMatch[] = [];
+  let occupiedUntil = -1;
+  for (const candidate of candidates) {
+    if (candidate.start < occupiedUntil) continue;
+    accepted.push(candidate);
+    occupiedUntil = candidate.end;
+  }
+  if (accepted.length === 0) return segments;
+
+  const rebuilt: TextSegment[] = [];
+  let segmentIndex = 0;
+  for (const match of accepted) {
+    while (segmentIndex < match.firstSegmentIndex) {
+      rebuilt.push(segments[segmentIndex]);
+      segmentIndex += 1;
+    }
+    const first = segments[match.firstSegmentIndex];
+    const firstLocalStart = match.start - starts[match.firstSegmentIndex];
+    if (firstLocalStart > 0) {
+      rebuilt.push(sliceSourceSegment(first, 0, firstLocalStart, 'regex-span-before'));
+    }
+    const sourceText = content.slice(match.start, match.end);
+    rebuilt.push(makeCrossSegmentManualRegexSegment(first, sourceText, match));
+
+    const last = segments[match.lastSegmentIndex];
+    const lastLocalEnd = match.end - starts[match.lastSegmentIndex];
+    if (lastLocalEnd < last.text.length) {
+      rebuilt.push(sliceSourceSegment(last, lastLocalEnd, last.text.length, 'regex-span-after'));
+    }
+    segmentIndex = match.lastSegmentIndex + 1;
+  }
+  rebuilt.push(...segments.slice(segmentIndex));
+  return rebuilt;
+}
+
+function findSegmentAtOffset(starts: number[], ends: number[], offset: number) {
+  for (let index = 0; index < starts.length; index += 1) {
+    if (offset >= starts[index] && offset < ends[index]) return index;
+  }
+  return -1;
+}
+
+function canRebuildCrossSegmentMatch(
+  segments: TextSegment[],
+  firstIndex: number,
+  lastIndex: number,
+) {
+  for (let index = firstIndex; index <= lastIndex; index += 1) {
+    const segment = segments[index];
+    if (
+      segment.isTranslated
+      || segment.verticalGroupId
+      || segment.text !== sourceOf(segment)
+      || segment.text.includes('\n')
+    ) return false;
+  }
+  return true;
+}
+
+function sliceSourceSegment(
+  segment: TextSegment,
+  start: number,
+  end: number,
+  label: string,
+): TextSegment {
+  const text = segment.text.slice(start, end);
+  return {
+    ...segment,
+    id: `${segment.id}-${label}-${start}-${end}`,
+    text,
+    original: text,
+    isSelected: false,
+  };
+}
+
+function makeCrossSegmentManualRegexSegment(
+  base: TextSegment,
+  sourceText: string,
+  match: CrossSegmentMatch,
+): TextSegment {
+  return {
+    ...base,
+    id: `${base.id}-regex-span-${match.start}-${match.end}`,
+    text: sourceText,
+    original: sourceText,
+    isJapanese: true,
+    isStrictJapanese: false,
+    isAutoSelected: false,
+    isBoxedDialogue: false,
+    isContextDialogue: false,
+    isArrowBox: false,
+    isVerticalBox: false,
+    isIndentedDialogue: false,
+    isIsolatedDialogue: false,
+    isManualSelection: false,
+    isManualRegexSelection: true,
+    isManualVerticalSelection: false,
+    isAutoSelectExcluded: false,
+    isUserExcluded: undefined,
+    isSelected: true,
+    isTranslated: false,
+    isVerticalText: false,
+    verticalGroupId: undefined,
+    verticalOrder: undefined,
+    verticalSourceLine: undefined,
+    verticalSourceIndex: undefined,
+    verticalDisplayX: undefined,
+    verticalDisplayWidth: undefined,
+  };
 }
 
 function isAutomaticTranslationUnit(segment: TextSegment) {

@@ -151,6 +151,55 @@ test('같은 원문이 자동 선택과 금지 목록에 모두 있으면 금지
   assert.equal(excluded.isUserExcluded, true);
 });
 
+test('여러 조각에 걸친 긴 수동정규식은 내부의 짧은 금지항목보다 한 덩어리로 우선한다', () => {
+  const sourceText = 'ナ　　ザ　　リ　　ッ　　ク';
+  const split = [
+    segment('left', 'ナ', { isJapanese: true, isManualRegexSelection: true, isSelected: true }),
+    segment('gap-left', '　　'),
+    segment('middle', 'ザ　　リ　　ッ', { isJapanese: true, isSelected: true }),
+    segment('gap-right', '　　'),
+    segment('right', 'ク', { isJapanese: true, isManualRegexSelection: true, isSelected: true }),
+  ];
+  const withLongRule = applyManualRegexRules(
+    split,
+    rulesFor('ナ', 'ク', sourceText),
+  );
+  assert.deepEqual(withLongRule.map(({ text }) => text), [sourceText]);
+  assert.equal(withLongRule[0].isManualRegexSelection, true);
+
+  const afterShortBan = applySelectionExclusions(withLongRule, {
+    exact: [{
+      id: 'short-ban',
+      kind: 'normal',
+      sourceText: 'ザ　　リ　　ッ',
+      createdAt: 1,
+    }],
+  });
+  assert.equal(afterShortBan[0].isSelected, true);
+  assert.equal(afterShortBan[0].isUserExcluded, undefined);
+});
+
+test('긴 수동정규식과 완전히 같은 금지항목이면 금지가 계속 우선한다', () => {
+  const sourceText = 'ナ　　ザ　　リ　　ッ　　ク';
+  const withLongRule = applyManualRegexRules([
+    segment('left', 'ナ'),
+    segment('middle', '　　ザ　　リ　　ッ　　'),
+    segment('right', 'ク'),
+  ], rulesFor(sourceText));
+  const [excluded] = applySelectionExclusions(withLongRule, {
+    exact: [{
+      id: 'same-ban',
+      kind: 'normal',
+      sourceText,
+      createdAt: 1,
+    }],
+  });
+
+  assert.equal(excluded.text, sourceText);
+  assert.equal(excluded.isSelected, false);
+  assert.equal(excluded.isUserExcluded, true);
+});
+
 test('이미 선택된 큰 세그먼트에 규칙을 추가해도 분할하거나 선택을 해제하지 않는다', () => {
   const source = segment('selected', '앞 勇者 뒤', {
     isJapanese: true,

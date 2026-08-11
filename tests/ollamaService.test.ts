@@ -6,8 +6,11 @@ import {
   chooseRecoverySplitIndex,
   createChunks,
   DEFAULT_SYSTEM_PROMPT,
+  isTranslationPostHeader,
   parseIndexedTranslations,
   resolveStoredSystemPrompt,
+  TRANSLATION_POST_BOUNDARY,
+  TranslationBatchInput,
   translateBatch,
 } from '../services/ollamaService';
 
@@ -83,9 +86,28 @@ test('커스텀 프롬프트를 사용해도 화자 추측 없이 원문 어미 
   assert.doesNotMatch(instruction, /when (?:he|she) is the identified speaker/iu);
   assert.match(instruction, /Do not spread it to adjacent lines/u);
   assert.match(instruction, /Never convert neutral だ, です, or ます into ~다오/u);
+  assert.match(instruction, /Japanese 2channel\/VIP AA register/u);
+  assert.match(instruction, /prefer ~겠지 \/ ~겠지\?/u);
+  assert.match(instruction, /Other natural Korean forms such as ~잖아 are allowed/u);
+  assert.match(instruction, /never reject an otherwise valid translation solely for choosing a different ending/u);
+  assert.match(instruction, /natural fluency never licenses euphemizing/u);
+  assert.match(instruction, /rough ムカツク may call for 빡치다/u);
+  assert.match(instruction, /insulting キモイ may call for 역겹다 or 징그럽다/u);
+  assert.match(instruction, /These are intensity guides, not fixed glossary substitutions/u);
   assert.doesNotMatch(instruction, /VERTICAL_MAX|vertical column|Prefer at most N non-space/u);
+  assert.match(instruction, /established official Korean localization first/u);
+  assert.match(instruction, /established in Korean fandom or community usage/u);
+  assert.match(instruction, /Directly transliterate the Japanese only when no established Korean form is known/u);
+  assert.match(instruction, /Supplied terminology always overrides/u);
   assert.match(instruction, /USER-EDITABLE LOCALIZATION STYLE:/u);
   assert.match(instruction, /문맥에 맞는 자연스러운 반말/u);
+});
+
+test('새 기본 스타일은 자연스러움을 이유로 VIP 말투와 모욕 수위를 낮추지 않는다', () => {
+  assert.match(DEFAULT_SYSTEM_PROMPT, /Japanese 2channel\/VIP language/u);
+  assert.match(DEFAULT_SYSTEM_PROMPT, /Naturalize syntax, not personality or force/u);
+  assert.match(DEFAULT_SYSTEM_PROMPT, /same level of roughness/u);
+  assert.match(DEFAULT_SYSTEM_PROMPT, /safe or neutral description/u);
 });
 
 test('세로쓰기 배치 메타데이터는 모델에 보내지 않고 복원된 문장만 전달한다', () => {
@@ -103,6 +125,57 @@ test('큰 물리적 공백의 위치를 청크 문맥 힌트로 보존한다', (
   const result = createChunks(['앞 대사', null, '뒤 대사']);
   assert.deepEqual(result.chunks, [['앞 대사', '뒤 대사']]);
   assert.deepEqual(result.chunkGaps, [[1]]);
+});
+
+test('약 50개 전후의 게시물 헤더를 일반 공백보다 우선해 청크 경계로 사용한다', () => {
+  const inputs: TranslationBatchInput[] = [];
+  for (let index = 0; index < 120; index += 1) {
+    if (index === 46 || index === 103) inputs.push(TRANSLATION_POST_BOUNDARY);
+    // A closer ordinary layout gap must not outrank a nearby post header.
+    if (index === 49) inputs.push(null);
+    inputs.push(`대사${index}`);
+  }
+  const result = createChunks(inputs);
+
+  assert.deepEqual(result.chunks.map(({ length }) => length), [46, 57, 17]);
+  assert.equal(result.chunks.flat().length, 120);
+  assert.deepEqual(result.chunks.flat(), Array.from({ length: 120 }, (_, index) => `대사${index}`));
+});
+
+test('2ch 게시물 헤더 형식을 문맥 경계로 식별한다', () => {
+  assert.equal(
+    isTranslationPostHeader('183 ： ◆EYA4Qm3Rn. ： 2025/07/06(日) 20:09:15 ID:O19DRZoR'),
+    true,
+  );
+  assert.equal(
+    isTranslationPostHeader('183 ： **◆EYA4Qm3Rn.** ： 2025/07/06(日) 20:09:15 ID:O19DRZoR'),
+    true,
+  );
+  assert.equal(isTranslationPostHeader('ここは普通の台詞です'), false);
+});
+
+test('청크 프롬프트는 같은 경계 구간의 앞뒤 항목을 순차 문맥으로 읽게 한다', () => {
+  const prompt = buildTranslationPrompt(
+    ['ここ、海には見た事ない', 'キモイのがうじゃうじゃ居るからな', 'そいつらを一掃したいんだろうさ'],
+    [],
+    [],
+    false,
+  );
+
+  assert.match(prompt, /Read the complete ordered chunk/u);
+  assert.match(prompt, /preceding and following items/u);
+  assert.match(prompt, /omitted subjects, pronouns, references/u);
+  assert.match(prompt, /Separate array slots may form one Korean sentence/u);
+  assert.match(prompt, /relative clauses, modifiers, connectives/u);
+});
+
+test('배열 줄바꿈으로 이어진 관형절을 문장 종결형으로 닫지 않게 지시한다', () => {
+  const instruction = buildTranslationSystemInstruction(DEFAULT_SYSTEM_PROMPT);
+
+  assert.match(instruction, /layout boundaries, not guaranteed sentence boundaries/u);
+  assert.match(instruction, /attributive, connective, quotation-leading/u);
+  assert.match(instruction, /plain negative such as \.\.\.ない/u);
+  assert.match(instruction, /\.\.\.없는 rather than closing it as \.\.\.없어/u);
 });
 
 test('하드 문자 제한을 넘는 항목은 다음 청크로 이동한다', () => {
