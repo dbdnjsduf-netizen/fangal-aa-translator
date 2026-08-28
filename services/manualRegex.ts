@@ -144,11 +144,13 @@ export function applyManualRegexRules(
       .map(({ sourceText }) => sourceText)
       .filter(Boolean),
   )].sort((left, right) => right.length - left.length);
+  const normalTextSet = new Set(normalTexts);
   const verticalTexts = new Set(
     rules.entries
       .filter(({ kind }) => kind === 'vertical')
       .map(({ sourceText }) => sourceText),
   );
+  const literalMatcher = buildLiteralMatcher(normalTexts);
   // Automatic detection and older one-character rules can split a later,
   // longer exact rule into several segments. Rebuild those cross-segment
   // matches first so longest-rule precedence is structural, not merely visual.
@@ -157,8 +159,8 @@ export function applyManualRegexRules(
   const withCrossSegmentSelections = applyCrossSegmentNormalMatches(
     segments,
     normalTexts,
+    literalMatcher,
   );
-  const documentLayout = createDocumentLayout(withCrossSegmentSelections);
 
   const verticalGroups = new Map<string, TextSegment[]>();
   for (const segment of withCrossSegmentSelections) {
@@ -188,11 +190,12 @@ export function applyManualRegexRules(
   });
 
   if (normalTexts.length === 0) return withVerticalSelections;
+  const documentLayout = createDocumentLayout(withCrossSegmentSelections);
   const ranges: ManualSelectionRange[] = [];
   for (const [segmentIndex, segment] of withVerticalSelections.entries()) {
     if (segment.isTranslated || segment.verticalGroupId) continue;
     const exactSourceText = sourceOf(segment);
-    const exactWholeMatch = normalTexts.includes(exactSourceText)
+    const exactWholeMatch = normalTextSet.has(exactSourceText)
       && hasRuleBoundaries(
         withVerticalSelections,
         documentLayout,
@@ -221,7 +224,7 @@ export function applyManualRegexRules(
       withVerticalSelections,
       documentLayout,
       segmentIndex,
-      normalTexts,
+      literalMatcher,
     ));
   }
   if (ranges.length === 0) return withVerticalSelections;
@@ -240,9 +243,81 @@ interface CrossSegmentMatch {
   lastSegmentIndex: number;
 }
 
+interface LiteralMatch {
+  start: number;
+  end: number;
+  sourceText: string;
+}
+
+interface LiteralMatcherNode {
+  next: Map<string, number>;
+  failure: number;
+  outputs: string[];
+}
+
+interface LiteralMatcher {
+  nodes: LiteralMatcherNode[];
+}
+
+function buildLiteralMatcher(sourceTexts: string[]): LiteralMatcher {
+  const nodes: LiteralMatcherNode[] = [{ next: new Map(), failure: 0, outputs: [] }];
+  for (const sourceText of sourceTexts) {
+    if (!sourceText) continue;
+    let nodeIndex = 0;
+    for (let index = 0; index < sourceText.length; index += 1) {
+      const character = sourceText[index];
+      let nextIndex = nodes[nodeIndex].next.get(character);
+      if (nextIndex === undefined) {
+        nextIndex = nodes.length;
+        nodes[nodeIndex].next.set(character, nextIndex);
+        nodes.push({ next: new Map(), failure: 0, outputs: [] });
+      }
+      nodeIndex = nextIndex;
+    }
+    nodes[nodeIndex].outputs.push(sourceText);
+  }
+
+  const queue: number[] = [];
+  for (const childIndex of nodes[0].next.values()) queue.push(childIndex);
+  for (let cursor = 0; cursor < queue.length; cursor += 1) {
+    const nodeIndex = queue[cursor];
+    for (const [character, childIndex] of nodes[nodeIndex].next) {
+      queue.push(childIndex);
+      let failure = nodes[nodeIndex].failure;
+      while (failure !== 0 && !nodes[failure].next.has(character)) {
+        failure = nodes[failure].failure;
+      }
+      nodes[childIndex].failure = nodes[failure].next.get(character) ?? 0;
+      nodes[childIndex].outputs.push(...nodes[nodes[childIndex].failure].outputs);
+    }
+  }
+  return { nodes };
+}
+
+function findLiteralMatches(text: string, matcher: LiteralMatcher): LiteralMatch[] {
+  const matches: LiteralMatch[] = [];
+  let nodeIndex = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    while (nodeIndex !== 0 && !matcher.nodes[nodeIndex].next.has(character)) {
+      nodeIndex = matcher.nodes[nodeIndex].failure;
+    }
+    nodeIndex = matcher.nodes[nodeIndex].next.get(character) ?? 0;
+    for (const sourceText of matcher.nodes[nodeIndex].outputs) {
+      matches.push({
+        start: index - sourceText.length + 1,
+        end: index + 1,
+        sourceText,
+      });
+    }
+  }
+  return matches;
+}
+
 function applyCrossSegmentNormalMatches(
   segments: TextSegment[],
   sourceTexts: string[],
+  literalMatcher: LiteralMatcher,
 ): TextSegment[] {
   if (sourceTexts.length === 0 || segments.length < 2) return segments;
   const starts: number[] = [];
@@ -254,13 +329,9 @@ function applyCrossSegmentNormalMatches(
   const ends = starts.map((start, index) => start + sourceOf(segments[index]).length);
   const candidates: CrossSegmentMatch[] = [];
 
-  for (const sourceText of sourceTexts) {
-    if (!sourceText || sourceText.includes('\n')) continue;
-    let searchStart = 0;
-    while (searchStart <= content.length - sourceText.length) {
-      const matchStart = content.indexOf(sourceText, searchStart);
-      if (matchStart === -1) break;
-      const matchEnd = matchStart + sourceText.length;
+  for (const match of findLiteralMatches(content, literalMatcher)) {
+      const { start: matchStart, end: matchEnd, sourceText } = match;
+      if (sourceText.includes('\n')) continue;
       const left = matchStart > 0 ? content.slice(matchStart - 1, matchStart) : undefined;
       const right = matchEnd < content.length ? content.slice(matchEnd, matchEnd + 1) : undefined;
       if (isWhitespaceOrDocumentEdge(left) && isWhitespaceOrDocumentEdge(right)) {
@@ -283,8 +354,6 @@ function applyCrossSegmentNormalMatches(
           });
         }
       }
-      searchStart = matchStart + Math.max(1, sourceText.length);
-    }
   }
 
   candidates.sort((left, right) => (
@@ -327,8 +396,13 @@ function applyCrossSegmentNormalMatches(
 }
 
 function findSegmentAtOffset(starts: number[], ends: number[], offset: number) {
-  for (let index = 0; index < starts.length; index += 1) {
-    if (offset >= starts[index] && offset < ends[index]) return index;
+  let low = 0;
+  let high = starts.length - 1;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    if (offset < starts[middle]) high = middle - 1;
+    else if (offset >= ends[middle]) low = middle + 1;
+    else return middle;
   }
   return -1;
 }
@@ -421,16 +495,12 @@ function findLiteralRanges(
   segments: TextSegment[],
   documentLayout: ManualRegexDocumentLayout,
   segmentIndex: number,
-  sourceTexts: string[],
+  literalMatcher: LiteralMatcher,
 ) {
   const segment = segments[segmentIndex];
   const candidates: Array<{ start: number; end: number }> = [];
-  for (const sourceText of sourceTexts) {
-    let start = 0;
-    while (start <= segment.text.length - sourceText.length) {
-      const matchStart = segment.text.indexOf(sourceText, start);
-      if (matchStart === -1) break;
-      const matchEnd = matchStart + sourceText.length;
+  for (const match of findLiteralMatches(segment.text, literalMatcher)) {
+      const { start: matchStart, end: matchEnd, sourceText } = match;
       if (hasRuleBoundaries(
         segments,
         documentLayout,
@@ -441,8 +511,6 @@ function findLiteralRanges(
       )) {
         candidates.push({ start: matchStart, end: matchEnd });
       }
-      start = matchStart + Math.max(1, sourceText.length);
-    }
   }
   candidates.sort((left, right) => left.start - right.start || right.end - left.end);
   const accepted: ManualSelectionRange[] = [];

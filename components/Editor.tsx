@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, startTransition } from 'react';
+import React, { useState, useRef, useEffect, startTransition, useMemo } from 'react';
 import {
   ManualRegexRules,
   SelectionExclusionRules,
@@ -7,7 +7,6 @@ import {
   ViewMode,
 } from '../types';
 import SegmentationWorker from '../workers/segmentation.worker?worker';
-import { annotateVerticalTextSegments } from '../services/verticalText';
 import {
   applyManualSelectionRanges,
   ManualSelectionRange,
@@ -21,9 +20,7 @@ import {
   isSegmentTranslationSelectable,
   toggleSegmentTranslationSelection,
 } from '../services/translationApplication';
-import { applySelectionExclusions } from '../services/selectionExclusions';
 import {
-  applyManualRegexRules,
   getManualRegexTargetForRange,
   ManualRegexTarget,
 } from '../services/manualRegex';
@@ -81,13 +78,18 @@ export const Editor: React.FC<EditorProps> = ({
   // Web Worker for segmentation
   const workerRef = useRef<Worker | null>(null);
   const requestIdRef = useRef(0);
+  const [isSmartProcessing, setIsSmartProcessing] = useState(false);
+  const [smartProgress, setSmartProgress] = useState({
+    progress: 0,
+    stage: '분석을 준비하는 중',
+  });
 
   // Initialize and cleanup worker
   useEffect(() => {
     const worker = new SegmentationWorker();
     workerRef.current = worker;
     return () => {
-      worker.terminate();
+      workerRef.current?.terminate();
       workerRef.current = null;
     };
   }, []);
@@ -130,25 +132,52 @@ export const Editor: React.FC<EditorProps> = ({
       const worker = workerRef.current;
       if (!worker) return;
       let cancelled = false;
+      let settled = false;
 
       // Increment request ID to ignore stale results
       const currentRequestId = ++requestIdRef.current;
+      setIsSmartProcessing(true);
+      setSmartProgress({ progress: 3, stage: 'AA 글꼴 폭을 측정하는 중' });
 
-      const handleMessage = (e: MessageEvent<{ type: string; requestId: number; segments: TextSegment[] }>) => {
+      const handleMessage = (e: MessageEvent<{
+        type: string;
+        requestId: number;
+        segments?: TextSegment[];
+        progress?: number;
+        stage?: string;
+      }>) => {
+        if (e.data.type === 'progress' && e.data.requestId === currentRequestId) {
+          setSmartProgress({
+            progress: Math.max(0, Math.min(99, e.data.progress || 0)),
+            stage: e.data.stage || '스마트 분석 중',
+          });
+          return;
+        }
         if (e.data.type === 'result' && e.data.requestId === currentRequestId) {
-          // Use startTransition so React can yield to the browser between renders,
-          // preventing the UI (and other Chrome tabs) from freezing on large files.
+          settled = true;
+          setSmartProgress({ progress: 100, stage: '분석 완료' });
+          setIsSmartProcessing(false);
+          // The worker already completed segmentation, vertical annotation and
+          // saved-rule application. Only the lightweight state hand-off remains.
           startTransition(() => {
-            const annotated = annotateVerticalTextSegments(content, e.data.segments);
-            const withManualRegex = applyManualRegexRules(annotated, manualRegexRules);
-            onSegmentsChangeRef.current(
-              applySelectionExclusions(withManualRegex, selectionExclusions),
-            );
+            onSegmentsChangeRef.current(e.data.segments || []);
           });
         }
       };
 
+      const handleError = () => {
+        if (!cancelled && requestIdRef.current === currentRequestId) {
+          settled = true;
+          setIsSmartProcessing(false);
+          if (workerRef.current === worker) {
+            worker.terminate();
+            workerRef.current = new SegmentationWorker();
+          }
+        }
+      };
+
       worker.addEventListener('message', handleMessage);
+      worker.addEventListener('error', handleError);
       void createVisualWidthProfile(content).then((visualWidthProfile) => {
         if (cancelled || workerRef.current !== worker) return;
         worker.postMessage({
@@ -156,14 +185,26 @@ export const Editor: React.FC<EditorProps> = ({
           content,
           requestId: currentRequestId,
           visualWidthProfile,
+          postProcess: true,
+          manualRegexRules,
+          selectionExclusions,
         });
       });
 
       return () => {
         cancelled = true;
         worker.removeEventListener('message', handleMessage);
+        worker.removeEventListener('error', handleError);
+        // A synchronous worker job cannot consume a cancellation message until
+        // after it finishes. Terminating it is the only way to make leaving
+        // smart mode immediate for a very large document.
+        if (!settled && workerRef.current === worker) {
+          worker.terminate();
+          workerRef.current = new SegmentationWorker();
+        }
       };
     }
+    setIsSmartProcessing(false);
   }, [
     content,
     viewMode,
@@ -171,6 +212,38 @@ export const Editor: React.FC<EditorProps> = ({
     selectionExclusions,
     manualRegexRules,
   ]);
+
+  const segmentLines = useMemo(() => {
+    const lines: TextSegment[][] = [[]];
+    for (const segment of segments) {
+      if (segment.text === '\n') lines.push([]);
+      else lines[lines.length - 1].push(segment);
+    }
+    return lines;
+  }, [segments]);
+
+  const getSegmentElementsInYRange = (
+    container: HTMLElement,
+    y1: number,
+    y2: number,
+  ) => {
+    const editorPadding = 16;
+    const firstLine = Math.max(0, Math.floor((y1 - editorPadding) / aaLineHeight));
+    const lastLine = Math.min(
+      segmentLines.length - 1,
+      Math.floor((y2 - editorPadding) / aaLineHeight),
+    );
+    const elements: HTMLElement[] = [];
+    for (let lineIndex = firstLine; lineIndex <= lastLine; lineIndex += 1) {
+      const line = container.querySelector<HTMLElement>(
+        `[data-smart-line-index="${lineIndex}"]`,
+      );
+      if (line) {
+        elements.push(...line.querySelectorAll<HTMLElement>('[data-segment-id]'));
+      }
+    }
+    return elements;
+  };
 
   const toggleSegmentSelection = (id: string) => {
     const newSegments = toggleSegmentTranslationSelection(segments, id);
@@ -188,7 +261,7 @@ export const Editor: React.FC<EditorProps> = ({
     );
     const rangeBySegmentId = new Map<string, ManualSelectionRange>();
 
-    for (const element of container.querySelectorAll<HTMLElement>('[data-segment-id]')) {
+    for (const element of getSegmentElementsInYRange(container, y1, y2)) {
       const segmentId = element.dataset.segmentId;
       const segment = segmentId ? segmentById.get(segmentId) : undefined;
       if (!segmentId || !segment || segment.isTranslated) continue;
@@ -278,7 +351,7 @@ export const Editor: React.FC<EditorProps> = ({
     );
     const ranges: ManualVerticalCharacterRange[] = [];
 
-    for (const element of container.querySelectorAll<HTMLElement>('[data-segment-id]')) {
+    for (const element of getSegmentElementsInYRange(container, y1, y2)) {
       const segmentId = element.dataset.segmentId;
       const segment = segmentId ? segmentById.get(segmentId) : undefined;
       if (!segmentId || !segment || segment.isTranslated) continue;
@@ -569,7 +642,19 @@ export const Editor: React.FC<EditorProps> = ({
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerCancel}
         >
-           {segments.map((seg) => {
+           {segmentLines.map((lineSegments, lineIndex) => (
+             <div
+               key={`smart-line-${lineIndex}`}
+               data-smart-line-index={lineIndex}
+               style={{
+                 contentVisibility: 'auto',
+                 containIntrinsicSize: `auto ${aaLineHeight}px`,
+                 minHeight: `${aaLineHeight}px`,
+                 width: 'max-content',
+                 minWidth: '100%',
+               }}
+             >
+             {lineSegments.length === 0 ? '\u00a0' : lineSegments.map((seg) => {
              if (seg.isJapanese) {
                return (
                  <span
@@ -624,7 +709,30 @@ export const Editor: React.FC<EditorProps> = ({
                  {seg.text}
                </span>
              );
-           })}
+             })}
+             </div>
+           ))}
+
+           {isSmartProcessing && segments.length === 0 && (
+             <div className={`sticky left-4 top-4 inline-flex min-w-72 flex-col gap-2 rounded-lg px-3 py-2 text-sm shadow-lg ${
+               isLightMode
+                 ? 'bg-white/95 text-slate-700 border border-slate-300'
+                 : 'bg-slate-900/95 text-slate-200 border border-slate-700'
+             }`}>
+               <div className="flex items-center justify-between gap-4">
+                 <span>{smartProgress.stage}</span>
+                 <span className="font-mono text-xs">{smartProgress.progress}%</span>
+               </div>
+               <div className={`h-1.5 overflow-hidden rounded-full ${
+                 isLightMode ? 'bg-slate-200' : 'bg-slate-700'
+               }`}>
+                 <div
+                   className="h-full rounded-full bg-blue-500 transition-[width] duration-150"
+                   style={{ width: `${smartProgress.progress}%` }}
+                 />
+               </div>
+             </div>
+           )}
 
            {/* Selection Box Overlay */}
            {isDragging && dragStart && dragCurrent && (

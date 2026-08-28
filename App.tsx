@@ -74,7 +74,6 @@ import {
 } from './services/selectionExclusions';
 import {
   addManualRegexRule,
-  applyManualRegexRules,
   deserializeManualRegexRules,
   getAddedManualRegexRules,
   getManualRegexTarget,
@@ -83,6 +82,7 @@ import {
 } from './services/manualRegex';
 import { APP_THEME_STORAGE_KEY, normalizeAppTheme } from './services/appTheme';
 import { AppUpdateStatus, fetchAppUpdateStatus } from './services/appUpdate';
+import SmartAnalysisWorker from './workers/segmentation.worker?worker';
 import { Ban, Braces, FileText, Info, Activity, Download, Image as ImageIcon, Timer, History, Book, MessageSquareQuote, Server, CheckSquare, Moon, Sun, CloudDownload } from 'lucide-react';
 
 const ImageExportModal = lazy(() => import('./components/ImageExportModal').then((module) => ({
@@ -113,6 +113,8 @@ function getProviderSetupMessage(provider: TranslationProvider) {
 function App() {
   const manualRegexStorageTimerRef = useRef<number | null>(null);
   const latestManualRegexRulesRef = useRef<ManualRegexRules | null>(null);
+  const segmentsRef = useRef<TextSegment[]>([]);
+  const manualRegexApplyQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [content, setContent] = useState<string>("");
   const [fileName, setFileName] = useState<string>("");
   
@@ -124,6 +126,7 @@ function App() {
   const [isManualRegexMode, setIsManualRegexMode] = useState(false);
   const [selection, setSelection] = useState<SelectionRange | null>(null);
   const [segments, setSegments] = useState<TextSegment[]>([]);
+  segmentsRef.current = segments;
   
   const [isTranslating, setIsTranslating] = useState(false);
   const [translationProgress, setTranslationProgress] = useState<{ current: number; total: number; percent: number } | null>(null);
@@ -374,13 +377,43 @@ function App() {
     if (nextRules === manualRegexRules) return;
     const addedRules = getAddedManualRegexRules(manualRegexRules, nextRules);
     setManualRegexRules(nextRules);
-    // Exact matches are cheap and visible immediately. Do not run the learned
-    // similarity pass for this episode: new examples join the immutable
-    // learning snapshot only when the app/server is opened next time.
-    setSegments((current) => applySelectionExclusions(
-      applyManualRegexRules(current, addedRules),
-      selectionExclusions,
-    ));
+    // Applying even one new rule still scans the whole episode. Serialize these
+    // jobs in a worker so rapid additions preserve order without blocking UI.
+    manualRegexApplyQueueRef.current = manualRegexApplyQueueRef.current
+      .then(async () => {
+        const worker = new SmartAnalysisWorker();
+        const requestId = Date.now() + Math.random();
+        try {
+          const nextSegments = await new Promise<TextSegment[]>((resolve, reject) => {
+            worker.addEventListener('message', (event: MessageEvent<{
+              type: string;
+              requestId: number;
+              segments?: TextSegment[];
+            }>) => {
+              if (event.data.type === 'result' && event.data.requestId === requestId) {
+                resolve(event.data.segments || []);
+              }
+            });
+            worker.addEventListener('error', () => {
+              reject(new Error('수동정규식 적용 워커가 중단되었습니다.'));
+            });
+            worker.postMessage({
+              type: 'apply-rules',
+              requestId,
+              segments: segmentsRef.current,
+              manualRegexRules: addedRules,
+              selectionExclusions,
+            });
+          });
+          segmentsRef.current = nextSegments;
+          startTransition(() => setSegments(nextSegments));
+        } finally {
+          worker.terminate();
+        }
+      })
+      .catch((error) => {
+        console.error(error);
+      });
   };
 
   const handleManualRegexSelection = (segmentId: string) => {

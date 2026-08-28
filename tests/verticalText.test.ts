@@ -5,6 +5,7 @@ import {
   annotateVerticalTextSegments,
   applyVerticalTranslation,
   applyVerticalTranslations,
+  detectRawVerticalGroups,
   detectVerticalTextGroups,
   fitTranslationToDisplayWidth,
   getDisplayWidth,
@@ -418,6 +419,19 @@ test('AA에도 쓰이는 二·人·ハ 문자를 실제 자유형 대사에서 �
     detectVerticalTextGroups(sample, makeLineSegments(sample)).map(({ sourceText }) => sourceText),
     ['二人はハズレだ！'],
   );
+});
+
+test('한 행에 세로 후보 상자가 많아도 조합 탐색이 폭증하지 않는다', () => {
+  const glyphs = ['あ', 'い', 'う', 'え', 'お', 'か', 'き', 'く'];
+  const sample = glyphs
+    .map((glyph) => Array.from({ length: 24 }, () => `| ${glyph} |`).join('  '))
+    .join('\n');
+  const startedAt = performance.now();
+  const groups = detectRawVerticalGroups(sample);
+  const durationMs = performance.now() - startedAt;
+
+  assert.ok(Array.isArray(groups));
+  assert.ok(durationMs < 2_000, `조밀한 세로 후보 분석이 ${durationMs.toFixed(0)}ms 걸렸습니다.`);
 });
 
 function makeLineSegments(content: string): TextSegment[] {

@@ -7,6 +7,7 @@ import {
 } from '../services/verticalText';
 import { selectAllTranslatableSegments } from '../services/translationApplication';
 import type { VisualWidthProfile } from '../services/visualTextMetrics';
+import type { ManualRegexRules, SelectionExclusionRules } from '../types';
 
 const SELECTABLE_FLAGS: Array<keyof TextSegment> = [
   'isStrictJapanese',
@@ -24,9 +25,13 @@ const workerScope: {
   postMessage: (value: { segments: TextSegment[] }) => void;
   onmessage?: (event: { data: {
     type: string;
-    content: string;
+    content?: string;
     requestId: number;
     visualWidthProfile?: VisualWidthProfile;
+    postProcess?: boolean;
+    manualRegexRules?: ManualRegexRules;
+    selectionExclusions?: SelectionExclusionRules;
+    segments?: TextSegment[];
   } }) => void;
 } = {
   postMessage: (value) => {
@@ -51,10 +56,88 @@ function segment(
   return workerResult.segments;
 }
 
+function segmentWithPostProcessing(
+  content: string,
+  manualRegexRules: ManualRegexRules = { entries: [] },
+  selectionExclusions: SelectionExclusionRules = { exact: [] },
+): TextSegment[] {
+  workerResult = undefined;
+  workerScope.onmessage?.({
+    data: {
+      type: 'segment',
+      content,
+      requestId: 2,
+      postProcess: true,
+      manualRegexRules,
+      selectionExclusions,
+    },
+  });
+  assert.ok(workerResult);
+  return workerResult.segments;
+}
+
 function isSelectable(segment: TextSegment): boolean {
   return !segment.isAutoSelectExcluded
     && SELECTABLE_FLAGS.some((flag) => Boolean(segment[flag]));
 }
+
+test('스마트 모드 후처리를 워커 안에서 끝내고 완성된 세그먼트를 반환한다', () => {
+  const source = '　　勇者　　魔王';
+  const result = segmentWithPostProcessing(
+    source,
+    {
+      entries: [{
+        id: 'manual-hero',
+        kind: 'normal',
+        sourceText: '勇者',
+        pattern: '勇者',
+        createdAt: 1,
+      }],
+    },
+    {
+      exact: [{
+        id: 'ban-demon-king',
+        kind: 'normal',
+        sourceText: '魔王',
+        createdAt: 1,
+      }],
+    },
+  );
+
+  const hero = result.find(({ text }) => text === '勇者');
+  const demonKing = result.find(({ text }) => text === '魔王');
+  assert.equal(hero?.isManualRegexSelection, true);
+  assert.equal(hero?.isSelected, true);
+  assert.equal(demonKing?.isUserExcluded, true);
+  assert.equal(demonKing?.isSelected, false);
+});
+
+test('새 수동정규식은 기존 스마트 세그먼트에 워커로 증분 적용된다', () => {
+  const sourceSegments = segment('　　勇者　　');
+  workerResult = undefined;
+  workerScope.onmessage?.({
+    data: {
+      type: 'apply-rules',
+      requestId: 3,
+      segments: sourceSegments,
+      manualRegexRules: {
+        entries: [{
+          id: 'manual-hero-incremental',
+          kind: 'normal',
+          sourceText: '勇者',
+          pattern: '勇者',
+          createdAt: 1,
+        }],
+      },
+      selectionExclusions: { exact: [] },
+    },
+  });
+
+  assert.ok(workerResult);
+  const hero = workerResult.segments.find(({ text }) => text === '勇者');
+  assert.equal(hero?.isManualRegexSelection, true);
+  assert.equal(hero?.isSelected, true);
+});
 
 test('자동선택은 검증된 박스·사방 여백·인접 문장 근거 중 하나를 요구한다', () => {
   const sample = [
