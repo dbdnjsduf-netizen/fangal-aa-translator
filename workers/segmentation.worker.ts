@@ -1,5 +1,13 @@
 import { SpatialContextAnalyzer } from '../services/spatialDetection';
 import type { VisualWidthProfile } from '../services/visualTextMetrics';
+import { annotateVerticalTextSegments } from '../services/verticalText';
+import { applyManualRegexRules } from '../services/manualRegex';
+import { applySelectionExclusions } from '../services/selectionExclusions';
+import type {
+  ManualRegexRules,
+  SelectionExclusionRules,
+  TextSegment,
+} from '../types';
 
 // Web Worker for text segmentation (runs off the main UI thread)
 // All regex patterns and pure helper functions are duplicated here
@@ -1121,13 +1129,22 @@ function segmentContent(
   content: string,
   requestId: number,
   visualWidthProfile?: VisualWidthProfile,
-): void {
+): WorkerTextSegment[] {
   const lines = content.split('\n');
   const spatialAnalyzer = new SpatialContextAnalyzer(lines, visualWidthProfile);
   const statusWindowTextRanges = detectStatusWindowTextRanges(lines);
   const newSegments: WorkerTextSegment[] = [];
 
+  const progressInterval = Math.max(100, Math.ceil(lines.length / 100));
   lines.forEach((line, lineIdx) => {
+    if (lineIdx % progressInterval === 0) {
+      self.postMessage({
+        type: 'progress',
+        requestId,
+        progress: 10 + Math.round((lineIdx / Math.max(1, lines.length)) * 55),
+        stage: `텍스트 감지 중 (${lineIdx.toLocaleString()}/${lines.length.toLocaleString()}행)`,
+      });
+    }
     const lineSegmentStart = newSegments.length;
     // --- Fast path: skip per-part processing for lines with no Japanese ---
     if (!hasJapaneseChar(line)) {
@@ -2240,21 +2257,93 @@ function segmentContent(
     merged.push(seg);
   }
 
-  self.postMessage({ type: 'result', requestId, segments: merged });
+  return merged;
 }
 
 // --- Message handler ---
 self.onmessage = (e: MessageEvent<{
   type: string;
-  content: string;
+  content?: string;
   requestId: number;
   visualWidthProfile?: VisualWidthProfile;
+  postProcess?: boolean;
+  manualRegexRules?: ManualRegexRules;
+  selectionExclusions?: SelectionExclusionRules;
+  segments?: TextSegment[];
 }>) => {
+  if (e.data.type === 'apply-rules') {
+    const segments = applySelectionExclusions(
+      applyManualRegexRules(
+        e.data.segments || [],
+        e.data.manualRegexRules || { entries: [] },
+      ),
+      e.data.selectionExclusions || { exact: [] },
+    );
+    self.postMessage({
+      type: 'result',
+      requestId: e.data.requestId,
+      segments,
+    });
+    return;
+  }
   if (e.data.type === 'segment') {
-    segmentContent(
-      e.data.content,
+    self.postMessage({
+      type: 'progress',
+      requestId: e.data.requestId,
+      progress: 10,
+      stage: '텍스트 구조를 준비하는 중',
+    });
+    const segmented = segmentContent(
+      e.data.content || '',
       e.data.requestId,
       e.data.visualWidthProfile,
     );
+    let segments: TextSegment[] | WorkerTextSegment[] = segmented;
+    if (e.data.postProcess) {
+      self.postMessage({
+        type: 'progress',
+        requestId: e.data.requestId,
+        progress: 68,
+        stage: '세로쓰기 영역을 분석하는 중',
+      });
+      segments = annotateVerticalTextSegments(
+        e.data.content || '',
+        segmented as TextSegment[],
+        (completed, total) => {
+          const ratio = completed / Math.max(1, total);
+          self.postMessage({
+            type: 'progress',
+            requestId: e.data.requestId,
+            progress: 68 + Math.round(ratio * 17),
+            stage: `세로쓰기 영역을 분석하는 중 (${Math.round(ratio * 100)}%)`,
+          });
+        },
+      );
+      self.postMessage({
+        type: 'progress',
+        requestId: e.data.requestId,
+        progress: 86,
+        stage: '수동정규식을 적용하는 중',
+      });
+      segments = applyManualRegexRules(
+        segments,
+        e.data.manualRegexRules || { entries: [] },
+      );
+      self.postMessage({
+        type: 'progress',
+        requestId: e.data.requestId,
+        progress: 95,
+        stage: '금지목록과 선택 상태를 정리하는 중',
+      });
+      segments = applySelectionExclusions(
+        segments,
+        e.data.selectionExclusions || { exact: [] },
+      );
+    }
+    self.postMessage({
+      type: 'result',
+      requestId: e.data.requestId,
+      segments,
+    });
   }
 };

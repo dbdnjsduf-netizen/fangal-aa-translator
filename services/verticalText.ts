@@ -158,9 +158,10 @@ export function getDisplayWidth(text: string): number {
 export function detectVerticalTextGroups(
   content: string,
   segments: TextSegment[],
+  onProgress?: (completed: number, total: number) => void,
 ): VerticalTextGroup[] {
   const manualGroups = buildManualVerticalTextGroups(segments);
-  const rawGroups = detectRawVerticalGroups(content);
+  const rawGroups = detectRawVerticalGroups(content, onProgress);
   const segmentRanges = buildSegmentRanges(segments);
   const mappedGroups: VerticalTextGroup[] = [];
 
@@ -274,8 +275,9 @@ function buildManualVerticalTextGroups(segments: TextSegment[]): VerticalTextGro
 export function annotateVerticalTextSegments(
   content: string,
   segments: TextSegment[],
+  onProgress?: (completed: number, total: number) => void,
 ): TextSegment[] {
-  const groups = detectVerticalTextGroups(content, segments);
+  const groups = detectVerticalTextGroups(content, segments, onProgress);
   const metadata = new Map<string, Map<number, VerticalSegmentMetadata>>();
 
   for (const group of groups) {
@@ -671,13 +673,29 @@ function toVerticalCell(character: string): string {
   return '　';
 }
 
-export function detectRawVerticalGroups(content: string): RawVerticalGroup[] {
+export function detectRawVerticalGroups(
+  content: string,
+  onProgress?: (completed: number, total: number) => void,
+): RawVerticalGroup[] {
   const candidates: CandidateToken[] = [];
   const lines = content.split('\n');
+  const progressInterval = Math.max(100, Math.ceil(lines.length / 100));
+  // Both boxed and loose vertical detection use the same glyph coordinates.
+  // Building them once avoids rescanning every character in a large episode.
+  const glyphRows: RawGlyph[][] = [];
+  lines.forEach((line, lineIndex) => {
+    if (lineIndex % progressInterval === 0) {
+      onProgress?.(lineIndex, Math.max(1, lines.length * 3));
+    }
+    glyphRows.push(scanLine(line));
+  });
   const spatialAnalyzer = new SpatialContextAnalyzer(lines);
 
-  lines.forEach((line, lineIndex) => {
-    const glyphs = scanLine(line);
+  lines.forEach((_line, lineIndex) => {
+    if (lineIndex % progressInterval === 0) {
+      onProgress?.(lines.length + lineIndex, Math.max(1, lines.length * 3));
+    }
+    const glyphs = glyphRows[lineIndex];
     const pipes = glyphs.filter(({ char }) => PIPE_BOUNDARY.test(char));
     const leftArrows = glyphs.filter(({ char }) => LEFT_ARROW_BOUNDARY.test(char));
     const rightArrows = glyphs.filter(({ char }) => RIGHT_ARROW_BOUNDARY.test(char));
@@ -722,6 +740,7 @@ export function detectRawVerticalGroups(content: string): RawVerticalGroup[] {
   }
 
   const tracks: BoxTrack[] = [];
+  let activeBoxTracks: BoxTrack[] = [];
   const rowBoxes = [...rowBoxMap.values()].sort((left, right) => (
     left.line - right.line || right.right - left.right
   ));
@@ -734,7 +753,7 @@ export function detectRawVerticalGroups(content: string): RawVerticalGroup[] {
 
   for (const [line, lineBoxesUnsorted] of [...boxesByLine.entries()].sort((a, b) => a[0] - b[0])) {
     const lineBoxes = [...lineBoxesUnsorted].sort((left, right) => right.right - left.right);
-    const activeTracks = tracks
+    const activeTracks = activeBoxTracks
       .filter((track) => line > track.lastLine && line - track.lastLine <= MAX_LINE_GAP)
       .sort((left, right) => right.lastCenter - left.lastCenter);
     const plan = assignRowBoxesToTracks(lineBoxes, activeTracks, line);
@@ -749,15 +768,18 @@ export function detectRawVerticalGroups(content: string): RawVerticalGroup[] {
         selectedTrack.lastCenter = center;
         selectedTrack.lastWidth = width;
       } else {
-        tracks.push({
+        const newTrack: BoxTrack = {
           lastLine: line,
           lastCenter: center,
           lastWidth: width,
           boundaryKind: rowBox.boundaryKind,
           rows: [rowBox],
-        });
+        };
+        tracks.push(newTrack);
+        activeTracks.push(newTrack);
       }
     });
+    activeBoxTracks = activeTracks;
   }
 
   function assignRowBoxesToTracks(
@@ -765,10 +787,14 @@ export function detectRawVerticalGroups(content: string): RawVerticalGroup[] {
     activeTracks: BoxTrack[],
     line: number,
   ): TrackAssignmentPlan {
+    const memo = new Map<string, TrackAssignmentPlan>();
     const search = (boxIndex: number, minimumTrackIndex: number): TrackAssignmentPlan => {
       if (boxIndex >= boxes.length) {
         return { assignments: [], matches: 0, score: 0 };
       }
+      const memoKey = `${boxIndex}:${minimumTrackIndex}`;
+      const cached = memo.get(memoKey);
+      if (cached) return cached;
 
       const newTrackPlan = search(boxIndex + 1, minimumTrackIndex);
       let best: TrackAssignmentPlan = {
@@ -807,6 +833,7 @@ export function detectRawVerticalGroups(content: string): RawVerticalGroup[] {
         }
       }
 
+      memo.set(memoKey, best);
       return best;
     };
 
@@ -852,19 +879,34 @@ export function detectRawVerticalGroups(content: string): RawVerticalGroup[] {
   );
   return [
     ...groups,
-    ...detectLooseVerticalGroups(lines, claimedTokens, spatialAnalyzer),
+    ...detectLooseVerticalGroups(
+      lines,
+      glyphRows,
+      claimedTokens,
+      spatialAnalyzer,
+      onProgress,
+    ),
   ];
 }
 
 function detectLooseVerticalGroups(
   lines: string[],
+  glyphRows: RawGlyph[][],
   claimedTokens: Set<string>,
   spatialAnalyzer: SpatialContextAnalyzer,
+  onProgress?: (completed: number, total: number) => void,
 ): RawVerticalGroup[] {
   const rows: CandidateToken[][] = [];
+  const progressInterval = Math.max(100, Math.ceil(lines.length / 100));
 
-  lines.forEach((line, lineIndex) => {
-    const glyphs = scanLine(line);
+  lines.forEach((_line, lineIndex) => {
+    if (lineIndex % progressInterval === 0) {
+      onProgress?.(
+        (lines.length * 2) + lineIndex,
+        Math.max(1, lines.length * 3),
+      );
+    }
+    const glyphs = glyphRows[lineIndex];
     const sourceGlyphs = glyphs.filter(({ char, stringIndex }) => (
       LOOSE_VERTICAL_SOURCE_CHAR.test(char)
       && !claimedTokens.has(`${lineIndex}:${stringIndex}`)
@@ -885,8 +927,9 @@ function detectLooseVerticalGroups(
   });
 
   const tracks: Array<{ tokens: CandidateToken[]; lastLine: number; lastX: number }> = [];
+  let activeTracks: typeof tracks = [];
   rows.forEach((row, line) => {
-    const active = tracks.filter(({ lastLine }) => line - lastLine <= MAX_LOOSE_LINE_GAP);
+    const active = activeTracks.filter(({ lastLine }) => line - lastLine <= MAX_LOOSE_LINE_GAP);
     const used = new Set<typeof tracks[number]>();
     for (const token of [...row].sort((left, right) => (
       looseTokenPriority(right.char) - looseTokenPriority(left.char)
@@ -908,10 +951,14 @@ function detectLooseVerticalGroups(
         nearest.lastX = token.displayX;
         used.add(nearest);
       } else if (looseTokenPriority(token.char) > 0) {
-        tracks.push({ tokens: [token], lastLine: line, lastX: token.displayX });
+        const newTrack = { tokens: [token], lastLine: line, lastX: token.displayX };
+        tracks.push(newTrack);
+        active.push(newTrack);
       }
     }
+    activeTracks = active;
   });
+  onProgress?.(Math.max(1, lines.length * 3), Math.max(1, lines.length * 3));
 
   return tracks
     .map(({ tokens }) => trimLooseTrack(tokens))
@@ -1082,16 +1129,35 @@ function scanLine(line: string): RawGlyph[] {
 }
 
 function findNearestLeftBoundary(boundaries: RawGlyph[], x: number): RawGlyph | undefined {
-  let result: RawGlyph | undefined;
-  for (const boundary of boundaries) {
-    if (boundary.displayX >= x) break;
-    result = boundary;
+  let low = 0;
+  let high = boundaries.length - 1;
+  let resultIndex = -1;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    if (boundaries[middle].displayX < x) {
+      resultIndex = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
   }
-  return result;
+  return resultIndex >= 0 ? boundaries[resultIndex] : undefined;
 }
 
 function findNearestRightBoundary(boundaries: RawGlyph[], x: number): RawGlyph | undefined {
-  return boundaries.find((boundary) => boundary.displayX > x);
+  let low = 0;
+  let high = boundaries.length - 1;
+  let resultIndex = -1;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    if (boundaries[middle].displayX > x) {
+      resultIndex = middle;
+      high = middle - 1;
+    } else {
+      low = middle + 1;
+    }
+  }
+  return resultIndex >= 0 ? boundaries[resultIndex] : undefined;
 }
 
 function makeBoundaryPair(
