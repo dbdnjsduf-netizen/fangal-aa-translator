@@ -33,6 +33,10 @@ test('Codex는 기본 Sol low와 선택한 Luna high를 요청에 전달한다',
     const status = await getCodexRuntimeInfo();
     const result = await translateWithCodex('こんにちは', [], false, 'Translate.');
     await translateWithCodex('こんにちは', [], false, 'Translate.', 'gpt-6-luna', 'high');
+    await translateWithCodex('こんにちは', [], false, {
+      mode: 'full',
+      text: '완전히 새로 작성한 지시입니다.',
+    });
     assert.equal(status.authenticated, true);
     assert.equal(result.text, '안녕하세요');
     assert.equal(calls[1].url, '/api/codex/chat');
@@ -41,6 +45,8 @@ test('Codex는 기본 Sol low와 선택한 Luna high를 요청에 전달한다',
     assert.equal(calls[1].body.expectedCount, 1);
     assert.equal(calls[2].body.model, 'gpt-6-luna');
     assert.equal(calls[2].body.reasoningEffort, 'high');
+    assert.equal(calls[3].body.messages[0].content, '완전히 새로 작성한 지시입니다.');
+    assert.doesNotMatch(calls[3].body.messages[0].content, /USER-EDITABLE LOCALIZATION STYLE/u);
   } finally {
     globalThis.fetch = previousFetch;
   }

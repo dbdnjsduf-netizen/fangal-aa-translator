@@ -8,6 +8,7 @@ import {
   chooseRecoverySplitIndex,
   createChunks,
   DEFAULT_SYSTEM_PROMPT,
+  TranslationInstruction,
   parseIndexedTranslations,
   TranslationProgress,
   TranslationResponseData,
@@ -77,7 +78,7 @@ export async function translateSelection(
   apiKey: string,
   customDict: DictionaryEntry[] = [],
   useDefaultDict = true,
-  systemInstruction = DEFAULT_SYSTEM_PROMPT,
+  systemInstruction: TranslationInstruction = DEFAULT_SYSTEM_PROMPT,
   model: GeminiModel = GEMINI_MODEL,
 ): Promise<TranslationResponseData> {
   assertApiKey(apiKey);
@@ -98,7 +99,7 @@ export async function translateBatch(
   apiKey: string,
   customDict: DictionaryEntry[] = [],
   useDefaultDict = true,
-  systemInstruction = DEFAULT_SYSTEM_PROMPT,
+  systemInstruction: TranslationInstruction = DEFAULT_SYSTEM_PROMPT,
   onProgress?: (progress: TranslationProgress) => void,
   onPartialResult?: (translations: string[], usage: ApiUsageStats) => void,
   model: GeminiModel = GEMINI_MODEL,
@@ -220,7 +221,7 @@ async function translateChunk(
   model: GeminiModel,
   customDict: DictionaryEntry[],
   useDefaultDict: boolean,
-  systemInstruction: string,
+  systemInstruction: TranslationInstruction,
 ) {
   const prompt = buildTranslationPrompt(chunk, gaps, customDict, useDefaultDict);
   const accumulatedUsage = emptyUsage();
@@ -287,7 +288,7 @@ async function translateChunkResilient(
   model: GeminiModel,
   customDict: DictionaryEntry[],
   useDefaultDict: boolean,
-  systemInstruction: string,
+  systemInstruction: TranslationInstruction,
   onRecoveredPartial?: (offset: number, translations: string[]) => void,
   baseOffset = 0,
   isRecoveryChild = false,

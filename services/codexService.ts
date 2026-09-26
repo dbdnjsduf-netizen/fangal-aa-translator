@@ -2,6 +2,7 @@ import { ApiUsageStats, CodexRuntimeInfo, DictionaryEntry } from '../types';
 import {
   BatchTranslationResult,
   DEFAULT_SYSTEM_PROMPT,
+  TranslationInstruction,
   TranslationProgress,
   TranslationResponseData,
   TranslationBatchInput,
@@ -70,7 +71,7 @@ export async function translateSelection(
   textToTranslate: string,
   customDict: DictionaryEntry[] = [],
   useDefaultDict = true,
-  systemInstruction = DEFAULT_SYSTEM_PROMPT,
+  systemInstruction: TranslationInstruction = DEFAULT_SYSTEM_PROMPT,
   model: CodexModel = CODEX_MODEL,
   reasoningEffort: CodexReasoningEffort = CODEX_REASONING_EFFORT,
 ): Promise<TranslationResponseData> {
@@ -87,7 +88,7 @@ export async function translateBatch(
   texts: TranslationBatchInput[],
   customDict: DictionaryEntry[] = [],
   useDefaultDict = true,
-  systemInstruction = DEFAULT_SYSTEM_PROMPT,
+  systemInstruction: TranslationInstruction = DEFAULT_SYSTEM_PROMPT,
   onProgress?: (progress: TranslationProgress) => void,
   onPartialResult?: (translations: string[], usage: ApiUsageStats) => void,
   model: CodexModel = CODEX_MODEL,

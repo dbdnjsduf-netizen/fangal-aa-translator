@@ -34,6 +34,8 @@ import {
 import {
   GEMINI_SESSION_KEY,
   GEMINI_MODEL_STORAGE_KEY,
+  PROMPT_MODE_STORAGE_KEY,
+  FULL_PROMPT_STORAGE_KEY,
   CODEX_MODEL_STORAGE_KEY,
   CODEX_REASONING_EFFORT_STORAGE_KEY,
   OPENROUTER_SESSION_KEY,
@@ -43,6 +45,7 @@ import {
   isProviderReady,
   normalizeTranslationProvider,
   normalizeGeminiModel,
+  normalizeTranslationPromptMode,
   normalizeCodexModel,
   normalizeCodexReasoningEffort,
   TRANSLATION_PROVIDER_STORAGE_KEY,
@@ -54,7 +57,7 @@ import {
   TRANSLATION_POST_BOUNDARY,
   isTranslationPostHeader,
 } from './services/translationService';
-import type { CodexModel, CodexReasoningEffort, TranslationBatchInput } from './services/translationService';
+import type { CodexModel, CodexReasoningEffort, TranslationBatchInput, TranslationInstruction, TranslationPromptMode } from './services/translationService';
 import {
   applyVerticalTranslations,
   detectVerticalTextGroups,
@@ -318,10 +321,28 @@ function App() {
   const [systemPrompt, setSystemPrompt] = useState<string>(
     () => resolveStoredSystemPrompt(localStorage.getItem('aat_system_prompt')),
   );
+  const [fullPrompt, setFullPrompt] = useState<string>(
+    () => localStorage.getItem(FULL_PROMPT_STORAGE_KEY) || '',
+  );
+  const [promptMode, setPromptMode] = useState<TranslationPromptMode>(() => {
+    const savedFullPrompt = localStorage.getItem(FULL_PROMPT_STORAGE_KEY);
+    return savedFullPrompt?.trim()
+      ? normalizeTranslationPromptMode(localStorage.getItem(PROMPT_MODE_STORAGE_KEY))
+      : 'style';
+  });
+  const activeTranslationInstruction: TranslationInstruction = {
+    mode: promptMode,
+    text: promptMode === 'full' ? fullPrompt : systemPrompt,
+  };
 
   useEffect(() => {
     localStorage.setItem('aat_system_prompt', systemPrompt);
   }, [systemPrompt]);
+
+  useEffect(() => {
+    localStorage.setItem(FULL_PROMPT_STORAGE_KEY, fullPrompt);
+    localStorage.setItem(PROMPT_MODE_STORAGE_KEY, promptMode);
+  }, [fullPrompt, promptMode]);
 
   useEffect(() => {
     if (segments.some((segment) => segment.isTranslated && segment.isSelected)) {
@@ -497,7 +518,7 @@ function App() {
           selection.text, 
           customDictionary, 
           useDefaultDictionary,
-          systemPrompt,
+          activeTranslationInstruction,
           activeModel,
           codexReasoningEffort,
       );
@@ -695,7 +716,7 @@ function App() {
           textsToTranslate,
           customDictionary, 
           useDefaultDictionary,
-          systemPrompt,
+          activeTranslationInstruction,
           (progress) => {
             setTranslationProgress({
               current: progress.completedChunks,
@@ -1130,7 +1151,13 @@ function App() {
         isOpen={isPromptOpen}
         onClose={() => setIsPromptOpen(false)}
         systemPrompt={systemPrompt}
-        setSystemPrompt={setSystemPrompt}
+        fullPrompt={fullPrompt}
+        promptMode={promptMode}
+        onSave={(style, full, mode) => {
+          setSystemPrompt(style);
+          setFullPrompt(full);
+          setPromptMode(mode);
+        }}
       />
       <TranslationSettingsModal
         isOpen={isTranslationSettingsOpen}

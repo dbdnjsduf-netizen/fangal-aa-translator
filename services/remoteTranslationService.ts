@@ -9,6 +9,7 @@ import {
   ChunkLimits,
   createChunks,
   DEFAULT_SYSTEM_PROMPT,
+  TranslationInstruction,
   parseIndexedTranslations,
   TranslationProgress,
   TranslationResponseData,
@@ -58,7 +59,7 @@ export async function translateRemoteSelection(
   textToTranslate: string,
   customDict: DictionaryEntry[] = [],
   useDefaultDict = true,
-  systemInstruction = DEFAULT_SYSTEM_PROMPT,
+  systemInstruction: TranslationInstruction = DEFAULT_SYSTEM_PROMPT,
 ): Promise<TranslationResponseData> {
   const result = await translateChunk(
     config,
@@ -76,7 +77,7 @@ export async function translateRemoteBatch(
   texts: TranslationBatchInput[],
   customDict: DictionaryEntry[] = [],
   useDefaultDict = true,
-  systemInstruction = DEFAULT_SYSTEM_PROMPT,
+  systemInstruction: TranslationInstruction = DEFAULT_SYSTEM_PROMPT,
   onProgress?: (progress: TranslationProgress) => void,
   onPartialResult?: (translations: string[], usage: ApiUsageStats) => void,
 ): Promise<BatchTranslationResult> {
@@ -172,7 +173,7 @@ async function translateChunk(
   gaps: number[],
   customDict: DictionaryEntry[],
   useDefaultDict: boolean,
-  systemInstruction: string,
+  systemInstruction: TranslationInstruction,
 ) {
   const prompt = buildTranslationPrompt(chunk, gaps, customDict, useDefaultDict);
   const accumulatedUsage = emptyUsage();
@@ -235,7 +236,7 @@ async function translateChunkResilient(
   gaps: number[],
   customDict: DictionaryEntry[],
   useDefaultDict: boolean,
-  systemInstruction: string,
+  systemInstruction: TranslationInstruction,
   onRecoveredPartial?: (offset: number, translations: string[]) => void,
   baseOffset = 0,
   isRecoveryChild = false,

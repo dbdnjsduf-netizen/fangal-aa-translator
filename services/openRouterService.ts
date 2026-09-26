@@ -2,6 +2,7 @@ import { ApiUsageStats, DictionaryEntry } from '../types';
 import {
   BatchTranslationResult,
   DEFAULT_SYSTEM_PROMPT,
+  TranslationInstruction,
   TranslationProgress,
   TranslationResponseData,
   TranslationBatchInput,
@@ -36,7 +37,7 @@ export async function translateSelection(
   apiKey: string,
   customDict: DictionaryEntry[] = [],
   useDefaultDict = true,
-  systemInstruction = DEFAULT_SYSTEM_PROMPT,
+  systemInstruction: TranslationInstruction = DEFAULT_SYSTEM_PROMPT,
 ): Promise<TranslationResponseData> {
   assertApiKey(apiKey);
   return translateRemoteSelection(
@@ -53,7 +54,7 @@ export async function translateBatch(
   apiKey: string,
   customDict: DictionaryEntry[] = [],
   useDefaultDict = true,
-  systemInstruction = DEFAULT_SYSTEM_PROMPT,
+  systemInstruction: TranslationInstruction = DEFAULT_SYSTEM_PROMPT,
   onProgress?: (progress: TranslationProgress) => void,
   onPartialResult?: (translations: string[], usage: ApiUsageStats) => void,
 ): Promise<BatchTranslationResult> {
