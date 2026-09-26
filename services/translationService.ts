@@ -2,6 +2,8 @@ import { CodexRuntimeInfo, DictionaryEntry, TranslationProvider } from '../types
 import {
   BatchTranslationResult,
   DEFAULT_SYSTEM_PROMPT,
+  TranslationInstruction,
+  normalizeTranslationPromptMode,
   getOllamaRuntimeInfo,
   resolveStoredSystemPrompt,
   translateBatch as translateBatchWithOllama,
@@ -43,6 +45,7 @@ import {
 
 export {
   DEFAULT_SYSTEM_PROMPT,
+  normalizeTranslationPromptMode,
   GEMINI_MODEL,
   GEMINI_MODELS,
   CODEX_MODEL,
@@ -60,6 +63,7 @@ export {
   isTranslationPostHeader,
 };
 export type { TranslationBatchInput } from './ollamaService';
+export type { TranslationInstruction, TranslationPromptMode } from './ollamaService';
 export type { GeminiModel } from './geminiService';
 export type { CodexModel, CodexReasoningEffort } from './codexService';
 
@@ -69,6 +73,8 @@ export const GEMINI_SESSION_KEY = 'aat_gemini_api_key';
 export const OPENROUTER_SESSION_KEY = 'aat_openrouter_api_key';
 export const OLLAMA_MODEL_STORAGE_KEY = 'aat_ollama_model';
 export const GEMINI_MODEL_STORAGE_KEY = 'aat_gemini_model';
+export const PROMPT_MODE_STORAGE_KEY = 'aat_prompt_mode';
+export const FULL_PROMPT_STORAGE_KEY = 'aat_full_system_prompt';
 export const CODEX_MODEL_STORAGE_KEY = 'aat_codex_model';
 export const CODEX_REASONING_EFFORT_STORAGE_KEY = 'aat_codex_reasoning_effort';
 
@@ -115,7 +121,7 @@ export async function translateSelection(
   textToTranslate: string,
   customDict: DictionaryEntry[] = [],
   useDefaultDict = true,
-  systemInstruction = DEFAULT_SYSTEM_PROMPT,
+  systemInstruction: TranslationInstruction = DEFAULT_SYSTEM_PROMPT,
   model?: string,
   codexReasoningEffort: CodexReasoningEffort = CODEX_REASONING_EFFORT,
 ): Promise<TranslationResponseData> {
@@ -163,7 +169,7 @@ export async function translateBatch(
   texts: TranslationBatchInput[],
   customDict: DictionaryEntry[] = [],
   useDefaultDict = true,
-  systemInstruction = DEFAULT_SYSTEM_PROMPT,
+  systemInstruction: TranslationInstruction = DEFAULT_SYSTEM_PROMPT,
   onProgress?: (progress: TranslationProgress) => void,
   onPartialResult?: (
     translations: string[],

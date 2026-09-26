@@ -8,6 +8,16 @@ interface ChangelogModalProps {
 
 const changelogData = [
   {
+    version: '1.11.14',
+    date: '2026-09-26',
+    title: '번역 프롬프트 전체 직접 작성',
+    changes: [
+      '기존 고정 규칙 없이 시스템 프롬프트를 처음부터 작성하는 새 탭 추가',
+      '전체 지우기와 실제 적용 프롬프트 확인·복사 지원',
+      '직접 작성한 내용과 선택 모드는 저장하고 기존 사용자 스타일은 별도로 보존',
+    ],
+  },
+  {
     version: '1.11.13',
     date: '2026-09-26',
     title: 'GPT 모델 선택과 번역·AA 감지 복구',

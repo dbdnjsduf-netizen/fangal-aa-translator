@@ -8,6 +8,7 @@ import {
   DEFAULT_SYSTEM_PROMPT,
   isTranslationPostHeader,
   parseIndexedTranslations,
+  normalizeTranslationPromptMode,
   resolveStoredSystemPrompt,
   TRANSLATION_POST_BOUNDARY,
   TranslationBatchInput,
@@ -66,6 +67,18 @@ test('문자열 안의 괄호를 JSON 경계로 오인하지 않는다', () => {
 test('저장된 사용자 스타일은 보존하고 빈 설정은 개선된 기본 프롬프트로 복구한다', () => {
   assert.equal(resolveStoredSystemPrompt(null), DEFAULT_SYSTEM_PROMPT);
   assert.equal(resolveStoredSystemPrompt('반말로 번역해줘.'), '반말로 번역해줘.');
+});
+
+test('전체 직접 작성 모드는 기존 고정 규칙을 붙이지 않고 입력한 시스템 프롬프트만 사용한다', () => {
+  const custom = '내가 처음부터 작성한 번역 지시.\n말투는 내가 정한다.';
+  assert.equal(normalizeTranslationPromptMode(null), 'style');
+  assert.equal(normalizeTranslationPromptMode('full'), 'full');
+  assert.equal(normalizeTranslationPromptMode('unknown'), 'style');
+  assert.equal(buildTranslationSystemInstruction({ mode: 'full', text: custom }), custom);
+  assert.match(
+    buildTranslationSystemInstruction({ mode: 'style', text: custom }),
+    /USER-EDITABLE LOCALIZATION STYLE:/u,
+  );
 });
 
 test('커스텀 프롬프트를 사용해도 화자 추측 없이 원문 어미 기반 말투 대응표를 함께 전달한다', () => {

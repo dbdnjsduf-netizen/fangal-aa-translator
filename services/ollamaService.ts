@@ -110,6 +110,13 @@ export const DEFAULT_SYSTEM_PROMPT = `KOREAN LOCALIZATION STYLE:
 - Preserve purposeful repetition, stuttering, long vowels, ellipses, comic escalation, and recognizable stock delivery when they affect the performance of the line.
 - When wording is genuinely ambiguous, choose the interpretation best supported by nearby text and established terminology; never explain alternatives in the output.`;
 
+export type TranslationPromptMode = 'style' | 'full';
+export type TranslationInstruction = string | { mode: TranslationPromptMode; text: string };
+
+export function normalizeTranslationPromptMode(value: string | null): TranslationPromptMode {
+  return value === 'full' ? 'full' : 'style';
+}
+
 export function resolveStoredSystemPrompt(storedPrompt: string | null): string {
   if (
     !storedPrompt
@@ -203,7 +210,7 @@ export async function translateSelection(
   textToTranslate: string,
   customDict: DictionaryEntry[] = [],
   useDefaultDict = true,
-  systemInstruction = DEFAULT_SYSTEM_PROMPT,
+  systemInstruction: TranslationInstruction = DEFAULT_SYSTEM_PROMPT,
   model?: string,
 ): Promise<TranslationResponseData> {
   const result = await translateChunk(
@@ -221,7 +228,7 @@ export async function translateBatch(
   texts: TranslationBatchInput[],
   customDict: DictionaryEntry[] = [],
   useDefaultDict = true,
-  systemInstruction = DEFAULT_SYSTEM_PROMPT,
+  systemInstruction: TranslationInstruction = DEFAULT_SYSTEM_PROMPT,
   onProgress?: (progress: TranslationProgress) => void,
   onPartialResult?: (translations: string[], usage: ApiUsageStats) => void,
   model?: string,
@@ -657,7 +664,7 @@ async function translateChunk(
   gaps: number[],
   customDict: DictionaryEntry[],
   useDefaultDict: boolean,
-  systemInstruction: string,
+  systemInstruction: TranslationInstruction,
   model?: string,
 ) {
   const prompt = buildTranslationPrompt(chunk, gaps, customDict, useDefaultDict);
@@ -735,7 +742,7 @@ async function translateChunkResilient(
   gaps: number[],
   customDict: DictionaryEntry[],
   useDefaultDict: boolean,
-  systemInstruction: string,
+  systemInstruction: TranslationInstruction,
   model?: string,
   onRecoveredPartial?: (offset: number, translations: string[]) => void,
   baseOffset = 0,
@@ -901,9 +908,13 @@ async function requestChat(
   }
 }
 
-export function buildTranslationSystemInstruction(systemInstruction: string) {
+export function buildTranslationSystemInstruction(systemInstruction: TranslationInstruction) {
+  if (typeof systemInstruction !== 'string' && systemInstruction.mode === 'full') {
+    return systemInstruction.text;
+  }
+  const style = typeof systemInstruction === 'string' ? systemInstruction : systemInstruction.text;
   return `${CORE_TRANSLATION_RULES}\n\n${CHARACTER_VOICE_RULES}\n\nUSER-EDITABLE LOCALIZATION STYLE:\n${
-    systemInstruction.trim() || DEFAULT_SYSTEM_PROMPT
+    style.trim() || DEFAULT_SYSTEM_PROMPT
   }`;
 }
 
