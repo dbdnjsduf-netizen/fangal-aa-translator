@@ -44,6 +44,7 @@ export interface RemoteTranslationConfig {
 export type RemoteTranslationError = Error & {
   retryable?: boolean;
   splitRecoverable?: boolean;
+  retryDelayMs?: number;
   usage?: RemoteUsage;
   invalidIndices?: number[];
   partialTranslations?: Array<string | undefined>;
@@ -253,6 +254,10 @@ async function translateChunkResilient(
   } catch (error) {
     const parentUsage = getErrorUsage(error);
     const translationError = error as RemoteTranslationError;
+    // Item recovery and splitting otherwise bypass the normal retry backoff.
+    if (chunk.length > 1 && translationError.splitRecoverable && translationError.retryDelayMs) {
+      await delayWithJitter(translationError.retryDelayMs);
+    }
     const invalidIndices = translationError.invalidIndices || [];
     const partialTranslations = translationError.partialTranslations;
     if (

@@ -11,7 +11,8 @@ import {
   X,
 } from 'lucide-react';
 import { CodexRuntimeInfo, OllamaRuntimeInfo, TranslationProvider } from '../types';
-import { CODEX_MODEL, OPENROUTER_MODEL } from '../services/translationService';
+import { CODEX_MODELS, CODEX_REASONING_EFFORTS, OPENROUTER_MODEL } from '../services/translationService';
+import type { CodexModel, CodexReasoningEffort } from '../services/translationService';
 import { GEMINI_MODELS, GeminiModel } from '../services/geminiService';
 
 interface TranslationSettingsModalProps {
@@ -26,6 +27,8 @@ interface TranslationSettingsModalProps {
   provider: TranslationProvider;
   ollamaModel: string;
   geminiModel: GeminiModel;
+  codexModel: CodexModel;
+  codexReasoningEffort: CodexReasoningEffort;
   geminiApiKey: string;
   openRouterApiKey: string;
   onSave: (
@@ -34,6 +37,8 @@ interface TranslationSettingsModalProps {
     openRouterApiKey: string,
     ollamaModel: string,
     geminiModel: GeminiModel,
+    codexModel: CodexModel,
+    codexReasoningEffort: CodexReasoningEffort,
   ) => void;
 }
 
@@ -61,7 +66,7 @@ const PROVIDERS: Array<{
   {
     id: 'codex',
     title: 'Codex 로그인',
-    description: 'ChatGPT 구독 OAuth · GPT-5.6 Luna',
+    description: 'ChatGPT 구독 OAuth · GPT-6 Luna / Sol',
     color: 'violet',
     icon: Terminal,
   },
@@ -100,6 +105,8 @@ export const TranslationSettingsModal: React.FC<TranslationSettingsModalProps> =
   provider,
   ollamaModel,
   geminiModel,
+  codexModel,
+  codexReasoningEffort,
   geminiApiKey,
   openRouterApiKey,
   onSave,
@@ -107,6 +114,8 @@ export const TranslationSettingsModal: React.FC<TranslationSettingsModalProps> =
   const [draftProvider, setDraftProvider] = useState<TranslationProvider>(provider);
   const [draftOllamaModel, setDraftOllamaModel] = useState(ollamaModel);
   const [draftGeminiModel, setDraftGeminiModel] = useState<GeminiModel>(geminiModel);
+  const [draftCodexModel, setDraftCodexModel] = useState<CodexModel>(codexModel);
+  const [draftCodexReasoningEffort, setDraftCodexReasoningEffort] = useState<CodexReasoningEffort>(codexReasoningEffort);
   const [draftGeminiApiKey, setDraftGeminiApiKey] = useState(geminiApiKey);
   const [draftOpenRouterApiKey, setDraftOpenRouterApiKey] = useState(openRouterApiKey);
   const [showGeminiApiKey, setShowGeminiApiKey] = useState(false);
@@ -117,11 +126,13 @@ export const TranslationSettingsModal: React.FC<TranslationSettingsModalProps> =
     setDraftProvider(provider);
     setDraftOllamaModel(ollamaModel);
     setDraftGeminiModel(geminiModel);
+    setDraftCodexModel(codexModel);
+    setDraftCodexReasoningEffort(codexReasoningEffort);
     setDraftGeminiApiKey(geminiApiKey);
     setDraftOpenRouterApiKey(openRouterApiKey);
     setShowGeminiApiKey(false);
     setShowOpenRouterApiKey(false);
-  }, [geminiApiKey, geminiModel, isOpen, ollamaModel, openRouterApiKey, provider]);
+  }, [codexModel, codexReasoningEffort, geminiApiKey, geminiModel, isOpen, ollamaModel, openRouterApiKey, provider]);
 
   if (!isOpen) return null;
 
@@ -226,6 +237,10 @@ export const TranslationSettingsModal: React.FC<TranslationSettingsModalProps> =
               status={codexStatus}
               ready={codexReady}
               isChecking={isCheckingCodex}
+              model={draftCodexModel}
+              reasoningEffort={draftCodexReasoningEffort}
+              onModelChange={setDraftCodexModel}
+              onReasoningEffortChange={setDraftCodexReasoningEffort}
             />
           )}
 
@@ -278,6 +293,8 @@ export const TranslationSettingsModal: React.FC<TranslationSettingsModalProps> =
                 draftOpenRouterApiKey.trim(),
                 draftOllamaModel,
                 draftGeminiModel,
+                draftCodexModel,
+                draftCodexReasoningEffort,
               );
               onClose();
             }}
@@ -348,13 +365,49 @@ function CodexSettings({
   status,
   ready,
   isChecking,
+  model,
+  reasoningEffort,
+  onModelChange,
+  onReasoningEffortChange,
 }: {
   status: CodexRuntimeInfo | null;
   ready: boolean;
   isChecking: boolean;
+  model: CodexModel;
+  reasoningEffort: CodexReasoningEffort;
+  onModelChange: (model: CodexModel) => void;
+  onReasoningEffortChange: (effort: CodexReasoningEffort) => void;
 }) {
   return (
     <>
+      <div className="grid sm:grid-cols-2 gap-3">
+        <div className="space-y-2">
+          <label htmlFor="codex-model" className="text-sm font-medium text-slate-200">GPT 모델</label>
+          <select
+            id="codex-model"
+            value={model}
+            onChange={(event) => onModelChange(event.target.value as CodexModel)}
+            className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-violet-500"
+          >
+            {CODEX_MODELS.map((item) => (
+              <option key={item} value={item}>{item === 'gpt-6-luna' ? 'GPT-6 Luna' : 'GPT-6 Sol'}</option>
+            ))}
+          </select>
+        </div>
+        <div className="space-y-2">
+          <label htmlFor="codex-reasoning-effort" className="text-sm font-medium text-slate-200">추론 강도</label>
+          <select
+            id="codex-reasoning-effort"
+            value={reasoningEffort}
+            onChange={(event) => onReasoningEffortChange(event.target.value as CodexReasoningEffort)}
+            className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-violet-500"
+          >
+            {CODEX_REASONING_EFFORTS.map((effort) => (
+              <option key={effort} value={effort}>{effort}</option>
+            ))}
+          </select>
+        </div>
+      </div>
       <RuntimeStatus
         ready={ready}
         checking={isChecking}
@@ -363,7 +416,7 @@ function CodexSettings({
       />
       <dl className="grid grid-cols-[110px_1fr] gap-y-3 text-sm bg-slate-950 p-4 rounded-xl border border-slate-800">
         <dt className="text-slate-500">모델</dt>
-        <dd className="text-violet-300 font-mono break-all">{CODEX_MODEL}</dd>
+        <dd className="text-violet-300 font-mono break-all">{model} · {reasoningEffort}</dd>
         <dt className="text-slate-500">Codex CLI</dt>
         <dd className="text-slate-300">{status?.cliVersion || '확인되지 않음'}</dd>
         <dt className="text-slate-500">인증 방식</dt>

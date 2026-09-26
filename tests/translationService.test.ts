@@ -10,6 +10,8 @@ import {
   getProviderModelLabel,
   isProviderReady,
   normalizeTranslationProvider,
+  normalizeCodexModel,
+  normalizeCodexReasoningEffort,
 } from '../services/translationService';
 
 test('저장된 엔진 값은 허용된 공급자로만 복구한다', () => {
@@ -27,6 +29,16 @@ test('저장된 Gemini 모델은 지원 목록으로만 복구한다', () => {
   assert.equal(normalizeGeminiModel('unknown-model'), 'gemini-3.6-flash');
 });
 
+test('Codex 모델과 추론 강도는 허용 목록으로 복구하고 기본값은 Sol low다', () => {
+  assert.equal(normalizeCodexModel(null), 'gpt-6-sol');
+  assert.equal(normalizeCodexModel('gpt-6-luna'), 'gpt-6-luna');
+  assert.equal(normalizeCodexModel('unknown'), 'gpt-6-sol');
+  assert.equal(normalizeCodexReasoningEffort(null), 'low');
+  assert.equal(normalizeCodexReasoningEffort('medium'), 'medium');
+  assert.equal(normalizeCodexReasoningEffort('high'), 'high');
+  assert.equal(normalizeCodexReasoningEffort('invalid'), 'low');
+});
+
 test('선택한 엔진에 맞는 준비 상태와 모델명을 반환한다', () => {
   assert.equal(isProviderReady('ollama', '', true), true);
   assert.equal(isProviderReady('ollama', 'unused-key', false), false);
@@ -37,7 +49,7 @@ test('선택한 엔진에 맞는 준비 상태와 모델명을 반환한다', ()
   assert.equal(isProviderReady('codex', '', false, {
     ok: true,
     authenticated: true,
-    model: 'gpt-5.6-luna',
+    model: 'gpt-6-sol',
     cliVersion: 'codex-cli test',
     message: 'ready',
   }), true);
@@ -48,7 +60,8 @@ test('선택한 엔진에 맞는 준비 상태와 모델명을 반환한다', ()
     'gemini-3.1-flash-lite',
   );
   assert.equal(getProviderModelLabel('ollama', 'custom-model'), 'custom-model');
-  assert.equal(getProviderModelLabel('codex'), 'gpt-5.6-luna');
+  assert.equal(getProviderModelLabel('codex'), 'gpt-6-sol');
+  assert.equal(getProviderModelLabel('codex', 'unused', 'gemini-3.6-flash', 'gpt-6-luna'), 'gpt-6-luna');
   assert.equal(getProviderModelLabel('openrouter'), 'google/gemma-3-27b-it');
 });
 

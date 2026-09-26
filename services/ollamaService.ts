@@ -1,4 +1,5 @@
 import { ApiUsageStats, DictionaryEntry, OllamaRuntimeInfo } from '../types';
+import { findUnexpectedToolOutput } from './translationOutputGuard';
 
 export const DEFAULT_DICTIONARY: DictionaryEntry[] = [
   { id: 'def-1', original: 'やる夫', translated: '야루오' },
@@ -138,6 +139,7 @@ interface Usage {
 type TranslationError = Error & {
   retryable?: boolean;
   splitRecoverable?: boolean;
+  retryDelayMs?: number;
   usage?: Usage;
   invalidIndices?: number[];
   partialTranslations?: Array<string | undefined>;
@@ -553,6 +555,7 @@ export function validateTranslatedItems(inputs: string[], translations: string[]
 
   if (issues.length > 0) {
     const error = makeRetryableValidationError(issues[0].error.message);
+    error.retryDelayMs = Math.max(...issues.map(({ error }) => error.retryDelayMs || 0));
     error.invalidIndices = issues.map(({ index }) => index);
     error.partialTranslations = validated;
     error.rejectedTranslations = [...translations];
@@ -564,6 +567,15 @@ export function validateTranslatedItems(inputs: string[], translations: string[]
 
 function validateTranslatedItem(input: string, translation: string, index: number) {
   const source = input.replace(/^⟦VERTICAL_MAX=\d+⟧/i, '').trim();
+  // Reject before sanitizing or returning non-Japanese inputs as valid.
+  const toolMarker = findUnexpectedToolOutput(source, translation);
+  if (toolMarker) {
+    const error = makeRetryableValidationError(
+      `${index + 1}번 번역에 원문에 없는 도구 실행 문자열(${toolMarker})이 포함되어 있습니다.`,
+    );
+    error.retryDelayMs = 2_000;
+    throw error;
+  }
   const sanitized = sanitizeTranslationCandidate(source, translation);
   const output = sanitized.trim();
   if (!containsJapaneseText(source)) return sanitized;
@@ -705,7 +717,7 @@ async function translateChunk(
       if ((error as TranslationError)?.splitRecoverable && chunk.length > 1) {
         break;
       }
-      if (!(error as TranslationError)?.splitRecoverable) {
+      if (!(error as TranslationError)?.splitRecoverable || (error as TranslationError)?.retryDelayMs) {
         await delayWithJitter(Math.min(2_000 * (2 ** attempt), 12_000));
       }
     }
@@ -745,6 +757,9 @@ async function translateChunkResilient(
   } catch (error) {
     const parentUsage = getErrorUsage(error);
     const translationError = error as TranslationError;
+    if (chunk.length > 1 && translationError.splitRecoverable && translationError.retryDelayMs) {
+      await delayWithJitter(translationError.retryDelayMs);
+    }
     const invalidIndices = translationError.invalidIndices || [];
     const partialTranslations = translationError.partialTranslations;
     if (
@@ -906,6 +921,7 @@ Translate the requested input again from the source, not by editing or defending
 - Return one JSON array containing exactly ${expectedCount} Korean strings at their original indices.
 - Fully translate every Japanese kana, half-width katakana, and CJK ideograph; do not copy or annotate the source.
 - Preserve source meaning and source-marked voice while keeping Latin letters, numbers, and punctuation only where semantically appropriate.
+- Do not insert tool calls, tool parameters, execution logs, or protocol markers into translations. Preserve technical terms only when present in the source.
 - Do not merge adjacent items, return an empty Japanese item, or add any explanation outside the JSON array.`;
 }
 

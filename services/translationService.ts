@@ -23,7 +23,14 @@ import {
 } from './geminiService';
 import {
   CODEX_MODEL,
+  CODEX_MODELS,
+  CODEX_REASONING_EFFORT,
+  CODEX_REASONING_EFFORTS,
+  CodexModel,
+  CodexReasoningEffort,
   getCodexRuntimeInfo,
+  normalizeCodexModel,
+  normalizeCodexReasoningEffort,
   translateBatch as translateBatchWithCodex,
   translateSelection as translateSelectionWithCodex,
 } from './codexService';
@@ -39,8 +46,13 @@ export {
   GEMINI_MODEL,
   GEMINI_MODELS,
   CODEX_MODEL,
+  CODEX_MODELS,
+  CODEX_REASONING_EFFORT,
+  CODEX_REASONING_EFFORTS,
   getOllamaRuntimeInfo,
   getCodexRuntimeInfo,
+  normalizeCodexModel,
+  normalizeCodexReasoningEffort,
   normalizeGeminiModel,
   OPENROUTER_MODEL,
   resolveStoredSystemPrompt,
@@ -49,6 +61,7 @@ export {
 };
 export type { TranslationBatchInput } from './ollamaService';
 export type { GeminiModel } from './geminiService';
+export type { CodexModel, CodexReasoningEffort } from './codexService';
 
 export const DEFAULT_TRANSLATION_PROVIDER: TranslationProvider = 'ollama';
 export const TRANSLATION_PROVIDER_STORAGE_KEY = 'aat_translation_provider';
@@ -56,6 +69,8 @@ export const GEMINI_SESSION_KEY = 'aat_gemini_api_key';
 export const OPENROUTER_SESSION_KEY = 'aat_openrouter_api_key';
 export const OLLAMA_MODEL_STORAGE_KEY = 'aat_ollama_model';
 export const GEMINI_MODEL_STORAGE_KEY = 'aat_gemini_model';
+export const CODEX_MODEL_STORAGE_KEY = 'aat_codex_model';
+export const CODEX_REASONING_EFFORT_STORAGE_KEY = 'aat_codex_reasoning_effort';
 
 export function normalizeTranslationProvider(value: string | null): TranslationProvider {
   return value === 'gemini' || value === 'codex' || value === 'openrouter'
@@ -74,9 +89,10 @@ export function getProviderModelLabel(
   provider: TranslationProvider,
   ollamaModel = 'gemma4:31b-cloud',
   geminiModel: GeminiModel = GEMINI_MODEL,
+  codexModel: CodexModel = CODEX_MODEL,
 ) {
   if (provider === 'gemini') return geminiModel;
-  if (provider === 'codex') return CODEX_MODEL;
+  if (provider === 'codex') return codexModel;
   if (provider === 'openrouter') return OPENROUTER_MODEL;
   return ollamaModel;
 }
@@ -101,6 +117,7 @@ export async function translateSelection(
   useDefaultDict = true,
   systemInstruction = DEFAULT_SYSTEM_PROMPT,
   model?: string,
+  codexReasoningEffort: CodexReasoningEffort = CODEX_REASONING_EFFORT,
 ): Promise<TranslationResponseData> {
   if (provider === 'gemini') {
     return translateSelectionWithGemini(
@@ -118,6 +135,8 @@ export async function translateSelection(
       customDict,
       useDefaultDict,
       systemInstruction,
+      normalizeCodexModel(model),
+      codexReasoningEffort,
     );
   }
   if (provider === 'openrouter') {
@@ -156,6 +175,7 @@ export async function translateBatch(
     },
   ) => void,
   model?: string,
+  codexReasoningEffort: CodexReasoningEffort = CODEX_REASONING_EFFORT,
 ): Promise<BatchTranslationResult> {
   if (provider === 'gemini') {
     return translateBatchWithGemini(
@@ -177,6 +197,8 @@ export async function translateBatch(
       systemInstruction,
       onProgress,
       onPartialResult,
+      normalizeCodexModel(model),
+      codexReasoningEffort,
     );
   }
   if (provider === 'openrouter') {

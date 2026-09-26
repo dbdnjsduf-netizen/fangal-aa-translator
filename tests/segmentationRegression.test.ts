@@ -112,6 +112,48 @@ test('스마트 모드 후처리를 워커 안에서 끝내고 완성된 세그�
   assert.equal(demonKing?.isSelected, false);
 });
 
+test('HTML 공백 엔티티 앞의 자연스러운 일본어 문장을 원문 훼손 없이 자동선택한다', () => {
+  const phrases = [
+    ['それはつまり「C」が子供の容姿を', '&#x20;'],
+    ['それはつまり「G」が大人の容姿を', '&#32;'],
+    ['「X1」と「Y2」を比較する', '&nbsp;'],
+    ['●●市の市役所', '&#x20;'],
+    ['●●県の県庁', '&#32;'],
+    ['◆◆社の社員', '&nbsp;'],
+  ] as const;
+  const source = phrases.flatMap(([phrase, entity]) => [
+    '',
+    `　　　${phrase} ${entity}`,
+  ]).concat('').join('\n');
+  const result = selectAllTranslatableSegments(segment(source));
+
+  for (const [phrase] of phrases) {
+    const target = result.find(({ text }) => text === phrase);
+    assert.equal(target?.isSelected, true, `${phrase}: ${JSON.stringify(target)}`);
+  }
+  assert.equal(result.map(({ text }) => text).join(''), source);
+});
+
+test('밀집 AA 오른쪽의 인용 식별자·익명 표식 일본어 문장을 범용적으로 선택한다', () => {
+  const source = [
+    '　ﾍ:.|>}:.　 :.:.:.:!　つ二ノ/　　／ ´　　　　　　　　　　　 でもその弟は既に死亡している',
+    '　 .!:::::::l　i　 :.:.:.:l　 　 　 　 　 　 :!　　　　　　　　　　年齢は一歳',
+    '.,T:,\'　|::::::::l　∨　:.:.:ヽ　　　 　 　 　 \':.　　　　　　それはつまり「G」が子供の容姿を',
+    'ﾉ├\':::::l　｜::::::|　 ∨ :.:.::.ﾊヽ、　　　　　／　　　　　判断できる段階になる',
+    '',
+    '　ヾ ヽ　|　 !汁ド､トﾊ　 ヽゝ‐-ヾ-\'=､__!＿',
+    '　.i| ヽヽ` ｰ´　　 `｀ヾ 斗云弐ﾐ=!,ヽヾ　　　　　　　　　◆◆県の県庁',
+    '　ヽ　ヽ　　　　　　　　 ｀￣´　 /　} ､',
+  ].join('\n');
+  const result = selectAllTranslatableSegments(segment(source));
+
+  for (const phrase of ['それはつまり「G」が子供の容姿を', '◆◆県の県庁']) {
+    const target = result.find(({ text }) => text === phrase);
+    assert.equal(target?.isSelected, true, `${phrase}: ${JSON.stringify(target)}`);
+    assert.equal(target?.isAutoSelectExcluded, false, JSON.stringify(target));
+  }
+});
+
 test('새 수동정규식은 기존 스마트 세그먼트에 워커로 증분 적용된다', () => {
   const sourceSegments = segment('　　勇者　　');
   workerResult = undefined;
