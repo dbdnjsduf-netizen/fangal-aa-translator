@@ -21,9 +21,25 @@ const RE_JAPANESE_CHAR = /[\u3040-\u309f\u30a0-\u30ff\uff66-\uff9d\u4e00-\u9faf\
 const RE_JAPANESE_CHARS_G = /[\u3040-\u309f\u30a0-\u30ff\uff66-\uff9d\u4e00-\u9faf\u3400-\u4dbf]/g;
 const RE_JAPANESE_PUNCTUATION = /[!?！？。、…「」『』（）［］【】♥♡]/;
 const RE_INLINE_DRAWING = /[|│┃｜\/／\\＼_＿￣─━≦≧=＝<＜>＞∫∬\u2500-\u257F\u2580-\u259F]/;
-const RE_GAP = /([\s\u3000\u00A0\u2000-\u200B]*(?:[|│┃｜＞＜\u2500-\u257F／＼\[\]｛｝［］★◆]+|[\s\u3000\u00A0\u2000-\u200B]{2,})[\s\u3000\u00A0\u2000-\u200B]*)/;
-const RE_SEPARATOR = /^[\s\u3000\u00A0\u2000-\u200B]*(?:[|│┃｜＞＜\u2500-\u257F／＼\[\]｛｝［］★◆]+|[\s\u3000\u00A0\u2000-\u200B]{2,})[\s\u3000\u00A0\u2000-\u200B]*$/;
-const RE_WHITESPACE_GAP = /^[\s\u3000\u00A0\u2000-\u200B]{2,}$/;
+// Some archived AA sources preserve HTML whitespace entities as literal text.
+// Treat them as layout whitespace for detection while retaining the exact
+// source characters in non-translated segments and downloaded files.
+const HTML_SPACE_ENTITY_SOURCE = String.raw`&(?:#(?:x0*20|0*32)|nbsp);`;
+const SPACE_TOKEN_SOURCE = String.raw`(?:[\s\u3000\u00A0\u2000-\u200B]|${HTML_SPACE_ENTITY_SOURCE})`;
+const STRUCTURAL_SEPARATOR_SOURCE = String.raw`[|│┃｜＞＜\u2500-\u257F／＼\\\[\]｛｝［］]+`;
+// A run ending at whitespace is decoration. A run joined directly to Japanese
+// (`◆◆市`) is an anonymized name prefix and must stay with the sentence.
+const DECORATIVE_SEPARATOR_SOURCE = `[★◆]+(?=(?:${SPACE_TOKEN_SOURCE})|$)`;
+const DRAWING_SEPARATOR_SOURCE = `(?:${STRUCTURAL_SEPARATOR_SOURCE}|${DECORATIVE_SEPARATOR_SOURCE})`;
+const RE_GAP = new RegExp(
+  `((?:${SPACE_TOKEN_SOURCE})*(?:${DRAWING_SEPARATOR_SOURCE}|(?:${SPACE_TOKEN_SOURCE}){2,})(?:${SPACE_TOKEN_SOURCE})*)`,
+  'i',
+);
+const RE_SEPARATOR = new RegExp(
+  `^(?:${SPACE_TOKEN_SOURCE})*(?:${DRAWING_SEPARATOR_SOURCE}|(?:${SPACE_TOKEN_SOURCE}){2,})(?:${SPACE_TOKEN_SOURCE})*$`,
+  'i',
+);
+const RE_WHITESPACE_GAP = new RegExp(`^(?:${SPACE_TOKEN_SOURCE}){2,}$`, 'i');
 const RE_BAR_END = /[|│┃｜＞＜／＼\[\]｛｝［］\u2500-\u257F★◆■□●○◎◇△▽▲▼＋＊*#+\-_=]$/;
 const RE_BAR_START = /^[|│┃｜＞＜／＼\[\]｛｝［］\u2500-\u257F★◆■□●○◎◇△▽▲▼＋＊*#+\-_=]/;
 const RE_BAR_CHAR = /[|│┃｜＞＜\u2500-\u257F／＼\[\]｛｝［］★◆■□●○◎◇△▽▲▼＋＊*#+\-_=]/;
@@ -34,7 +50,11 @@ const RE_BOX_PIPE_CHAR_LEFT = /[|│┃｜＞\u2500-\u257F]/;
 const RE_BOX_PIPE_CHAR_RIGHT = /[|│┃｜＜\u2500-\u257F]/;
 const RE_ARROW_BOX_START = /[>＞|｜]/;
 const RE_ARROW_BOX_END = /[<＜|｜]/;
-const RE_EDGE_BLANK = /^[\s\u200B\u3000\u00A0\u2000-\u200B│┃|｜＞＜／＼\u2500-\u257F人从⌒YWV^‐―＝≡   ´｀ヽヾ乂ノﾚﾉ]*$/;
+const EDGE_BLANK_CHARACTER_SOURCE = String.raw`[\s\u200B\u3000\u00A0\u2000-\u200B│┃|｜＞＜／＼\u2500-\u257F人从⌒YWV^‐―＝≡   ´｀ヽヾ乂ノﾚﾉ]`;
+const RE_EDGE_BLANK = new RegExp(
+  `^(?:${EDGE_BLANK_CHARACTER_SOURCE}|${HTML_SPACE_ENTITY_SOURCE})*$`,
+  'i',
+);
 const RE_STRUCTURAL_REPEAT = /[二三壬]{2,}|[口ロ十]{3,}/;
 const RE_LINE_BORDERS = /[|│┃｜_＿￣─━\-\/／\\＼]{2,}/;
 const RE_BOUNDARY_DRAWING = /^[\s\u3000]*[|│┃｜\/／\\＼_＿￣─━]|[\s\u3000]*[|│┃｜\/／\\＼_＿￣─━][\s\u3000]*$/;
@@ -51,7 +71,7 @@ const RE_THREAD_NAME = /^\s*\d+\s*[:：].*?(?:◆|ID[:：]\w|\d{4}[\/\-]\d{1,2}[
 // Box border chars: horiz ─━ (U+2500-01), vert │┃ (U+2502-03), dashed (U+2504-05,2508-09), corners/intersections (U+250C-254D), double (U+2550,2552-2573), ASCII/fullwidth pipes (|｜)
 const RE_BOX_HORIZONTAL_BORDER = /^[\s\u200B￣＿\u2500-\u2503\u2504\u2505\u2508\u2509\u250C-\u254D\u2550\u2552-\u2573\-|｜]*$/;
 const RE_BOX_BORDER_ANY = /^[\s\u200B\u3000\u00A0\u2000-\u200B￣＿\-\u2500-\u257F｜|＞＜／＼人从⌒YWV^‐―＝≡   \[\]｛｝［］★◆■□●○◎◇△▽▲▼＋＊*#+\-_=f,x'´｀ヽヾ乂ノﾚﾉ:.]*$/;
-const RE_STRICT_BLANK = /^[\s\u3000\u00A0\u2000-\u200B]*$/;
+const RE_STRICT_BLANK = new RegExp(`^(?:${SPACE_TOKEN_SOURCE})*$`, 'i');
 // A real box border separator has 1 or more pipe/arrow/box chars with optional whitespace
 const RE_HW_DAKUTEN = /[\uff9e\uff9f]/;
 const RE_DISQUALIFIED = /[}｝囗＿|ｌl丿／｜><]/;
@@ -668,6 +688,26 @@ const isAcronymCjkPhrase = (text: string): boolean => {
   const normalized = text.normalize('NFKC')
     .replace(/[\s\u3000\u00a0\u2000-\u200b]+/gu, '');
   return /^[A-Z][A-Z0-9]{1,7}[一-龯々〆ヵヶ]{1,8}[.!?！？。、…]*$/u.test(normalized);
+};
+
+/**
+ * Short quoted identifiers and anonymized proper-name prefixes are ordinary
+ * notation inside Japanese prose, not evidence of mixed-script AA texture.
+ * Spatial checks remain mandatory at each call site.
+ */
+const isJapaneseNotationPhrase = (text: string): boolean => {
+  const normalized = text.normalize('NFKC').trim();
+  const hasQuotedIdentifier = /[「『(【][A-Za-z0-9]{1,8}[」』)】]/u.test(normalized);
+  const hasAnonymizedName = /(?:^|[\s　])[●○■□◆◇★☆]{2,}(?=[ぁ-んァ-ヶ一-龯々〆ヵヶ])/u
+    .test(normalized);
+  if (!hasQuotedIdentifier && !hasAnonymizedName) return false;
+
+  const japanese = normalized.match(RE_JAPANESE_CHARS_G) || [];
+  const hiraganaCount = japanese.filter((character) => /[ぁ-ん]/u.test(character)).length;
+  const cjkCount = japanese.filter((character) => /[一-龯々〆ヵヶ]/u.test(character)).length;
+  return japanese.length >= 4
+    && (hiraganaCount >= 2 || cjkCount >= 2)
+    && hasStrongLexicalEvidence(normalized);
 };
 
 const isShortNumericJapanesePhrase = (text: string): boolean => {
@@ -1369,6 +1409,7 @@ function segmentContent(
       );
       const contentBeforeCandidate = line.substring(0, currentOffset);
       const contentAfterCandidate = line.substring(currentOffset + part.length);
+      const hasJapaneseNotation = isJapaneseNotationPhrase(part);
       const immediateLeftWhitespace = contentBeforeCandidate
         .match(/[\s\u3000\u00a0\u2000-\u200b]+$/u)?.[0] || '';
       const immediateRightWhitespace = contentAfterCandidate
@@ -1432,10 +1473,15 @@ function segmentContent(
         && leadingWhitespaceWidth >= 8
         && RE_STRICT_BLANK.test(contentAfterCandidate)
         && isAcronymCjkPhrase(part);
+      const isRightDetachedNotationPhrase = !isThreadNameLine
+        && hasJapaneseNotation
+        && leadingWhitespaceWidth >= 8
+        && RE_STRICT_BLANK.test(contentAfterCandidate);
       const isRightDetachedNaturalAnnotation = isRightDetachedParentheticalGloss
         || isRightDetachedKanaStutter
         || isRightDetachedNaturalJapanesePhrase
-        || isRightDetachedAcronymCjkPhrase;
+        || isRightDetachedAcronymCjkPhrase
+        || isRightDetachedNotationPhrase;
       const hasMixedKanjiHiragana = /[一-龯々〆ヵヶ]/u.test(trimmedPart)
         && /[ぁ-ん]/u.test(trimmedPart)
         && !isShortCjkSmallKana;
@@ -1539,7 +1585,8 @@ function segmentContent(
           || /[^ぁ-んァ-ヶ\uff66-\uff9f一-龯!?！？。、…「」『』（）［］【】]/u.test(character)
         )
       )).length;
-      const hasAttachedAADrawingTexture = attachedDrawingGlyphCount >= 2;
+      const hasAttachedAADrawingTexture = attachedDrawingGlyphCount >= 2
+        && !hasJapaneseNotation;
       const isParenthesizedNaturalDialogue = hasStrongLanguage
         && /^[（(][ぁ-んァ-ヶ\uff66-\uff9f一-龯々〆ヵヶ!?！？。、…「」『』\s\u3000]+[）)]$/u
           .test(trimmedPart);
@@ -1612,6 +1659,7 @@ function segmentContent(
         || isRightDetachedNaturalAnnotation
         || hasMixedKanjiHiragana
         || hasSeparatedJapaneseWords
+        || hasJapaneseNotation
         || (
         !hasStructuralDominance && !textTexture.isCandidate && (
           hasStrongLanguage
@@ -2024,6 +2072,7 @@ function segmentContent(
       const hasLatinJapaneseDrawingMix = /[A-Za-z]/u.test(part.normalize('NFKC'))
         && RE_JAPANESE_SCRIPT.test(part)
         && !hasFullwidthLatinJapanesePhrase
+        && !hasJapaneseNotation
         && (
           /[\uff66-\uff9f]/u.test(part)
           || (part.match(RE_SYMBOLS_G) || []).length > 0

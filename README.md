@@ -9,7 +9,7 @@
 - **Gemini API**: 사용자가 입력한 Google API 키로 `gemini-3.6-flash`,
   `gemini-3.1-flash-lite` 중 하나를 직접 호출합니다.
 - **Codex 로그인**: Codex CLI에 ChatGPT 계정으로 로그인한 구독 할당량을 이용해
-  `gpt-5.6-luna`로 번역합니다.
+  `gpt-6-luna` 또는 `gpt-6-sol`로 번역합니다.
 - **OpenRouter API**: 사용자가 입력한 OpenRouter 키로
   `google/gemma-3-27b-it`(Gemma 3 27B)를 호출합니다.
 
@@ -26,8 +26,9 @@
 - 상단에서 즉시 전환하고 다음 실행에도 유지되는 AA 화이트 모드
 - 세로 번역이 길어져도 일본어 원문을 남기지 않는 최소 확장 배치
 - 엄격한 입력/출력 1:1 검증, 일본어 잔존 검사, 실패 청크 자동 분할 복구
+- 원문에 없는 `yield_time_ms`, `max_output_tokens` 등 도구 실행 문자열을 번역 실패로 감지하고 약 2초 대기 후 자동 복구. 단일 항목은 최대 3회 시도하며 재시도 대기는 약 2초·4초로 증가합니다. 계속 실패한 항목은 원문을 유지하고 실패로 표시합니다.
 - 일부 청크·세로 그룹 오류를 격리하고 정상 번역은 끝까지 적용하는 부분 완료 처리
-- Ollama·OpenRouter 최대 3개, Gemini·Codex 최대 2개의 동적 병렬 워커
+- Ollama·OpenRouter·Codex 최대 3개, Gemini 최대 2개의 동적 병렬 워커
 - 사용자 사전, 실제 적용 내용 확인·복사가 가능한 번역 프롬프트, 실행 중 엔진 전환
 - Saitamaar 렌더링을 유지한 PNG/JPG 페이지 이미지 ZIP 내보내기
 
@@ -139,7 +140,8 @@ Google Gemini API로 직접 전송되고 앱 서버 로그에는 키가 기록�
 3. `codex login status`에 `Logged in using ChatGPT`가 표시되는지 확인합니다.
 4. 앱의 **번역 엔진 → Codex 로그인**에서 상태를 새로 확인하고 적용합니다.
 
-모델은 `gpt-5.6-luna`로 고정됩니다. 앱은 `auth.json` 같은 OAuth 인증 파일을 직접
+설정 창에서 GPT-6 Luna 또는 Sol과 추론 강도 `low`·`medium`·`high`를 선택할 수 있습니다.
+기본값은 **Sol low**이며 선택은 브라우저에 저장됩니다. 앱은 `auth.json` 같은 OAuth 인증 파일을 직접
 읽거나 저장하지 않으며, 임시 작업 폴더에서 읽기 전용·일회성 `codex exec`를 실행합니다.
 ChatGPT 구독 사용 가능 여부와 한도는 로그인한 계정의 플랜에 따릅니다.
 
@@ -158,10 +160,10 @@ ChatGPT 구독 사용 가능 여부와 한도는 로그인한 계정의 플랜�
 
 | 항목 | Ollama | Gemini | Codex | OpenRouter |
 |---|---:|---:|---:|---:|
-| 선택 모델 | `gemma4:31b-cloud`, `translategemma:4b` | `gemini-3.6-flash`, `gemini-3.1-flash-lite` | `gpt-5.6-luna` | `google/gemma-3-27b-it` |
+| 선택 모델 | `gemma4:31b-cloud`, `translategemma:4b` | `gemini-3.6-flash`, `gemini-3.1-flash-lite` | `gpt-6-luna`, `gpt-6-sol` (low·medium·high) | `google/gemma-3-27b-it` |
 | 목표 청크 | 2,400자 / 50항목 | 2,800자 / 50항목 | 1,800자 / 36항목 | 2,200자 / 44항목 |
 | 강제 상한 | 3,200자 / 64항목 | 3,600자 / 64항목 | 2,500자 / 48항목 | 3,000자 / 56항목 |
-| 동시 워커 | 최대 3 | 최대 2 | 최대 2 | 최대 3 |
+| 동시 워커 | 최대 3 | 최대 2 | 최대 3 | 최대 3 |
 
 엔진별 목표 청크는 구조화 응답 안정성과 API·구독 쿼터 급증 방지를 위한 보수적
 설정입니다. Codex는 CLI 실행 자체의 문맥 비용이 있어 36항목, OpenRouter Gemma는
@@ -224,7 +226,7 @@ npm run check
 | `OLLAMA_MAX_CONCURRENCY` | `3` | Ollama 동시 요청 수, 1~3 |
 | `CODEX_CLI_PATH` | 자동 감지 | Codex CLI 실행 파일 또는 `codex.js` 절대 경로 |
 | `CODEX_REQUEST_TIMEOUT_MS` | `330000` | Codex CLI 요청 제한 시간 |
-| `CODEX_MAX_CONCURRENCY` | `2` | Codex 동시 요청 수, 1~3 |
+| `CODEX_MAX_CONCURRENCY` | `3` | Codex 동시 요청 수, 1~3. 429 발생 시 자동 감속 후 점진 복구 |
 | `OPENROUTER_REQUEST_TIMEOUT_MS` | `300000` | OpenRouter 요청 제한 시간 |
 | `OPENROUTER_MAX_CONCURRENCY` | `3` | OpenRouter 동시 요청 수, 1~3 |
 | `APP_HOST` | `127.0.0.1` | 앱 서버 바인딩 주소 |
@@ -247,7 +249,7 @@ npm run check
 - **Ollama 모델 없음**: 설정에서 선택한 모델명으로 `ollama pull <모델명>`을 실행합니다.
 - **Gemini 401/403**: 입력한 키와 해당 Google 프로젝트의 Gemini API 권한을 확인합니다.
 - **Codex 로그인 실패**: `codex login` 후 `codex login status`를 실행하고 앱에서 상태를 새로 확인합니다.
-- **Codex 모델 오류**: Codex CLI를 업데이트하고 로그인 계정의 `gpt-5.6-luna` 사용 가능 여부를 확인합니다.
+- **Codex 모델 오류**: Codex CLI를 업데이트하고 로그인 계정에서 선택한 GPT-6 Luna 또는 Sol을 사용할 수 있는지 확인합니다.
 - **OpenRouter 401/402/403**: API 키, 크레딧 잔액과 `google/gemma-3-27b-it` 사용 권한을 확인합니다.
 - **429 요청 한도**: 계정 쿼터를 확인하고 잠시 후 다시 시도합니다.
 - **번역 항목 수 불일치**: 앱이 자동으로 청크를 분할해 복구합니다. 끝까지 실패한
@@ -273,7 +275,14 @@ npm run check
 
 ## 업데이트 기록
 
-현재 공개 버전은 **1.11.12**입니다. 아래 기록은 일반 사용자가 체감하는 주요 기능을 기준으로 묶었습니다.
+현재 공개 버전은 **1.11.13**입니다. 아래 기록은 일반 사용자가 체감하는 주요 기능을 기준으로 묶었습니다.
+
+### 1.11.13 (2026-09-26) — GPT 모델 선택과 번역·AA 감지 복구
+
+- Codex 로그인 번역에서 GPT-6 Luna 또는 Sol과 `low`·`medium`·`high` 추론 강도를 고를 수 있습니다. 기본값은 Sol low이며 선택한 설정은 다음 실행에도 유지됩니다.
+- 번역 결과에 원문에 없던 도구 실행 문자열이 섞이면 결과를 적용하지 않고 해당 항목을 다시 번역합니다. 반복 실패 시 원문을 보존하고 실패로 표시합니다.
+- Codex 번역은 최대 3개 요청을 동시에 처리하며, 사용량 제한이 발생하면 자동으로 요청 수를 줄였다가 회복합니다.
+- HTML 공백 표기가 포함된 일본어 문장과 인용 식별자·익명 표식이 있는 대사를 AA 그림으로 잘못 제외하던 문제를 고쳤습니다. 원문의 공백 표기는 그대로 보존합니다.
 
 ### 1.11.12 (2026-08-28) — 대용량 스마트 분석 성능·안정성 개선
 

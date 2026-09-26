@@ -24,12 +24,18 @@ const numPredict = readInteger('OLLAMA_NUM_PREDICT', 8_192, 256, 32_768);
 const maxConcurrency = readInteger('OLLAMA_MAX_CONCURRENCY', 3, 1, 3);
 const keepAlive = process.env.OLLAMA_KEEP_ALIVE?.trim() || '10m';
 const ollamaGate = createConcurrencyGate(maxConcurrency, 20);
-const codexModel = 'gpt-5.6-luna';
+const codexModel = 'gpt-6-sol';
+const codexReasoningEffort = 'low';
+const selectableCodexModels = new Set(['gpt-6-luna', 'gpt-6-sol']);
+const selectableCodexReasoningEfforts = new Set(['low', 'medium', 'high']);
 const openRouterModel = 'google/gemma-3-27b-it';
 const codexCommand = resolveCodexCommand();
 const codexTimeoutMs = readInteger('CODEX_REQUEST_TIMEOUT_MS', 330_000, 30_000, 900_000);
 const openRouterTimeoutMs = readInteger('OPENROUTER_REQUEST_TIMEOUT_MS', 300_000, 10_000, 900_000);
-const codexGate = createConcurrencyGate(readInteger('CODEX_MAX_CONCURRENCY', 2, 1, 3), 10);
+const codexGate = createAdaptiveConcurrencyGate(
+  readInteger('CODEX_MAX_CONCURRENCY', 3, 1, 3),
+  10,
+);
 const openRouterGate = createConcurrencyGate(readInteger('OPENROUTER_MAX_CONCURRENCY', 3, 1, 3), 20);
 const updateRepository = 'dbdnjsduf-netizen/fangal-aa-translator';
 const updateBranch = 'main';
@@ -358,8 +364,13 @@ app.post('/api/codex/chat', async (request, response) => {
       error: 'Codex 번역 메시지 또는 예상 항목 수가 올바르지 않습니다.',
     });
   }
-  if (request.body?.model && request.body.model !== codexModel) {
+  const requestedModel = request.body?.model ?? codexModel;
+  const requestedReasoningEffort = request.body?.reasoningEffort ?? codexReasoningEffort;
+  if (!selectableCodexModels.has(requestedModel)) {
     return response.status(400).json({ error: '허용되지 않은 Codex 모델입니다.' });
+  }
+  if (!selectableCodexReasoningEfforts.has(requestedReasoningEffort)) {
+    return response.status(400).json({ error: '허용되지 않은 Codex 추론 강도입니다.' });
   }
 
   let releaseSlot;
@@ -375,7 +386,8 @@ app.post('/api/codex/chat', async (request, response) => {
     const prompt = buildCodexPrompt(normalizedMessages, expectedCount);
     const result = await runCodexCommand([
       'exec',
-      '--model', codexModel,
+      '--model', requestedModel,
+      '-c', `model_reasoning_effort="${requestedReasoningEffort}"`,
       '--ephemeral',
       '--sandbox', 'read-only',
       '--ignore-user-config',
@@ -394,7 +406,9 @@ app.post('/api/codex/chat', async (request, response) => {
 
     if (result.exitCode !== 0) {
       const diagnostic = sanitizeCliDiagnostic(result.stderr || result.stdout);
-      return response.status(codexExitStatus(diagnostic)).json({
+      const status = codexExitStatus(diagnostic);
+      if (status === 429) codexGate.reportRateLimited();
+      return response.status(status).json({
         error: diagnostic || `Codex CLI가 종료 코드 ${result.exitCode}로 끝났습니다.`,
         hint: codexDiagnosticHint(diagnostic),
       });
@@ -407,6 +421,7 @@ app.post('/api/codex/chat', async (request, response) => {
         error: `Codex 번역 항목 수가 일치하지 않습니다 (예상 ${expectedCount}개).`,
       });
     }
+    codexGate.reportSuccess();
     return response.json({
       message: { content: JSON.stringify(parsed.translations) },
       usage: extractCodexUsage(result.stdout),
@@ -708,6 +723,77 @@ function createConcurrencyGate(limit, maxQueued) {
   };
 }
 
+function createAdaptiveConcurrencyGate(initialLimit, maxQueued) {
+  const maximumLimit = initialLimit;
+  let currentLimit = initialLimit;
+  let active = 0;
+  let successfulRequests = 0;
+  let cooldownUntil = 0;
+  let cooldownTimer = null;
+  const queue = [];
+
+  const scheduleDrain = () => {
+    if (cooldownTimer || cooldownUntil <= Date.now()) return;
+    cooldownTimer = setTimeout(() => {
+      cooldownTimer = null;
+      drain();
+    }, cooldownUntil - Date.now());
+    cooldownTimer.unref?.();
+  };
+
+  const release = () => {
+    active = Math.max(0, active - 1);
+    drain();
+  };
+
+  const drain = () => {
+    if (Date.now() < cooldownUntil) {
+      scheduleDrain();
+      return;
+    }
+    while (active < currentLimit && queue.length > 0) {
+      active += 1;
+      queue.shift()?.(release);
+    }
+  };
+
+  return {
+    async acquire() {
+      if (Date.now() >= cooldownUntil && active < currentLimit) {
+        active += 1;
+        return release;
+      }
+      if (queue.length >= maxQueued) {
+        const error = new Error('Codex request queue is full.');
+        error.code = 'OLLAMA_QUEUE_FULL';
+        throw error;
+      }
+      return new Promise((resolve) => {
+        queue.push(resolve);
+        drain();
+      });
+    },
+    reportRateLimited(retryAfterMs = 5_000) {
+      successfulRequests = 0;
+      currentLimit = Math.max(1, currentLimit - 1);
+      cooldownUntil = Math.max(cooldownUntil, Date.now() + retryAfterMs);
+      scheduleDrain();
+    },
+    reportSuccess() {
+      successfulRequests += 1;
+      if (
+        currentLimit < maximumLimit
+        && Date.now() >= cooldownUntil
+        && successfulRequests >= 6
+      ) {
+        currentLimit += 1;
+        successfulRequests = 0;
+        drain();
+      }
+    },
+  };
+}
+
 function normalizeTranslationMessages(messages) {
   if (!Array.isArray(messages) || messages.length < 1 || messages.length > 4) return null;
   const normalized = [];
@@ -844,7 +930,7 @@ function codexDiagnosticHint(diagnostic) {
     return 'ChatGPT 구독 할당량이 갱신된 뒤 다시 시도하세요.';
   }
   if (/model.*not|unknown model|unsupported model/i.test(diagnostic)) {
-    return 'Codex CLI를 최신 버전으로 업데이트한 뒤 gpt-5.6-luna 사용 권한을 확인하세요.';
+    return 'Codex CLI를 최신 버전으로 업데이트한 뒤 선택한 GPT-6 모델의 사용 권한을 확인하세요.';
   }
   return 'Codex CLI 상태와 네트워크 연결을 확인하세요.';
 }

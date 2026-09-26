@@ -13,7 +13,22 @@ import {
   translateRemoteSelection,
 } from './remoteTranslationService';
 
-export const CODEX_MODEL = 'gpt-5.6-luna';
+export const CODEX_MODEL = 'gpt-6-sol';
+export const CODEX_REASONING_EFFORT = 'low';
+export const CODEX_MODELS = ['gpt-6-luna', 'gpt-6-sol'] as const;
+export const CODEX_REASONING_EFFORTS = ['low', 'medium', 'high'] as const;
+export type CodexModel = typeof CODEX_MODELS[number];
+export type CodexReasoningEffort = typeof CODEX_REASONING_EFFORTS[number];
+
+export function normalizeCodexModel(value: string | null | undefined): CodexModel {
+  return CODEX_MODELS.find((model) => model === value) || CODEX_MODEL;
+}
+
+export function normalizeCodexReasoningEffort(
+  value: string | null | undefined,
+): CodexReasoningEffort {
+  return CODEX_REASONING_EFFORTS.find((effort) => effort === value) || CODEX_REASONING_EFFORT;
+}
 const REQUEST_TIMEOUT_MS = 360_000;
 
 interface CodexChatResponse {
@@ -56,9 +71,11 @@ export async function translateSelection(
   customDict: DictionaryEntry[] = [],
   useDefaultDict = true,
   systemInstruction = DEFAULT_SYSTEM_PROMPT,
+  model: CodexModel = CODEX_MODEL,
+  reasoningEffort: CodexReasoningEffort = CODEX_REASONING_EFFORT,
 ): Promise<TranslationResponseData> {
   return translateRemoteSelection(
-    createConfig(),
+    createConfig(model, reasoningEffort),
     textToTranslate,
     customDict,
     useDefaultDict,
@@ -73,9 +90,11 @@ export async function translateBatch(
   systemInstruction = DEFAULT_SYSTEM_PROMPT,
   onProgress?: (progress: TranslationProgress) => void,
   onPartialResult?: (translations: string[], usage: ApiUsageStats) => void,
+  model: CodexModel = CODEX_MODEL,
+  reasoningEffort: CodexReasoningEffort = CODEX_REASONING_EFFORT,
 ): Promise<BatchTranslationResult> {
   return translateRemoteBatch(
-    createConfig(),
+    createConfig(model, reasoningEffort),
     texts,
     customDict,
     useDefaultDict,
@@ -85,12 +104,13 @@ export async function translateBatch(
   );
 }
 
-function createConfig() {
+function createConfig(model: CodexModel, reasoningEffort: CodexReasoningEffort) {
   return {
     providerLabel: 'Codex',
-    maxConcurrency: 2,
+    maxConcurrency: 3,
     chunkLimits: { softChars: 1_800, hardChars: 2_500, softItems: 36, hardItems: 48 },
-    request: requestCodex,
+    request: (systemInstruction: string, userPrompt: string, expectedCount: number) =>
+      requestCodex(systemInstruction, userPrompt, expectedCount, model, reasoningEffort),
   };
 }
 
@@ -98,6 +118,8 @@ async function requestCodex(
   systemInstruction: string,
   userPrompt: string,
   expectedCount: number,
+  model: CodexModel,
+  reasoningEffort: CodexReasoningEffort,
 ) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -107,7 +129,8 @@ async function requestCodex(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: CODEX_MODEL,
+        model,
+        reasoningEffort,
         expectedCount,
         messages: [
           { role: 'system', content: systemInstruction },

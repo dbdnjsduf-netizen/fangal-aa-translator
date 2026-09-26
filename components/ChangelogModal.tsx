@@ -8,6 +8,17 @@ interface ChangelogModalProps {
 
 const changelogData = [
   {
+    version: '1.11.13',
+    date: '2026-09-26',
+    title: 'GPT 모델 선택과 번역·AA 감지 복구',
+    changes: [
+      'Codex 번역에서 GPT-6 Luna·Sol과 low·medium·high 추론 강도 선택, 기본 Sol low',
+      '도구 실행 문자열이 섞인 번역 결과를 다시 요청하고 반복 실패 시 원문 보존',
+      'Codex 번역 최대 3개 병렬 처리와 사용량 제한 시 자동 감속',
+      'HTML 공백 표기와 인용·익명 표식이 있는 일본어 대사의 자동선택 개선',
+    ],
+  },
+  {
     version: '1.11.12',
     date: '2026-08-28',
     title: '대용량 스마트 분석 성능·안정성 개선',

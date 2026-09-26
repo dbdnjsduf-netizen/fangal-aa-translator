@@ -34,6 +34,8 @@ import {
 import {
   GEMINI_SESSION_KEY,
   GEMINI_MODEL_STORAGE_KEY,
+  CODEX_MODEL_STORAGE_KEY,
+  CODEX_REASONING_EFFORT_STORAGE_KEY,
   OPENROUTER_SESSION_KEY,
   OLLAMA_MODEL_STORAGE_KEY,
   getProviderModelLabel,
@@ -41,6 +43,8 @@ import {
   isProviderReady,
   normalizeTranslationProvider,
   normalizeGeminiModel,
+  normalizeCodexModel,
+  normalizeCodexReasoningEffort,
   TRANSLATION_PROVIDER_STORAGE_KEY,
   translateSelection,
   translateBatch,
@@ -50,7 +54,7 @@ import {
   TRANSLATION_POST_BOUNDARY,
   isTranslationPostHeader,
 } from './services/translationService';
-import type { TranslationBatchInput } from './services/translationService';
+import type { CodexModel, CodexReasoningEffort, TranslationBatchInput } from './services/translationService';
 import {
   applyVerticalTranslations,
   detectVerticalTextGroups,
@@ -152,6 +156,12 @@ function App() {
   const [geminiModel, setGeminiModel] = useState(
     () => normalizeGeminiModel(localStorage.getItem(GEMINI_MODEL_STORAGE_KEY)),
   );
+  const [codexModel, setCodexModel] = useState<CodexModel>(
+    () => normalizeCodexModel(localStorage.getItem(CODEX_MODEL_STORAGE_KEY)),
+  );
+  const [codexReasoningEffort, setCodexReasoningEffort] = useState<CodexReasoningEffort>(
+    () => normalizeCodexReasoningEffort(localStorage.getItem(CODEX_REASONING_EFFORT_STORAGE_KEY)),
+  );
   const [translationProvider, setTranslationProvider] = useState<TranslationProvider>(
     () => normalizeTranslationProvider(localStorage.getItem(TRANSLATION_PROVIDER_STORAGE_KEY)),
   );
@@ -192,6 +202,7 @@ function App() {
     translationProvider,
     activeOllamaModel,
     geminiModel,
+    codexModel,
   );
 
   const refreshOllamaStatus = async (model = ollamaModel || undefined) => {
@@ -238,6 +249,11 @@ function App() {
   useEffect(() => {
     localStorage.setItem(GEMINI_MODEL_STORAGE_KEY, geminiModel);
   }, [geminiModel]);
+
+  useEffect(() => {
+    localStorage.setItem(CODEX_MODEL_STORAGE_KEY, codexModel);
+    localStorage.setItem(CODEX_REASONING_EFFORT_STORAGE_KEY, codexReasoningEffort);
+  }, [codexModel, codexReasoningEffort]);
 
   useEffect(() => {
     localStorage.setItem(
@@ -483,6 +499,7 @@ function App() {
           useDefaultDictionary,
           systemPrompt,
           activeModel,
+          codexReasoningEffort,
       );
       
       const isUnchanged = translatedText.trim() === selection.text.trim();
@@ -697,6 +714,7 @@ function App() {
             });
           },
           activeModel,
+          codexReasoningEffort,
       );
 
       const failedTranslationIndices = new Set<number>();
@@ -799,7 +817,7 @@ function App() {
                 <h1 className={`font-bold leading-none ${isLightMode ? 'text-slate-900' : 'text-slate-100'}`}>Fangal AA Translator</h1>
                 <div className="flex items-center gap-2 mt-0.5">
                    <span className="text-[10px] text-slate-400 font-mono">
-                      {activeModel.toUpperCase()}
+                      {activeModel.toUpperCase()}{translationProvider === 'codex' ? ` · ${codexReasoningEffort.toUpperCase()}` : ''}
                    </span>
                    <span className="w-0.5 h-2.5 bg-slate-700"></span>
                    <button 
@@ -1126,13 +1144,17 @@ function App() {
         provider={translationProvider}
         ollamaModel={activeOllamaModel}
         geminiModel={geminiModel}
+        codexModel={codexModel}
+        codexReasoningEffort={codexReasoningEffort}
         geminiApiKey={geminiApiKey}
         openRouterApiKey={openRouterApiKey}
-        onSave={(provider, nextGeminiApiKey, nextOpenRouterApiKey, nextOllamaModel, nextGeminiModel) => {
+        onSave={(provider, nextGeminiApiKey, nextOpenRouterApiKey, nextOllamaModel, nextGeminiModel, nextCodexModel, nextCodexReasoningEffort) => {
           if (
             provider !== translationProvider
             || nextOllamaModel !== activeOllamaModel
             || nextGeminiModel !== geminiModel
+            || nextCodexModel !== codexModel
+            || nextCodexReasoningEffort !== codexReasoningEffort
           ) {
             setApiStats({
               requestCount: 0,
@@ -1144,6 +1166,8 @@ function App() {
           setTranslationProvider(provider);
           setOllamaModel(nextOllamaModel);
           setGeminiModel(nextGeminiModel);
+          setCodexModel(nextCodexModel);
+          setCodexReasoningEffort(nextCodexReasoningEffort);
           setGeminiApiKey(nextGeminiApiKey);
           setOpenRouterApiKey(nextOpenRouterApiKey);
           void refreshOllamaStatus(nextOllamaModel);
