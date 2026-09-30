@@ -66,7 +66,7 @@ const PROVIDERS: Array<{
   {
     id: 'codex',
     title: 'Codex 로그인',
-    description: 'ChatGPT 구독 OAuth · GPT-6 Luna / Sol',
+    description: 'ChatGPT 구독 OAuth · GPT-6 Luna / GPT-6.1 Sol',
     color: 'violet',
     icon: Terminal,
   },
@@ -390,7 +390,7 @@ function CodexSettings({
             className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-violet-500"
           >
             {CODEX_MODELS.map((item) => (
-              <option key={item} value={item}>{item === 'gpt-6-luna' ? 'GPT-6 Luna' : 'GPT-6 Sol'}</option>
+              <option key={item} value={item}>{item === 'gpt-6-luna' ? 'GPT-6 Luna' : 'GPT-6.1 Sol'}</option>
             ))}
           </select>
         </div>

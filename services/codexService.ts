@@ -14,9 +14,9 @@ import {
   translateRemoteSelection,
 } from './remoteTranslationService';
 
-export const CODEX_MODEL = 'gpt-6-sol';
+export const CODEX_MODEL = 'gpt-6.1-sol';
 export const CODEX_REASONING_EFFORT = 'low';
-export const CODEX_MODELS = ['gpt-6-luna', 'gpt-6-sol'] as const;
+export const CODEX_MODELS = ['gpt-6-luna', 'gpt-6.1-sol'] as const;
 export const CODEX_REASONING_EFFORTS = ['low', 'medium', 'high'] as const;
 export type CodexModel = typeof CODEX_MODELS[number];
 export type CodexReasoningEffort = typeof CODEX_REASONING_EFFORTS[number];

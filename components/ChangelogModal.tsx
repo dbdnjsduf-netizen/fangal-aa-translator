@@ -8,6 +8,16 @@ interface ChangelogModalProps {
 
 const changelogData = [
   {
+    version: '1.11.15',
+    date: '2026-09-30',
+    title: 'GPT-6.1 Sol 업데이트',
+    changes: [
+      'Codex 로그인 번역의 기본 Sol 요청과 선택 메뉴를 GPT-6.1 Sol로 업데이트',
+      '이전에 저장한 GPT-6 Sol 선택을 새 모델로 자동 전환',
+      'Luna 선택과 low·medium·high 추론 강도 설정 유지',
+    ],
+  },
+  {
     version: '1.11.14',
     date: '2026-09-26',
     title: '번역 프롬프트 전체 직접 작성',
