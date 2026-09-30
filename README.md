@@ -9,7 +9,7 @@
 - **Gemini API**: 사용자가 입력한 Google API 키로 `gemini-3.6-flash`,
   `gemini-3.1-flash-lite` 중 하나를 직접 호출합니다.
 - **Codex 로그인**: Codex CLI에 ChatGPT 계정으로 로그인한 구독 할당량을 이용해
-  `gpt-6-luna` 또는 `gpt-6-sol`로 번역합니다.
+  `gpt-6-luna` 또는 `gpt-6.1-sol`로 번역합니다.
 - **OpenRouter API**: 사용자가 입력한 OpenRouter 키로
   `google/gemma-3-27b-it`(Gemma 3 27B)를 호출합니다.
 
@@ -140,7 +140,7 @@ Google Gemini API로 직접 전송되고 앱 서버 로그에는 키가 기록�
 3. `codex login status`에 `Logged in using ChatGPT`가 표시되는지 확인합니다.
 4. 앱의 **번역 엔진 → Codex 로그인**에서 상태를 새로 확인하고 적용합니다.
 
-설정 창에서 GPT-6 Luna 또는 Sol과 추론 강도 `low`·`medium`·`high`를 선택할 수 있습니다.
+설정 창에서 GPT-6 Luna 또는 GPT-6.1 Sol과 추론 강도 `low`·`medium`·`high`를 선택할 수 있습니다.
 기본값은 **Sol low**이며 선택은 브라우저에 저장됩니다. 앱은 `auth.json` 같은 OAuth 인증 파일을 직접
 읽거나 저장하지 않으며, 임시 작업 폴더에서 읽기 전용·일회성 `codex exec`를 실행합니다.
 ChatGPT 구독 사용 가능 여부와 한도는 로그인한 계정의 플랜에 따릅니다.
@@ -160,7 +160,7 @@ ChatGPT 구독 사용 가능 여부와 한도는 로그인한 계정의 플랜�
 
 | 항목 | Ollama | Gemini | Codex | OpenRouter |
 |---|---:|---:|---:|---:|
-| 선택 모델 | `gemma4:31b-cloud`, `translategemma:4b` | `gemini-3.6-flash`, `gemini-3.1-flash-lite` | `gpt-6-luna`, `gpt-6-sol` (low·medium·high) | `google/gemma-3-27b-it` |
+| 선택 모델 | `gemma4:31b-cloud`, `translategemma:4b` | `gemini-3.6-flash`, `gemini-3.1-flash-lite` | `gpt-6-luna`, `gpt-6.1-sol` (low·medium·high) | `google/gemma-3-27b-it` |
 | 목표 청크 | 2,400자 / 50항목 | 2,800자 / 50항목 | 1,800자 / 36항목 | 2,200자 / 44항목 |
 | 강제 상한 | 3,200자 / 64항목 | 3,600자 / 64항목 | 2,500자 / 48항목 | 3,000자 / 56항목 |
 | 동시 워커 | 최대 3 | 최대 2 | 최대 3 | 최대 3 |
@@ -249,7 +249,7 @@ npm run check
 - **Ollama 모델 없음**: 설정에서 선택한 모델명으로 `ollama pull <모델명>`을 실행합니다.
 - **Gemini 401/403**: 입력한 키와 해당 Google 프로젝트의 Gemini API 권한을 확인합니다.
 - **Codex 로그인 실패**: `codex login` 후 `codex login status`를 실행하고 앱에서 상태를 새로 확인합니다.
-- **Codex 모델 오류**: Codex CLI를 업데이트하고 로그인 계정에서 선택한 GPT-6 Luna 또는 Sol을 사용할 수 있는지 확인합니다.
+- **Codex 모델 오류**: Codex CLI를 업데이트하고 로그인 계정에서 선택한 GPT-6 Luna 또는 GPT-6.1 Sol을 사용할 수 있는지 확인합니다.
 - **OpenRouter 401/402/403**: API 키, 크레딧 잔액과 `google/gemma-3-27b-it` 사용 권한을 확인합니다.
 - **429 요청 한도**: 계정 쿼터를 확인하고 잠시 후 다시 시도합니다.
 - **번역 항목 수 불일치**: 앱이 자동으로 청크를 분할해 복구합니다. 끝까지 실패한
@@ -275,7 +275,12 @@ npm run check
 
 ## 업데이트 기록
 
-현재 공개 버전은 **1.11.14**입니다. 아래 기록은 일반 사용자가 체감하는 주요 기능을 기준으로 묶었습니다.
+현재 공개 버전은 **1.11.15**입니다. 아래 기록은 일반 사용자가 체감하는 주요 기능을 기준으로 묶었습니다.
+
+### 1.11.15 (2026-09-30) — GPT-6.1 Sol 업데이트
+
+- Codex 로그인 번역의 Sol 모델을 **GPT-6.1 Sol**로 업데이트했습니다. 기본 번역 요청과 모델 선택 메뉴에 `gpt-6.1-sol`을 적용합니다.
+- 이전에 저장한 GPT-6 Sol 선택은 새 모델로 자동 전환됩니다. Luna 선택과 low·medium·high 추론 강도 설정은 유지됩니다.
 
 ### 1.11.14 (2026-09-26) — 번역 프롬프트 전체 직접 작성
 

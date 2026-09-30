@@ -17,7 +17,7 @@ test('Codex는 기본 Sol low와 선택한 Luna high를 요청에 전달한다',
       return Response.json({
         ok: true,
         authenticated: true,
-        model: 'gpt-6-sol',
+        model: 'gpt-6.1-sol',
         cliVersion: 'codex-cli test',
         message: 'Logged in using ChatGPT',
       });
@@ -40,7 +40,7 @@ test('Codex는 기본 Sol low와 선택한 Luna high를 요청에 전달한다',
     assert.equal(status.authenticated, true);
     assert.equal(result.text, '안녕하세요');
     assert.equal(calls[1].url, '/api/codex/chat');
-    assert.equal(calls[1].body.model, 'gpt-6-sol');
+    assert.equal(calls[1].body.model, 'gpt-6.1-sol');
     assert.equal(calls[1].body.reasoningEffort, 'low');
     assert.equal(calls[1].body.expectedCount, 1);
     assert.equal(calls[2].body.model, 'gpt-6-luna');
