@@ -40,6 +40,7 @@ import {
   CODEX_REASONING_EFFORT_STORAGE_KEY,
   OPENROUTER_SESSION_KEY,
   OLLAMA_MODEL_STORAGE_KEY,
+  VERTEX_CONFIG_STORAGE_KEY,
   getProviderModelLabel,
   getTranslationProviderLabel,
   isProviderReady,
@@ -57,7 +58,7 @@ import {
   TRANSLATION_POST_BOUNDARY,
   isTranslationPostHeader,
 } from './services/translationService';
-import type { CodexModel, CodexReasoningEffort, TranslationBatchInput, TranslationInstruction, TranslationPromptMode } from './services/translationService';
+import type { CodexModel, CodexReasoningEffort, TranslationBatchInput, TranslationInstruction, TranslationPromptMode, VertexConfig } from './services/translationService';
 import {
   applyVerticalTranslations,
   detectVerticalTextGroups,
@@ -81,6 +82,7 @@ import {
 } from './services/selectionExclusions';
 import {
   addManualRegexRule,
+  applyManualRegexRules,
   deserializeManualRegexRules,
   getAddedManualRegexRules,
   getManualRegexTarget,
@@ -89,7 +91,6 @@ import {
 } from './services/manualRegex';
 import { APP_THEME_STORAGE_KEY, normalizeAppTheme } from './services/appTheme';
 import { AppUpdateStatus, fetchAppUpdateStatus } from './services/appUpdate';
-import SmartAnalysisWorker from './workers/segmentation.worker?worker';
 import { Ban, Braces, FileText, Info, Activity, Download, Image as ImageIcon, Timer, History, Book, MessageSquareQuote, Server, CheckSquare, Moon, Sun, CloudDownload } from 'lucide-react';
 
 const ImageExportModal = lazy(() => import('./components/ImageExportModal').then((module) => ({
@@ -110,8 +111,13 @@ type SmartTranslationUnit =
       requestText: string;
     };
 
-function getProviderSetupMessage(provider: TranslationProvider) {
-  if (provider === 'gemini') return 'Gemini API 키를 입력한 뒤 번역을 시작하세요.';
+function getProviderSetupMessage(provider: TranslationProvider, vertexConfig?: VertexConfig) {
+  if (provider === 'gemini') {
+    if (vertexConfig?.useVertex) {
+      return 'Vertex AI 서비스 계정 JSON 키를 설정에서 입력하거나 불러온 뒤 번역을 시작하세요.';
+    }
+    return 'Gemini API 키를 입력한 뒤 번역을 시작하세요.';
+  }
   if (provider === 'openrouter') return 'OpenRouter API 키를 입력한 뒤 번역을 시작하세요.';
   if (provider === 'codex') return '터미널에서 Codex에 로그인한 뒤 상태를 다시 확인하세요.';
   return 'Ollama 연결과 모델 준비 상태를 먼저 확인하세요.';
@@ -121,7 +127,6 @@ function App() {
   const manualRegexStorageTimerRef = useRef<number | null>(null);
   const latestManualRegexRulesRef = useRef<ManualRegexRules | null>(null);
   const segmentsRef = useRef<TextSegment[]>([]);
-  const manualRegexApplyQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [content, setContent] = useState<string>("");
   const [fileName, setFileName] = useState<string>("");
   
@@ -131,6 +136,7 @@ function App() {
   const [isManualVerticalMode, setIsManualVerticalMode] = useState(false);
   const [isBanMode, setIsBanMode] = useState(false);
   const [isManualRegexMode, setIsManualRegexMode] = useState(false);
+  const [isAbsoluteManualRegexMode, setIsAbsoluteManualRegexMode] = useState(false);
   const [selection, setSelection] = useState<SelectionRange | null>(null);
   const [segments, setSegments] = useState<TextSegment[]>([]);
   segmentsRef.current = segments;
@@ -174,6 +180,19 @@ function App() {
   const [openRouterApiKey, setOpenRouterApiKey] = useState(
     () => sessionStorage.getItem(OPENROUTER_SESSION_KEY) || '',
   );
+  const [vertexConfig, setVertexConfig] = useState<VertexConfig>(() => {
+    try {
+      const raw = localStorage.getItem(VERTEX_CONFIG_STORAGE_KEY);
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return {
+      useVertex: true,
+      vertexCredentials: '',
+      projectId: '',
+      location: 'global',
+      flex: true,
+    };
+  });
   const [appTheme, setAppTheme] = useState(
     () => normalizeAppTheme(localStorage.getItem(APP_THEME_STORAGE_KEY)),
   );
@@ -206,6 +225,7 @@ function App() {
     activeOllamaModel,
     geminiModel,
     codexModel,
+    vertexConfig,
   );
 
   const refreshOllamaStatus = async (model = ollamaModel || undefined) => {
@@ -225,11 +245,41 @@ function App() {
   useEffect(() => {
     void refreshOllamaStatus();
     void refreshCodexStatus();
+
+    // 서버에 저장된 vertex-config.json 자동 로드 및 localStorage 병합
+    fetch('/api/vertex/config')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((serverConf) => {
+        if (serverConf && (serverConf.vertexCredentials || serverConf.projectId)) {
+          setVertexConfig((prev) => {
+            const merged: VertexConfig = {
+              ...prev,
+              useVertex: prev.useVertex ?? true,
+              vertexCredentials: prev.vertexCredentials || serverConf.vertexCredentials || '',
+              projectId: prev.projectId || serverConf.projectId || '',
+              location: prev.location || serverConf.location || 'global',
+              flex: prev.flex ?? serverConf.flex ?? true,
+            };
+            try {
+              localStorage.setItem(VERTEX_CONFIG_STORAGE_KEY, JSON.stringify(merged));
+            } catch {}
+            return merged;
+          });
+        }
+      })
+      .catch(() => {});
+
     const updateTimer = window.setTimeout(() => {
       void fetchAppUpdateStatus().then(setUpdateStatus).catch(() => undefined);
     }, 1_000);
     return () => window.clearTimeout(updateTimer);
   }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(VERTEX_CONFIG_STORAGE_KEY, JSON.stringify(vertexConfig));
+    } catch {}
+  }, [vertexConfig]);
 
   useEffect(() => {
     localStorage.setItem(TRANSLATION_PROVIDER_STORAGE_KEY, translationProvider);
@@ -371,6 +421,7 @@ function App() {
     setIsManualVerticalMode(false);
     setIsBanMode(false);
     setIsManualRegexMode(false);
+    setIsAbsoluteManualRegexMode(false);
   };
 
   const handleSelectionExclusionsChange = (nextRules: SelectionExclusionRules) => {
@@ -401,8 +452,14 @@ function App() {
   };
 
   const addManualRegexTargets = (
-    targets: ManualRegexTarget[],
+    requestedTargets: ManualRegexTarget[],
   ) => {
+    // Targets captured in absolute mode ignore neighbouring AA when applied.
+    const targets = isAbsoluteManualRegexMode
+      ? requestedTargets.map((target) => (
+        target.kind === 'normal' ? { ...target, isAbsolute: true } : target
+      ))
+      : requestedTargets;
     const nextRules = targets.reduce(
       (rules, target) => addManualRegexRule(
         rules,
@@ -414,43 +471,18 @@ function App() {
     if (nextRules === manualRegexRules) return;
     const addedRules = getAddedManualRegexRules(manualRegexRules, nextRules);
     setManualRegexRules(nextRules);
-    // Applying even one new rule still scans the whole episode. Serialize these
-    // jobs in a worker so rapid additions preserve order without blocking UI.
-    manualRegexApplyQueueRef.current = manualRegexApplyQueueRef.current
-      .then(async () => {
-        const worker = new SmartAnalysisWorker();
-        const requestId = Date.now() + Math.random();
-        try {
-          const nextSegments = await new Promise<TextSegment[]>((resolve, reject) => {
-            worker.addEventListener('message', (event: MessageEvent<{
-              type: string;
-              requestId: number;
-              segments?: TextSegment[];
-            }>) => {
-              if (event.data.type === 'result' && event.data.requestId === requestId) {
-                resolve(event.data.segments || []);
-              }
-            });
-            worker.addEventListener('error', () => {
-              reject(new Error('수동정규식 적용 워커가 중단되었습니다.'));
-            });
-            worker.postMessage({
-              type: 'apply-rules',
-              requestId,
-              segments: segmentsRef.current,
-              manualRegexRules: addedRules,
-              selectionExclusions,
-            });
-          });
-          segmentsRef.current = nextSegments;
-          startTransition(() => setSegments(nextSegments));
-        } finally {
-          worker.terminate();
-        }
-      })
-      .catch((error) => {
-        console.error(error);
-      });
+    // Apply the new rules to the *current* segments. A worker round trip used
+    // to clone the whole episode (tens of MB for a 2MB file) and then replace
+    // state with a stale snapshot, silently discarding selections made while
+    // it ran. The literal scan itself takes ~0.1s even for huge files.
+    setSegments((current) => (
+      current.length === 0
+        ? current
+        : applySelectionExclusions(
+          applyManualRegexRules(current, addedRules),
+          selectionExclusions,
+        )
+    ));
   };
 
   const handleManualRegexSelection = (segmentId: string) => {
@@ -500,10 +532,11 @@ function App() {
       activeApiKey,
       ollamaReady,
       codexStatus,
+      vertexConfig,
     )) {
       setIsTranslationSettingsOpen(true);
       alert(
-        getProviderSetupMessage(translationProvider),
+        getProviderSetupMessage(translationProvider, vertexConfig),
       );
       return;
     }
@@ -521,6 +554,7 @@ function App() {
           activeTranslationInstruction,
           activeModel,
           codexReasoningEffort,
+          vertexConfig,
       );
       
       const isUnchanged = translatedText.trim() === selection.text.trim();
@@ -565,10 +599,11 @@ function App() {
       activeApiKey,
       ollamaReady,
       codexStatus,
+      vertexConfig,
     )) {
       setIsTranslationSettingsOpen(true);
       alert(
-        getProviderSetupMessage(translationProvider),
+        getProviderSetupMessage(translationProvider, vertexConfig),
       );
       return;
     }
@@ -736,6 +771,7 @@ function App() {
           },
           activeModel,
           codexReasoningEffort,
+          vertexConfig,
       );
 
       const failedTranslationIndices = new Set<number>();
@@ -816,6 +852,7 @@ function App() {
     setIsManualVerticalMode(false);
     setIsBanMode(false);
     setIsManualRegexMode(false);
+    setIsAbsoluteManualRegexMode(false);
   };
 
   const isLightMode = appTheme === 'light';
@@ -844,7 +881,7 @@ function App() {
                    <button 
                       onClick={() => setIsStatsOpen(true)}
                       className="text-[10px] text-green-400 font-mono flex items-center gap-1 hover:text-green-300 transition-colors"
-                      title={`${getTranslationProviderLabel(translationProvider)} 사용량 보기`}
+                      title={`${getTranslationProviderLabel(translationProvider, vertexConfig)} 사용량 보기`}
                    >
                       <Timer className="w-3 h-3" />
                       {apiStats.requestCount}회 · {(apiStats.totalDurationMs / 1000).toFixed(1)}초
@@ -863,6 +900,7 @@ function App() {
                       activeApiKey,
                       ollamaReady,
                       codexStatus,
+                      vertexConfig,
                     )
                       ? 'border-teal-600/50 text-teal-400'
                       : 'border-yellow-600/50 text-yellow-400'
@@ -870,7 +908,7 @@ function App() {
                   title="번역 엔진 및 인증 설정"
                 >
                   <Server className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">{getTranslationProviderLabel(translationProvider)}</span>
+                  <span className="hidden sm:inline">{getTranslationProviderLabel(translationProvider, vertexConfig)}</span>
                 </button>
                 <button
                   onClick={() => setIsDictOpen(true)}
@@ -1008,7 +1046,9 @@ function App() {
               activeApiKey,
               ollamaReady,
               codexStatus,
+              vertexConfig,
             )}
+            isVertexMode={translationProvider === 'gemini' && Boolean(vertexConfig.useVertex)}
             codexStatus={codexStatus}
             ollamaStatus={ollamaStatus}
             onOpenTranslationSettings={() => setIsTranslationSettingsOpen(true)}
@@ -1028,7 +1068,7 @@ function App() {
             isManualSelectMode={isManualSelectMode}
             isManualVerticalMode={isManualVerticalMode}
             isBanMode={isBanMode}
-            isManualRegexMode={isManualRegexMode}
+            isManualRegexMode={isManualRegexMode || isAbsoluteManualRegexMode}
             onBanSelection={handleBanSelection}
             onManualRegexSelection={handleManualRegexSelection}
             onManualRegexTargets={addManualRegexTargets}
@@ -1056,6 +1096,7 @@ function App() {
             setIsManualVerticalMode(false);
             setIsBanMode(false);
             setIsManualRegexMode(false);
+            setIsAbsoluteManualRegexMode(false);
           }
         }}
         smartSelectionCount={new Set(
@@ -1075,6 +1116,7 @@ function App() {
             setIsManualVerticalMode(false);
             setIsBanMode(false);
             setIsManualRegexMode(false);
+            setIsAbsoluteManualRegexMode(false);
           }
         }}
         isManualSelectMode={isManualSelectMode}
@@ -1086,6 +1128,7 @@ function App() {
             setIsManualVerticalMode(false);
             setIsBanMode(false);
             setIsManualRegexMode(false);
+            setIsAbsoluteManualRegexMode(false);
           }
         }}
         isManualVerticalMode={isManualVerticalMode}
@@ -1097,6 +1140,7 @@ function App() {
             setIsManualSelectMode(false);
             setIsBanMode(false);
             setIsManualRegexMode(false);
+            setIsAbsoluteManualRegexMode(false);
           }
         }}
         isBanMode={isBanMode}
@@ -1108,6 +1152,7 @@ function App() {
             setIsManualSelectMode(false);
             setIsManualVerticalMode(false);
             setIsManualRegexMode(false);
+            setIsAbsoluteManualRegexMode(false);
           }
         }}
         isManualRegexMode={isManualRegexMode}
@@ -1119,6 +1164,19 @@ function App() {
             setIsManualSelectMode(false);
             setIsManualVerticalMode(false);
             setIsBanMode(false);
+            setIsAbsoluteManualRegexMode(false);
+          }
+        }}
+        isAbsoluteManualRegexMode={isAbsoluteManualRegexMode}
+        onToggleAbsoluteManualRegexMode={() => {
+          const next = !isAbsoluteManualRegexMode;
+          setIsAbsoluteManualRegexMode(next);
+          if (next) {
+            setIsDragMode(false);
+            setIsManualSelectMode(false);
+            setIsManualVerticalMode(false);
+            setIsBanMode(false);
+            setIsManualRegexMode(false);
           }
         }}
         isLightMode={isLightMode}
@@ -1175,13 +1233,25 @@ function App() {
         codexReasoningEffort={codexReasoningEffort}
         geminiApiKey={geminiApiKey}
         openRouterApiKey={openRouterApiKey}
-        onSave={(provider, nextGeminiApiKey, nextOpenRouterApiKey, nextOllamaModel, nextGeminiModel, nextCodexModel, nextCodexReasoningEffort) => {
+        vertexConfig={vertexConfig}
+        onSave={(
+          provider,
+          nextGeminiApiKey,
+          nextOpenRouterApiKey,
+          nextOllamaModel,
+          nextGeminiModel,
+          nextCodexModel,
+          nextCodexReasoningEffort,
+          nextVertexConfig,
+        ) => {
           if (
             provider !== translationProvider
             || nextOllamaModel !== activeOllamaModel
             || nextGeminiModel !== geminiModel
             || nextCodexModel !== codexModel
             || nextCodexReasoningEffort !== codexReasoningEffort
+            || nextVertexConfig.flex !== vertexConfig.flex
+            || nextVertexConfig.useVertex !== vertexConfig.useVertex
           ) {
             setApiStats({
               requestCount: 0,
@@ -1197,6 +1267,7 @@ function App() {
           setCodexReasoningEffort(nextCodexReasoningEffort);
           setGeminiApiKey(nextGeminiApiKey);
           setOpenRouterApiKey(nextOpenRouterApiKey);
+          setVertexConfig(nextVertexConfig);
           void refreshOllamaStatus(nextOllamaModel);
         }}
       />

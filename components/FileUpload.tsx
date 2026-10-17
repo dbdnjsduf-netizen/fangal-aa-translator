@@ -11,6 +11,8 @@ interface FileUploadProps {
   codexStatus?: CodexRuntimeInfo | null;
   ollamaStatus?: OllamaRuntimeInfo | null;
   onOpenTranslationSettings?: () => void;
+  // Gemini through Vertex AI authenticates with a service-account key, not an API key.
+  isVertexMode?: boolean;
 }
 
 export const FileUpload: React.FC<FileUploadProps> = ({
@@ -20,6 +22,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
   codexStatus,
   ollamaStatus,
   onOpenTranslationSettings,
+  isVertexMode = false,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
 
@@ -118,12 +121,16 @@ export const FileUpload: React.FC<FileUploadProps> = ({
               <AlertTriangle className="w-5 h-5 text-yellow-400" />
               <div className="text-left">
                 <p className="text-yellow-300 font-semibold text-sm">
-                  {translationProvider === 'gemini' || translationProvider === 'openrouter'
+                  {isVertexMode
+                    ? 'Vertex AI 서비스 계정 키를 설정해주세요'
+                    : translationProvider === 'gemini' || translationProvider === 'openrouter'
                     ? `${getTranslationProviderLabel(translationProvider)} API 키를 입력해주세요`
                     : `${getTranslationProviderLabel(translationProvider)} 연결을 확인해주세요`}
                 </p>
                 <p className="text-yellow-500/80 text-xs mt-0.5">
-                  {translationProvider === 'gemini' || translationProvider === 'openrouter'
+                  {isVertexMode
+                    ? '번역 설정에서 서비스 계정 JSON 키를 입력하거나 불러오세요.'
+                    : translationProvider === 'gemini' || translationProvider === 'openrouter'
                     ? '키는 현재 브라우저 탭의 세션에만 보관됩니다.'
                     : translationProvider === 'codex'
                       ? codexStatus?.message || '`codex login` 후 상태를 확인하세요.'

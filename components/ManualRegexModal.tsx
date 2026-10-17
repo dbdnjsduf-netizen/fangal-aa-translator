@@ -73,7 +73,7 @@ export const ManualRegexModal: React.FC<ManualRegexModalProps> = ({
               <Braces className="h-5 w-5 text-cyan-400" /> 수동 정규식 관리
             </h2>
             <p className="mt-1 text-xs text-slate-400">
-              저장한 원문과 완전히 같은 문자열만 공백 경계에서 자동 선택합니다. 한 글자는 상하좌우 2칸 여백이 필요하며, 오른쪽 줄 끝은 열린 여백으로 봅니다.
+              저장한 원문과 완전히 같은 문자열만 공백 경계에서 자동 선택합니다. 한 글자는 상하좌우 2칸 여백이 필요하며, 오른쪽 줄 끝은 열린 여백으로 봅니다. '절대' 규칙은 주변 AA·공백과 상관없이 같은 문자열이면 항상 선택합니다.
             </p>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-white" aria-label="수동 정규식 관리 닫기">
@@ -119,9 +119,11 @@ export const ManualRegexModal: React.FC<ManualRegexModalProps> = ({
                   <span className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-bold ${
                     rule.kind === 'vertical'
                       ? 'bg-fuchsia-950 text-fuchsia-300'
-                      : 'bg-cyan-950 text-cyan-300'
+                      : rule.isAbsolute
+                        ? 'bg-teal-900 text-teal-200'
+                        : 'bg-cyan-950 text-cyan-300'
                   }`}>
-                    {rule.kind === 'vertical' ? '세로' : '일반'}
+                    {rule.kind === 'vertical' ? '세로' : rule.isAbsolute ? '절대' : '일반'}
                   </span>
                   <div className="min-w-0 flex-1">
                     <code className="block max-h-20 overflow-auto whitespace-pre-wrap break-all text-xs text-slate-200">

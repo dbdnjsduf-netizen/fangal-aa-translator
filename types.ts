@@ -84,6 +84,8 @@ export interface ManualRegexRule {
   sourceText: string;
   pattern: string;
   contextSignature?: string;
+  // Absolute rules match regardless of neighbouring AA glyphs or whitespace.
+  isAbsolute?: boolean;
   createdAt: number;
 }
 
@@ -111,3 +113,21 @@ export interface CodexRuntimeInfo {
   cliVersion: string;
   message: string;
 }
+
+export interface VertexConfig {
+  useVertex: boolean;
+  vertexCredentials: string;
+  projectId?: string;
+  location?: string;
+  flex: boolean;
+}
+
+export interface VertexRuntimeInfo {
+  ok: boolean;
+  projectId?: string;
+  clientEmail?: string;
+  location?: string;
+  flex?: boolean;
+  message?: string;
+}
+

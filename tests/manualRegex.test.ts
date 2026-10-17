@@ -406,3 +406,98 @@ test('같은 원문은 공간 문맥이 달라도 정확 문자열 규칙 하나
 
   assert.equal(second.entries.length, 1);
 });
+
+function absoluteRulesFor(...sourceTexts: string[]): ManualRegexRules {
+  return sourceTexts.reduce(
+    (rules, sourceText, index) => addManualRegexRule(
+      rules,
+      { kind: 'normal', sourceText, isAbsolute: true },
+      `absolute-${index}`,
+      index,
+    ),
+    { entries: [] } as ManualRegexRules,
+  );
+}
+
+test('절대수동정규식은 AA 글자에 붙어 있어도 같은 원문을 선택한다', () => {
+  const source = segment('source', '|:{ねぇーー|ﾉ ;ねぇーー');
+  const normal = applyManualRegexRules([source], rulesFor('ねぇーー'));
+  assert.deepEqual(normal.filter(({ isSelected }) => isSelected), []);
+
+  const result = applyManualRegexRules([source], absoluteRulesFor('ねぇーー'));
+  assert.equal(result.map(({ text }) => text).join(''), source.text);
+  assert.deepEqual(
+    result.filter(({ isSelected }) => isSelected).map(({ text }) => text),
+    ['ねぇーー', 'ねぇーー'],
+  );
+});
+
+test('절대수동정규식 한 글자 규칙은 사방 여백 없이도 적용되고 세그먼트 경계를 넘어 다시 묶는다', () => {
+  const single = applyManualRegexRules(
+    [segment('single', 'ﾐ ﾊん')],
+    absoluteRulesFor('ん'),
+  );
+  assert.deepEqual(
+    single.filter(({ isSelected }) => isSelected).map(({ text }) => text),
+    ['ん'],
+  );
+
+  const split = applyManualRegexRules(
+    [segment('left', 'ﾉ一撃'), segment('right', '………ﾊ')],
+    absoluteRulesFor('一撃………'),
+  );
+  assert.equal(split.map(({ text }) => text).join(''), 'ﾉ一撃………ﾊ');
+  assert.deepEqual(
+    split.filter(({ isSelected }) => isSelected).map(({ text }) => text),
+    ['一撃………'],
+  );
+});
+
+test('절대수동정규식은 이미 인식된 자동 대사 단위를 쪼개지 않는다', () => {
+  const automatic = segment('automatic', 'ん？　どうするって何ですか？', {
+    isJapanese: true,
+    isAutoSelected: true,
+  });
+  const [result, ...rest] = applyManualRegexRules([automatic], absoluteRulesFor('ん？'));
+  assert.equal(rest.length, 0);
+  assert.equal(result.text, automatic.text);
+});
+
+test('같은 원문의 일반 규칙에 절대 규칙을 추가하면 절대 규칙으로 승격되고 저장 후에도 유지된다', () => {
+  const upgraded = addManualRegexRule(
+    rulesFor('ねぇーー'),
+    { kind: 'normal', sourceText: 'ねぇーー', isAbsolute: true },
+    'upgraded',
+    10,
+  );
+  assert.equal(upgraded.entries.length, 1);
+  assert.equal(upgraded.entries[0].id, 'upgraded');
+  assert.equal(upgraded.entries[0].isAbsolute, true);
+  assert.equal(
+    addManualRegexRule(upgraded, { kind: 'normal', sourceText: 'ねぇーー' }, 'again'),
+    upgraded,
+  );
+  const restored = deserializeManualRegexRules(JSON.stringify(upgraded));
+  assert.equal(restored.entries[0].isAbsolute, true);
+  assert.equal(normalizeManualRegexRules(rulesFor('x')).entries[0].isAbsolute, undefined);
+});
+
+test('상자 벽 │ 이나 말풍선 화살표 ＞ 에 붙은 원문도 일반 수동정규식이 잡는다', () => {
+  const boxed = segment('boxed', 'あれから', { isJapanese: true, isBoxedDialogue: true });
+  const result = applyManualRegexRules(
+    [segment('left', '│'), boxed, segment('right', '　　　.│')],
+    rulesFor('あれから'),
+  );
+  const target = result.find(({ text }) => text === 'あれから');
+  assert.equal(target?.isSelected, true);
+  assert.equal(target?.isManualRegexSelection, true);
+
+  const arrow = applyManualRegexRules([segment('arrow', '　ねぇーー＞')], rulesFor('ねぇーー'));
+  assert.deepEqual(
+    arrow.filter(({ isSelected }) => isSelected).map(({ text }) => text),
+    ['ねぇーー'],
+  );
+  // AA strokes such as ﾉ or : remain disqualifying neighbours.
+  const glued = applyManualRegexRules([segment('glued', ':ねぇーーﾉ')], rulesFor('ねぇーー'));
+  assert.deepEqual(glued.filter(({ isSelected }) => isSelected), []);
+});

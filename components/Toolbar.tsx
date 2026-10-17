@@ -27,6 +27,8 @@ interface ToolbarProps {
   onToggleBanMode?: () => void;
   isManualRegexMode?: boolean;
   onToggleManualRegexMode?: () => void;
+  isAbsoluteManualRegexMode?: boolean;
+  onToggleAbsoluteManualRegexMode?: () => void;
   isLightMode?: boolean;
 }
 
@@ -52,6 +54,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onToggleBanMode,
   isManualRegexMode,
   onToggleManualRegexMode,
+  isAbsoluteManualRegexMode,
+  onToggleAbsoluteManualRegexMode,
   isLightMode = false,
 }) => {
   const inactiveModeButtonClass = isLightMode
@@ -189,6 +193,18 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                     <Braces className="w-4 h-4" />
                     수동정규식
                 </button>
+                <button
+                    onClick={onToggleAbsoluteManualRegexMode}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
+                      isAbsoluteManualRegexMode
+                        ? 'bg-teal-700 text-white hover:bg-teal-600'
+                        : inactiveModeButtonClass
+                    }`}
+                    title="주변 AA·공백과 상관없이 같은 원문이 보이면 항상 자동 선택 (한 글자는 그림 속 글자까지 잡힐 수 있음)"
+                >
+                    <Braces className="w-4 h-4" />
+                    절대수동정규식
+                </button>
 
                 {smartSelectionCount > 0 && (
                     <>
@@ -223,12 +239,13 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                         </button>
                     </>
                 )}
-                {smartSelectionCount === 0 && !isDragMode && !isManualSelectMode && !isManualVerticalMode && !isBanMode && !isManualRegexMode && <span className="text-slate-500 text-sm px-4">클릭하여 선택</span>}
+                {smartSelectionCount === 0 && !isDragMode && !isManualSelectMode && !isManualVerticalMode && !isBanMode && !isManualRegexMode && !isAbsoluteManualRegexMode && <span className="text-slate-500 text-sm px-4">클릭하여 선택</span>}
                 {smartSelectionCount === 0 && isDragMode && <span className="text-purple-300 text-sm px-4 animate-pulse">영역을 드래그하여 선택...</span>}
                 {smartSelectionCount === 0 && isManualSelectMode && <span className="text-orange-300 text-sm px-4 animate-pulse">가로 텍스트 전체를 박스로 드래그하세요...</span>}
                 {smartSelectionCount === 0 && isManualVerticalMode && <span className="text-fuchsia-300 text-sm px-4 animate-pulse">세로쓰기 전체를 박스로 드래그하세요...</span>}
                 {smartSelectionCount === 0 && isBanMode && <span className="text-red-300 text-sm px-4 animate-pulse">먼저 금지할 항목을 선택하세요...</span>}
                 {smartSelectionCount === 0 && isManualRegexMode && <span className="text-cyan-500 text-sm px-4 animate-pulse">자동 선택할 텍스트를 박스로 드래그하세요...</span>}
+                {smartSelectionCount === 0 && isAbsoluteManualRegexMode && <span className="text-teal-400 text-sm px-4 animate-pulse">주변과 상관없이 항상 선택할 텍스트를 박스로 드래그하세요...</span>}
             </>
         )}
 

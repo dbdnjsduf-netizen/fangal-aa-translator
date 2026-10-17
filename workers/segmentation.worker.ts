@@ -746,7 +746,10 @@ const isPunctuatedNumericCjkPhrase = (text: string): boolean => {
 
 const isLeadingHesitationSingleKanaReaction = (text: string): boolean => {
   const normalized = text.normalize('NFKC').replace(/[\s\u3000\u00a0\u2000-\u200b]+/gu, '');
-  return /^[.…・]{2,}[ぁ-んァ-ヶ][!?]+$/u.test(normalized);
+  // The leading ellipsis is optional: a bare "ん？" / "え！" reaction is just
+  // as clearly dialogue once it is four-side isolated. Stroke-shaped kana that
+  // commonly appear as AA lines stay excluded.
+  return /^(?:[.…・]{2,})?(?![ノレソ])[ぁ-んァ-ヶ][!?]+$/u.test(normalized);
 };
 
 const INLINE_BUBBLE_LEFT_WALL = /[|｜│┃>＞]/u;
@@ -1723,10 +1726,13 @@ function segmentContent(
       // Allows: hiragana (お,え〜), katakana sound effects, kanji text
       const hasHiragana = RE_STANDARD_HIRAGANA.test(part);
       const hasJapaneseScript = RE_JAPANESE_SCRIPT.test(part);
+      // A wall of a verified speech box is not AA texture, so a short
+      // reaction glued to it ("│ん？　　│") stays eligible.
       const isShortBarAttachedFragment = isTouchingBar
         && jpCharsMatch.length <= 2
         && !hasStrongLanguage
-        && !isClosedBubbleVocalization;
+        && !isClosedBubbleVocalization
+        && !hasVerifiedDialogueBox;
       const isNeverSelectable = RE_DISQUALIFIED.test(part)
         || RE_NOISE_ONLY.test(part)
         || !RE_MEANINGFUL_JP.test(part)
@@ -2155,8 +2161,13 @@ function segmentContent(
             && RE_STRICT_BLANK.test(contentAfterCandidate)
           )
         );
+      const isBoxedSingleKanaReaction = !isThreadNameLine
+        && hasVerifiedDialogueBox
+        && !isNeverSelectable
+        && isLeadingHesitationSingleKanaReaction(part);
       const isContextPatternApproved = isRightmostFullyIndependentJapaneseShape
         || isFourSideIndependentHesitationReaction
+        || isBoxedSingleKanaReaction
         || isBoxQualifiedJapaneseShape
         || isSpatiallyQualifiedShortMixedPhrase
         || isSpatiallyQualifiedShortNumericPhrase

@@ -8,6 +8,19 @@ interface ChangelogModalProps {
 
 const changelogData = [
   {
+    version: '1.12.0',
+    date: '2026-10-18',
+    title: 'Vertex AI 지원·박스 대사 인식·대용량 파일 속도 개선',
+    changes: [
+      'Gemini를 Vertex AI 서비스 계정 키로 사용 (Flex·즉시 방식 선택)',
+      'Vertex AI가 준비됐는데도 Gemini API 키 경고가 뜨던 문제 수정',
+      '작은 사각 박스·꼬리 말풍선·ん？ 같은 짧은 반응의 자동 선택 개선',
+      'AA에 붙어 있어도 항상 선택하는 절대수동정규식 추가',
+      '박스 벽 │·화살표 ＞에 붙은 글자도 일반 수동정규식이 인식',
+      '대용량 파일 드래그 약 20배 빨라짐, 수동정규식 추가 중 선택이 사라지던 문제 수정',
+    ],
+  },
+  {
     version: '1.11.15',
     date: '2026-09-30',
     title: 'GPT-6.1 Sol 업데이트',

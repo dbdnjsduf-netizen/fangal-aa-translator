@@ -1,16 +1,20 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
   Eye,
   EyeOff,
+  FolderOpen,
   KeyRound,
   RefreshCw,
   Server,
+  Sparkles,
   Terminal,
+  Upload,
   X,
+  Zap,
 } from 'lucide-react';
-import { CodexRuntimeInfo, OllamaRuntimeInfo, TranslationProvider } from '../types';
+import { CodexRuntimeInfo, OllamaRuntimeInfo, TranslationProvider, VertexConfig } from '../types';
 import { CODEX_MODELS, CODEX_REASONING_EFFORTS, OPENROUTER_MODEL } from '../services/translationService';
 import type { CodexModel, CodexReasoningEffort } from '../services/translationService';
 import { GEMINI_MODELS, GeminiModel } from '../services/geminiService';
@@ -31,6 +35,7 @@ interface TranslationSettingsModalProps {
   codexReasoningEffort: CodexReasoningEffort;
   geminiApiKey: string;
   openRouterApiKey: string;
+  vertexConfig: VertexConfig;
   onSave: (
     provider: TranslationProvider,
     geminiApiKey: string,
@@ -39,6 +44,7 @@ interface TranslationSettingsModalProps {
     geminiModel: GeminiModel,
     codexModel: CodexModel,
     codexReasoningEffort: CodexReasoningEffort,
+    vertexConfig: VertexConfig,
   ) => void;
 }
 
@@ -58,10 +64,10 @@ const PROVIDERS: Array<{
   },
   {
     id: 'gemini',
-    title: 'Gemini API',
-    description: 'Google API 키로 직접 호출',
+    title: 'Gemini (Vertex / API)',
+    description: 'Vertex AI JSON (Flex 지원) 또는 API 키',
     color: 'blue',
-    icon: KeyRound,
+    icon: Sparkles,
   },
   {
     id: 'codex',
@@ -109,6 +115,7 @@ export const TranslationSettingsModal: React.FC<TranslationSettingsModalProps> =
   codexReasoningEffort,
   geminiApiKey,
   openRouterApiKey,
+  vertexConfig,
   onSave,
 }) => {
   const [draftProvider, setDraftProvider] = useState<TranslationProvider>(provider);
@@ -118,6 +125,7 @@ export const TranslationSettingsModal: React.FC<TranslationSettingsModalProps> =
   const [draftCodexReasoningEffort, setDraftCodexReasoningEffort] = useState<CodexReasoningEffort>(codexReasoningEffort);
   const [draftGeminiApiKey, setDraftGeminiApiKey] = useState(geminiApiKey);
   const [draftOpenRouterApiKey, setDraftOpenRouterApiKey] = useState(openRouterApiKey);
+  const [draftVertexConfig, setDraftVertexConfig] = useState<VertexConfig>(vertexConfig);
   const [showGeminiApiKey, setShowGeminiApiKey] = useState(false);
   const [showOpenRouterApiKey, setShowOpenRouterApiKey] = useState(false);
 
@@ -130,9 +138,26 @@ export const TranslationSettingsModal: React.FC<TranslationSettingsModalProps> =
     setDraftCodexReasoningEffort(codexReasoningEffort);
     setDraftGeminiApiKey(geminiApiKey);
     setDraftOpenRouterApiKey(openRouterApiKey);
+    setDraftVertexConfig(vertexConfig);
     setShowGeminiApiKey(false);
     setShowOpenRouterApiKey(false);
-  }, [codexModel, codexReasoningEffort, geminiApiKey, geminiModel, isOpen, ollamaModel, openRouterApiKey, provider]);
+
+    // 모달이 열릴 때 서버에 저장된 최신 Vertex 설정 조회 및 병합
+    fetch('/api/vertex/config')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((serverConf) => {
+        if (serverConf && (serverConf.vertexCredentials || serverConf.projectId)) {
+          setDraftVertexConfig((prev) => ({
+            ...prev,
+            vertexCredentials: prev.vertexCredentials || serverConf.vertexCredentials || '',
+            projectId: prev.projectId || serverConf.projectId || '',
+            location: prev.location || serverConf.location || 'global',
+            flex: prev.flex ?? serverConf.flex ?? false,
+          }));
+        }
+      })
+      .catch(() => {});
+  }, [codexModel, codexReasoningEffort, geminiApiKey, geminiModel, isOpen, ollamaModel, openRouterApiKey, provider, vertexConfig]);
 
   if (!isOpen) return null;
 
@@ -140,8 +165,12 @@ export const TranslationSettingsModal: React.FC<TranslationSettingsModalProps> =
     status?.ok && status.modelAvailable && status.model === draftOllamaModel,
   );
   const codexReady = Boolean(codexStatus?.ok && codexStatus.authenticated);
+  const isGeminiReadyDraft = draftVertexConfig.useVertex
+    ? Boolean(draftVertexConfig.vertexCredentials?.trim())
+    : Boolean(draftGeminiApiKey.trim());
+
   const canSave = draftProvider === 'ollama'
-    || (draftProvider === 'gemini' && Boolean(draftGeminiApiKey.trim()))
+    || (draftProvider === 'gemini' && isGeminiReadyDraft)
     || (draftProvider === 'openrouter' && Boolean(draftOpenRouterApiKey.trim()))
     || (draftProvider === 'codex' && codexReady);
 
@@ -200,36 +229,16 @@ export const TranslationSettingsModal: React.FC<TranslationSettingsModalProps> =
           )}
 
           {draftProvider === 'gemini' && (
-            <>
-              <div className="space-y-2">
-                <label htmlFor="gemini-model" className="text-sm font-medium text-slate-200">
-                  Gemini 모델
-                </label>
-                <select
-                  id="gemini-model"
-                  value={draftGeminiModel}
-                  onChange={(event) => setDraftGeminiModel(event.target.value as GeminiModel)}
-                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-blue-500"
-                >
-                  {GEMINI_MODELS.map((model) => (
-                    <option key={model.id} value={model.id}>{model.label}</option>
-                  ))}
-                </select>
-              </div>
-              <ApiKeySettings
-                id="gemini-api-key"
-                label="Gemini API 키"
-                model={draftGeminiModel}
-                value={draftGeminiApiKey}
-                onChange={setDraftGeminiApiKey}
-                show={showGeminiApiKey}
-                onToggleShow={() => setShowGeminiApiKey((value) => !value)}
-                placeholder="Google AI Studio에서 발급한 키"
-                link="https://aistudio.google.com/apikey"
-                linkLabel="Google AI Studio에서 API 키 만들기"
-                accent="blue"
-              />
-            </>
+            <VertexSettings
+              vertexConfig={draftVertexConfig}
+              onChange={setDraftVertexConfig}
+              model={draftGeminiModel}
+              onModelChange={setDraftGeminiModel}
+              apiKey={draftGeminiApiKey}
+              onApiKeyChange={setDraftGeminiApiKey}
+              showApiKey={showGeminiApiKey}
+              onToggleShowApiKey={() => setShowGeminiApiKey((v) => !v)}
+            />
           )}
 
           {draftProvider === 'codex' && (
@@ -287,6 +296,13 @@ export const TranslationSettingsModal: React.FC<TranslationSettingsModalProps> =
           </button>
           <button
             onClick={() => {
+              if (draftVertexConfig.useVertex && draftVertexConfig.vertexCredentials) {
+                fetch('/api/vertex/config', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(draftVertexConfig),
+                }).catch(() => {});
+              }
               onSave(
                 draftProvider,
                 draftGeminiApiKey.trim(),
@@ -295,6 +311,7 @@ export const TranslationSettingsModal: React.FC<TranslationSettingsModalProps> =
                 draftGeminiModel,
                 draftCodexModel,
                 draftCodexReasoningEffort,
+                draftVertexConfig,
               );
               onClose();
             }}
@@ -530,6 +547,308 @@ function RuntimeStatus({
           <div className="text-sm text-slate-400 mt-1">{message}</div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function VertexSettings({
+  vertexConfig,
+  onChange,
+  model,
+  onModelChange,
+  apiKey,
+  onApiKeyChange,
+  showApiKey,
+  onToggleShowApiKey,
+}: {
+  vertexConfig: VertexConfig;
+  onChange: (updated: VertexConfig) => void;
+  model: GeminiModel;
+  onModelChange: (model: GeminiModel) => void;
+  apiKey: string;
+  onApiKeyChange: (key: string) => void;
+  showApiKey: boolean;
+  onToggleShowApiKey: () => void;
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [saNotice, setSaNotice] = useState<{ ok: boolean; message: string; projectId?: string; clientEmail?: string } | null>(null);
+
+  useEffect(() => {
+    if (!vertexConfig.vertexCredentials?.trim()) {
+      setSaNotice(null);
+      return;
+    }
+    try {
+      const sa = JSON.parse(vertexConfig.vertexCredentials);
+      if (sa.client_email && sa.private_key) {
+        setSaNotice({
+          ok: true,
+          message: `서비스 계정 인식 완료 (${sa.client_email})`,
+          projectId: sa.project_id,
+          clientEmail: sa.client_email,
+        });
+        if (!vertexConfig.projectId && sa.project_id) {
+          onChange({ ...vertexConfig, projectId: sa.project_id });
+        }
+      } else {
+        setSaNotice({
+          ok: false,
+          message: 'JSON에 client_email 또는 private_key 필드가 없습니다.',
+        });
+      }
+    } catch {
+      setSaNotice({
+        ok: false,
+        message: '서비스 계정 JSON 키 형식이 올바르지 않습니다.',
+      });
+    }
+  }, [vertexConfig.vertexCredentials]);
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const text = String(evt.target?.result || '');
+      try {
+        const sa = JSON.parse(text);
+        if (sa.client_email && sa.private_key) {
+          onChange({
+            ...vertexConfig,
+            useVertex: true,
+            vertexCredentials: text,
+            projectId: sa.project_id || vertexConfig.projectId || '',
+          });
+          fetch('/api/vertex/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              vertexCredentials: text,
+              projectId: sa.project_id || '',
+              location: vertexConfig.location || 'global',
+              flex: vertexConfig.flex,
+            }),
+          }).catch(() => {});
+        } else {
+          alert('선택한 파일이 Google Cloud 서비스 계정 JSON 형식이 아닙니다.');
+        }
+      } catch {
+        alert('올바른 JSON 파일이 아닙니다.');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="space-y-1.5">
+        <label htmlFor="gemini-model" className="text-sm font-medium text-slate-200">
+          Gemini 모델
+        </label>
+        <select
+          id="gemini-model"
+          value={model}
+          onChange={(event) => onModelChange(event.target.value as GeminiModel)}
+          className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-blue-500"
+        >
+          {GEMINI_MODELS.map((m) => (
+            <option key={m.id} value={m.id}>{m.label}</option>
+          ))}
+        </select>
+      </div>
+
+      <div className="flex rounded-lg bg-slate-950 p-1 border border-slate-800">
+        <button
+          type="button"
+          onClick={() => onChange({ ...vertexConfig, useVertex: true })}
+          className={`flex-1 py-1.5 px-3 rounded-md text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${
+            vertexConfig.useVertex
+              ? 'bg-blue-600 text-white shadow'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Sparkles className="w-3.5 h-3.5" />
+          Vertex AI (서비스 계정 JSON · Flex 지원)
+        </button>
+        <button
+          type="button"
+          onClick={() => onChange({ ...vertexConfig, useVertex: false })}
+          className={`flex-1 py-1.5 px-3 rounded-md text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${
+            !vertexConfig.useVertex
+              ? 'bg-blue-600 text-white shadow'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <KeyRound className="w-3.5 h-3.5" />
+          Google AI Studio (API 키)
+        </button>
+      </div>
+
+      {vertexConfig.useVertex ? (
+        <>
+          <RuntimeStatus
+            ready={Boolean(saNotice?.ok)}
+            checking={false}
+            readyText="Vertex AI 서비스 계정 준비 완료"
+            message={
+              saNotice ? (
+                <span className={saNotice.ok ? 'text-green-300' : 'text-red-300'}>
+                  {saNotice.message}
+                  {saNotice.projectId && (
+                    <span className="block text-xs text-slate-400 mt-0.5">
+                      프로젝트 ID: <code className="text-blue-300 font-mono">{saNotice.projectId}</code>
+                    </span>
+                  )}
+                </span>
+              ) : (
+                'Google Cloud 서비스 계정 JSON 키 파일을 불러오거나 아래에 붙여넣으세요.'
+              )
+            }
+          />
+
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium text-slate-200 flex items-center gap-1.5">
+              <span>번역 처리 방식 (Flex 옵션)</span>
+            </label>
+            <div className="grid grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                onClick={() => onChange({ ...vertexConfig, flex: false })}
+                className={`p-3 rounded-xl border text-left transition-all ${
+                  !vertexConfig.flex
+                    ? 'bg-blue-950/40 border-blue-500 shadow-sm'
+                    : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                }`}
+              >
+                <div className="flex items-center gap-1.5 font-medium text-sm text-slate-100">
+                  <Zap className={`w-4 h-4 ${!vertexConfig.flex ? 'text-amber-400' : 'text-slate-400'}`} />
+                  ⚡ 즉시 번역 (Standard)
+                </div>
+                <p className="text-xs text-slate-400 mt-1">
+                  대기열 없이 온디맨드로 바로 처리합니다. 빠른 번역에 적합합니다.
+                </p>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onChange({ ...vertexConfig, flex: true })}
+                className={`p-3 rounded-xl border text-left transition-all ${
+                  vertexConfig.flex
+                    ? 'bg-cyan-950/40 border-cyan-500 shadow-sm'
+                    : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                }`}
+              >
+                <div className="flex items-center gap-1.5 font-medium text-sm text-slate-100">
+                  <Sparkles className={`w-4 h-4 ${vertexConfig.flex ? 'text-cyan-400' : 'text-slate-400'}`} />
+                  🌊 플렉스 번역 (Flex)
+                </div>
+                <p className="text-xs text-cyan-300/80 mt-1">
+                  비용 50% 절감. 공유 리소스 대기열을 거쳐 경제적으로 처리합니다.
+                </p>
+              </button>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label htmlFor="vertex-json" className="text-sm font-medium text-slate-200">
+                서비스 계정 JSON 키
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleFileUpload}
+                  accept=".json,application/json"
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs bg-slate-800 hover:bg-slate-700 text-blue-300 rounded-lg border border-slate-700 transition-colors"
+                >
+                  <FolderOpen className="w-3.5 h-3.5" />
+                  JSON 파일 불러오기
+                </button>
+                {vertexConfig.vertexCredentials && (
+                  <button
+                    type="button"
+                    onClick={() => onChange({ ...vertexConfig, vertexCredentials: '', projectId: '' })}
+                    className="text-xs text-red-400 hover:text-red-300"
+                  >
+                    지우기
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <textarea
+              id="vertex-json"
+              rows={5}
+              value={vertexConfig.vertexCredentials || ''}
+              onChange={(e) => {
+                const text = e.target.value;
+                let proj = vertexConfig.projectId;
+                try {
+                  const parsed = JSON.parse(text);
+                  if (parsed.project_id) proj = parsed.project_id;
+                } catch {}
+                onChange({ ...vertexConfig, vertexCredentials: text, projectId: proj });
+              }}
+              placeholder='Google Cloud 서비스 계정 키 파일(.json) 내용 붙여넣기'
+              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-mono text-slate-200 outline-none focus:border-blue-500 placeholder:text-slate-600"
+              spellCheck={false}
+            />
+
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div>
+                <label htmlFor="vertex-project" className="block text-slate-400 mb-1">프로젝트 ID</label>
+                <input
+                  id="vertex-project"
+                  type="text"
+                  value={vertexConfig.projectId || ''}
+                  onChange={(e) => onChange({ ...vertexConfig, projectId: e.target.value.trim() })}
+                  placeholder="JSON에서 자동 추출됨"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-slate-200 outline-none focus:border-blue-500"
+                />
+              </div>
+              <div>
+                <label htmlFor="vertex-location" className="block text-slate-400 mb-1">리전 (Location)</label>
+                <select
+                  id="vertex-location"
+                  value={vertexConfig.location || 'global'}
+                  onChange={(e) => onChange({ ...vertexConfig, location: e.target.value })}
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-slate-200 outline-none focus:border-blue-500"
+                >
+                  <option value="global">global (기본값 · 추천)</option>
+                  <option value="us-central1">us-central1 (아이오와)</option>
+                  <option value="asia-northeast1">asia-northeast1 (도쿄)</option>
+                  <option value="asia-northeast3">asia-northeast3 (서울)</option>
+                </select>
+              </div>
+            </div>
+
+            <p className="text-[11px] text-slate-500 leading-relaxed">
+              💡 입력하거나 불러온 서비스 계정 JSON은 앱을 종료해도 서버(<code className="text-slate-400 font-mono">vertex-config.json</code>)와 브라우저에 안전하게 유지됩니다.
+            </p>
+          </div>
+        </>
+      ) : (
+        <ApiKeySettings
+          id="gemini-api-key"
+          label="Gemini API 키"
+          model={model}
+          value={apiKey}
+          onChange={onApiKeyChange}
+          show={showApiKey}
+          onToggleShow={onToggleShowApiKey}
+          placeholder="Google AI Studio에서 발급한 키"
+          link="https://aistudio.google.com/apikey"
+          linkLabel="Google AI Studio에서 API 키 만들기"
+          accent="blue"
+        />
+      )}
     </div>
   );
 }

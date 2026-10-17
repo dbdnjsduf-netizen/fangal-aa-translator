@@ -24,9 +24,11 @@ test('저장된 엔진 값은 허용된 공급자로만 복구한다', () => {
 });
 
 test('저장된 Gemini 모델은 지원 목록으로만 복구한다', () => {
+  assert.equal(normalizeGeminiModel('gemini-3.8-flash'), 'gemini-3.8-flash');
+  assert.equal(normalizeGeminiModel('gemini-3.6-flash'), 'gemini-3.6-flash');
   assert.equal(normalizeGeminiModel('gemini-3.1-flash-lite'), 'gemini-3.1-flash-lite');
-  assert.equal(normalizeGeminiModel('gemini-2.5-flash-lite'), 'gemini-3.6-flash');
-  assert.equal(normalizeGeminiModel('unknown-model'), 'gemini-3.6-flash');
+  assert.equal(normalizeGeminiModel('gemini-2.5-flash-lite'), 'gemini-3.8-flash');
+  assert.equal(normalizeGeminiModel('unknown-model'), 'gemini-3.8-flash');
 });
 
 test('Codex 모델과 추론 강도는 허용 목록으로 복구하고 기본값은 Sol low다', () => {
@@ -46,6 +48,16 @@ test('선택한 엔진에 맞는 준비 상태와 모델명을 반환한다', ()
   assert.equal(isProviderReady('ollama', 'unused-key', false), false);
   assert.equal(isProviderReady('gemini', 'entered-key', false), true);
   assert.equal(isProviderReady('gemini', '   ', true), false);
+  assert.equal(isProviderReady('gemini', '', false, null, {
+    useVertex: true,
+    vertexCredentials: '{"client_email":"test@example.com","private_key":"key"}',
+    flex: true,
+  }), true);
+  assert.equal(isProviderReady('gemini', '', false, null, {
+    useVertex: true,
+    vertexCredentials: '   ',
+    flex: true,
+  }), false);
   assert.equal(isProviderReady('openrouter', 'entered-key', false), true);
   assert.equal(isProviderReady('openrouter', '   ', true), false);
   assert.equal(isProviderReady('codex', '', false, {
@@ -56,14 +68,24 @@ test('선택한 엔진에 맞는 준비 상태와 모델명을 반환한다', ()
     message: 'ready',
   }), true);
   assert.equal(isProviderReady('codex', '', true, null), false);
-  assert.equal(getProviderModelLabel('gemini'), 'gemini-3.6-flash');
+  assert.equal(getProviderModelLabel('gemini'), 'gemini-3.8-flash');
   assert.equal(
     getProviderModelLabel('gemini', 'unused', 'gemini-3.1-flash-lite'),
     'gemini-3.1-flash-lite',
   );
+  assert.equal(getProviderModelLabel('gemini', 'unused', 'gemini-3.8-flash', 'gpt-6.1-sol', {
+    useVertex: true,
+    vertexCredentials: '...',
+    flex: true,
+  }), 'gemini-3.8-flash · FLEX');
+  assert.equal(getProviderModelLabel('gemini', 'unused', 'gemini-3.8-flash', 'gpt-6.1-sol', {
+    useVertex: true,
+    vertexCredentials: '...',
+    flex: false,
+  }), 'gemini-3.8-flash · 즉시');
   assert.equal(getProviderModelLabel('ollama', 'custom-model'), 'custom-model');
   assert.equal(getProviderModelLabel('codex'), 'gpt-6.1-sol');
-  assert.equal(getProviderModelLabel('codex', 'unused', 'gemini-3.6-flash', 'gpt-6-luna'), 'gpt-6-luna');
+  assert.equal(getProviderModelLabel('codex', 'unused', 'gemini-3.8-flash', 'gpt-6-luna'), 'gpt-6-luna');
   assert.equal(getProviderModelLabel('openrouter'), 'google/gemma-3-27b-it');
 });
 

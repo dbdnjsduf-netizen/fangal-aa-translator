@@ -729,7 +729,9 @@ test('반각 탁점과 라틴 전각 i 조합은 일본어 한 글자로 취급�
     .map(({ text }) => text)
     .join('');
 
-  assert.doesNotMatch(selectedText, /ﾞｉ|あ！/u);
+  assert.doesNotMatch(selectedText, /ﾞｉ/u);
+  // 사방이 비어 있는 단일 가나 + 감탄/의문 부호 반응은 대사로 자동선택한다.
+  assert.match(selectedText, /あ！/u);
 });
 
 test('박스 밖에서 여러 방향의 AA 획에 둘러싸인 짧은 가나 조각은 선택하지 않는다', () => {
@@ -1517,4 +1519,97 @@ test('긴 AA 세그먼트 안의 세로 글자도 실제 한 칸만 보라색으
   assert.equal(vertical.map(({ text }) => text).join(''), 'え│どうしよ');
   assert.ok(vertical.every(({ text }) => Array.from(text).length === 1));
   assert.equal(annotated.map(({ text }) => text).join(''), sample);
+});
+
+test('AA 바로 아래 ┌─┐ 작은 사각박스는 정렬용 점 패딩이 있어도 자동선택한다', () => {
+  const art = [
+    '　|:　　　 　 ＼　　　　 :,　　 |　　　　　　　　　　　 , ′　 : 　: ,′',
+    '　　　　　　　　　 　 ｉ 　 :,　 :|ﾞ\'　　　　　　　- 　　　　　 .:′j/',
+    '　ｉ　　　　\':,　　　　八　　 :､ |　　≧z｡..　　　／}　　　　く ／',
+    '　|:　　　　 　 　 ＼ 　 　 　 ＼　　/.:jﾉ ￣i″\' :　　丶',
+    'i八　　　　　 ＼　　＼　 ＼　　丶\'ー―ｭjﾉ /.::j/　　/',
+    '',
+  ];
+  const sample = [
+    ...art,
+    '┌─────────┐',
+    '│って、お前ら？　　 　 .│',
+    '└─────────┘',
+    '',
+    ...art,
+    '┌──────────┐',
+    '│彼女ら、か………　　......│',
+    '└──────────┘',
+    '',
+  ].join('\n');
+  const selected = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text);
+
+  assert.ok(selected.includes('って、お前ら？'), JSON.stringify(selected));
+  assert.ok(selected.includes('彼女ら、か………'), JSON.stringify(selected));
+});
+
+test('사방 여백 속 말줄임표 없는 단일 가나 반응 ん？도 전체선택한다', () => {
+  const sample = [
+    '　ｉ　　　　\':,　　　　八　　 :､ |　　≧z｡..　　　／}',
+    '　　　　　　　　　 　 ｉ 　 :,　 :|ﾞ\'　　　　　　　- 　　　　　 .:′j/　　　　　　　　　　ん？',
+    '　ｉ　　　　\':,　　　　八　　 :､ |　　≧z｡..　　　／}　　　　く ／',
+    '',
+    '　　　　　　　　　　　　　あ',
+    '',
+  ].join('\n');
+  const selected = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text);
+
+  assert.ok(selected.includes('ん？'), JSON.stringify(selected));
+  assert.ok(!selected.includes('あ'), JSON.stringify(selected));
+});
+
+test('벽에 붙은 상자 속 ん？ 반응과 한 상자 안의 여러 구절을 모두 자동선택한다', () => {
+  const art = [
+    '.　　　　＼ﾊ.: .:|.: .: .:|:ﾍ　 　 　 |--￣｀´￣--|__ 　 . ...,| : : : |从',
+    '.　　　　　　 ＼|.: .: .:|`込、　　　|二二二二-|　 　 ／ | : : : |',
+    '　　　　　　　　/　/ﾆ7 /ﾆﾆﾆﾆﾆ7-‐‐　､ 　 　 ∠ニﾆ',
+    '',
+  ];
+  const sample = [
+    ...art,
+    '┌────┐',
+    '│ん？　　　│',
+    '└────┘',
+    '',
+    ...art,
+    '┌────────────┐',
+    '│一撃………　　で……　　　　│',
+    '└────────────┘',
+    '',
+  ].join('\n');
+  const selected = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text);
+
+  for (const phrase of ['ん？', '一撃………', 'で……']) {
+    assert.ok(selected.includes(phrase), `${phrase}: ${JSON.stringify(selected)}`);
+  }
+});
+
+test('￣＼ / ＞ / ＿／ 꼬리 말풍선은 왼쪽 벽이 없어도 자동선택한다', () => {
+  const sample = [
+    '　　　　 　 :::::::::::::::::::::::::|:::::｀^⌒:::::::＜____,,..　-=ﾆ|　　　　　　　　　　 ｲ　　　　　　　　　　 ￣￣￣￣￣￣￣￣＼',
+    '　　 　 　 ::::::::/|:::::::::::::::|:::::::::::::::::::x―r＜　　 　∨ /　　　　　　　　　人_　；　　　　　　　　　　ね、ねぇーー　　　＞',
+    '..　　；　/:::::::/ ,|八:::::::::::::::::::::::::::/　〈¨¨∧　　　/ /　　　　　　　　　　 _ノ--=ミ　　　　　　 ＿＿＿＿＿＿＿＿／',
+    '',
+    '　　　　　　　　　 　 |: : :; - ､:| r､ |「^]: : ヾ｜　　　　　　　　￣￣￣￣￣￣￣￣￣＼',
+    '　　　　　　　　　 　 |: :/ｨ「〕 )＿ノL「rｭ[\'ｧ:il|　　　　　　　　　 はい、おでん缶だお 　＞',
+    '　　　　　　　　　 　 |:{ { | r厄「ｭ〕´\'ﾉ:ｰ: : ,ﾘ|　　　　　　　　 ＿＿＿＿＿＿＿＿＿／',
+    '',
+  ].join('\n');
+  const selected = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text);
+
+  assert.ok(selected.includes('ね、ねぇーー'), JSON.stringify(selected));
+  assert.ok(selected.includes('はい、おでん缶だお'), JSON.stringify(selected));
 });

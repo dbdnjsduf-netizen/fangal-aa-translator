@@ -18,6 +18,7 @@ export interface ManualRegexTarget {
   kind: SelectionExclusionKind;
   sourceText: string;
   contextSignature?: string;
+  isAbsolute?: boolean;
 }
 
 export function escapeRegexLiteral(sourceText: string) {
@@ -48,6 +49,7 @@ export function normalizeManualRegexRules(value: unknown): ManualRegexRules {
       // Imported patterns are always rebuilt from their source. This keeps the
       // feature literal and prevents unsafe or accidentally over-broad regexes.
       pattern: escapeRegexLiteral(rule.sourceText),
+      ...(rule.isAbsolute === true ? { isAbsolute: true } : {}),
       createdAt: rule.createdAt,
     }));
   return { entries };
@@ -61,18 +63,23 @@ export function addManualRegexRule(
 ): ManualRegexRules {
   const sourceText = target.sourceText.trim();
   if (!sourceText) return rules;
-  if (rules.entries.some((rule) => (
+  const isAbsolute = target.isAbsolute === true;
+  const existing = rules.entries.find((rule) => (
     rule.kind === target.kind
     && rule.sourceText === sourceText
-  ))) return rules;
+  ));
+  // An absolute rule already covers the ordinary one; adding an absolute rule
+  // for an existing ordinary one upgrades it under a new id so it is re-applied.
+  if (existing && (existing.isAbsolute || !isAbsolute)) return rules;
   return {
     entries: [
-      ...rules.entries,
+      ...rules.entries.filter((rule) => rule !== existing),
       {
         id,
         kind: target.kind,
         sourceText,
         pattern: escapeRegexLiteral(sourceText),
+        ...(isAbsolute ? { isAbsolute: true } : {}),
         createdAt,
       },
     ],
@@ -145,6 +152,11 @@ export function applyManualRegexRules(
       .filter(Boolean),
   )].sort((left, right) => right.length - left.length);
   const normalTextSet = new Set(normalTexts);
+  const absoluteTexts = new Set(
+    rules.entries
+      .filter(({ kind, isAbsolute }) => kind === 'normal' && isAbsolute)
+      .map(({ sourceText }) => sourceText),
+  );
   const verticalTexts = new Set(
     rules.entries
       .filter(({ kind }) => kind === 'vertical')
@@ -160,6 +172,7 @@ export function applyManualRegexRules(
     segments,
     normalTexts,
     literalMatcher,
+    absoluteTexts,
   );
 
   const verticalGroups = new Map<string, TextSegment[]>();
@@ -196,14 +209,14 @@ export function applyManualRegexRules(
     if (segment.isTranslated || segment.verticalGroupId) continue;
     const exactSourceText = sourceOf(segment);
     const exactWholeMatch = normalTextSet.has(exactSourceText)
-      && hasRuleBoundaries(
+      && (absoluteTexts.has(exactSourceText) || hasRuleBoundaries(
         withVerticalSelections,
         documentLayout,
         segmentIndex,
         0,
         segment.text.length,
         exactSourceText,
-      );
+      ));
     if (exactWholeMatch) {
       withVerticalSelections[segmentIndex] = {
         ...segment,
@@ -225,6 +238,7 @@ export function applyManualRegexRules(
       documentLayout,
       segmentIndex,
       literalMatcher,
+      absoluteTexts,
     ));
   }
   if (ranges.length === 0) return withVerticalSelections;
@@ -318,6 +332,7 @@ function applyCrossSegmentNormalMatches(
   segments: TextSegment[],
   sourceTexts: string[],
   literalMatcher: LiteralMatcher,
+  absoluteTexts: Set<string>,
 ): TextSegment[] {
   if (sourceTexts.length === 0 || segments.length < 2) return segments;
   const starts: number[] = [];
@@ -334,7 +349,10 @@ function applyCrossSegmentNormalMatches(
       if (sourceText.includes('\n')) continue;
       const left = matchStart > 0 ? content.slice(matchStart - 1, matchStart) : undefined;
       const right = matchEnd < content.length ? content.slice(matchEnd, matchEnd + 1) : undefined;
-      if (isWhitespaceOrDocumentEdge(left) && isWhitespaceOrDocumentEdge(right)) {
+      if (
+        absoluteTexts.has(sourceText)
+        || (isWhitespaceOrDocumentEdge(left) && isWhitespaceOrDocumentEdge(right))
+      ) {
         const firstSegmentIndex = findSegmentAtOffset(starts, ends, matchStart);
         const lastSegmentIndex = findSegmentAtOffset(starts, ends, matchEnd - 1);
         if (
@@ -496,12 +514,13 @@ function findLiteralRanges(
   documentLayout: ManualRegexDocumentLayout,
   segmentIndex: number,
   literalMatcher: LiteralMatcher,
+  absoluteTexts: Set<string>,
 ) {
   const segment = segments[segmentIndex];
   const candidates: Array<{ start: number; end: number }> = [];
   for (const match of findLiteralMatches(segment.text, literalMatcher)) {
       const { start: matchStart, end: matchEnd, sourceText } = match;
-      if (hasRuleBoundaries(
+      if (absoluteTexts.has(sourceText) || hasRuleBoundaries(
         segments,
         documentLayout,
         segmentIndex,
@@ -701,8 +720,14 @@ function findAdjacentCharacter(
   return undefined;
 }
 
+// Speech-box walls and bubble arrows ("│text　│", "text＞") delimit dialogue
+// just like whitespace does, so text glued to them still matches a rule.
+const RULE_BOUNDARY_WALL = /^[─-╿|｜¦<>＜＞]$/u;
+
 function isWhitespaceOrDocumentEdge(character: string | undefined) {
-  return character === undefined || /^\s$/u.test(character);
+  return character === undefined
+    || /^\s$/u.test(character)
+    || RULE_BOUNDARY_WALL.test(character);
 }
 
 function sourceOf(segment: TextSegment) {
@@ -717,5 +742,6 @@ function isManualRegexRule(value: unknown): value is ManualRegexRule {
     && typeof rule.sourceText === 'string'
     && rule.sourceText.trim().length > 0
     && (rule.contextSignature === undefined || typeof rule.contextSignature === 'string')
+    && (rule.isAbsolute === undefined || typeof rule.isAbsolute === 'boolean')
     && typeof rule.createdAt === 'number';
 }

@@ -37,6 +37,18 @@ const RIGHT_CAP_END = /[|│┃｜<＜┐┘┤┓┛┫╗╝╣╮╯ノヽ、
 const SPIKED_CAP_FILL = /[人从_＿YyWw⌒]/u;
 const DOTTED_CONTAINER_WALL = /[:：]/u;
 const DOTTED_CONTAINER_CAP = /[.:：．]/u;
+const CORNER_TOP_LEFT = /^[┌┏╔╭┍┎╒╓]$/u;
+const CORNER_TOP_RIGHT = /^[┐┓╗╮┑┒╕╖]$/u;
+const CORNER_BOTTOM_LEFT = /^[└┗╚╰┕┖╘╙]$/u;
+const CORNER_BOTTOM_RIGHT = /^[┘┛╝╯┙┚╛╜]$/u;
+const FRAME_HORIZONTAL = /^[─━┄┅┈┉═╌╍┬┳┴┻╤╥╦╧╨╩]$/u;
+const TAIL_ARROW_RIGHT = /^[>＞]$/u;
+const TAIL_ARROW_LEFT = /^[<＜]$/u;
+const TAIL_TOP_FILL = /^[￣‾¯]$/u;
+const TAIL_BOTTOM_FILL = /^[＿_]$/u;
+const BOX_TEXT_PUNCTUATION = /^[…‥、。，．！？!?「」『』（）〜～ー・]$/u;
+const WALL_PADDING = /^[.．･・,､']$/u;
+const MAX_WALL_PADDING = 8;
 
 export class SpatialContextAnalyzer {
   private readonly glyphCache = new Map<number, SpatialGlyph[]>();
@@ -253,6 +265,9 @@ export class SpatialContextAnalyzer {
     if (this.hasDottedDialogueContainer(lineIndex, displayStart, displayEnd)) {
       return true;
     }
+    if (this.hasTailBubbleContainer(lineIndex, displayStart, displayEnd)) {
+      return true;
+    }
     const glyphs = this.getGlyphs(lineIndex);
     const left = [...glyphs]
       .reverse()
@@ -272,9 +287,18 @@ export class SpatialContextAnalyzer {
 
     // The candidate row must really look like "wall + blank + text + blank +
     // wall". Dense AA often has unrelated lines on both sides; those must not
-    // be combined into an imaginary dialogue box.
+    // be combined into an imaginary dialogue box. A short run of alignment
+    // dots glued to a wall ("text　 .│", "text　......│") is padding that AA
+    // authors use to square the frame, so it counts as blank.
+    const leftPadding = collectWallPadding(glyphs, left, 1);
+    const rightPadding = collectWallPadding(glyphs, right, -1);
+    // Other phrases of the same utterance ("一撃………　　で……") may share
+    // the row; only non-text glyphs make the gap suspicious.
     const hasGapContent = glyphs.some((glyph) => (
       !isBlank(glyph.char)
+      && !leftPadding.has(glyph)
+      && !rightPadding.has(glyph)
+      && !isBoxTextGlyph(glyph)
       && (
         (
           glyph.displayStart >= left.displayEnd
@@ -427,6 +451,47 @@ export class SpatialContextAnalyzer {
       return false;
     };
 
+    // ┌──┐ / └──┘ frames are unmistakable, so their right corner may drift
+    // further from the text-row wall: half-width spaces and alignment dots
+    // render narrower than one cell, which skews the source-column estimate
+    // in small boxes. Without a measured font profile, box-drawing glyphs
+    // may render either one or two cells wide, so both estimates are tried.
+    const hasCornerFrameCap = (direction: -1 | 1) => {
+      const leftCorner = direction === -1 ? CORNER_TOP_LEFT : CORNER_BOTTOM_LEFT;
+      const rightCorner = direction === -1 ? CORNER_TOP_RIGHT : CORNER_BOTTOM_RIGHT;
+      const drift = Math.max(6, Math.ceil(innerWidth * 0.3));
+      for (let distance = 1; distance <= 3; distance += 1) {
+        const rowIndex = lineIndex + (distance * direction);
+        if (rowIndex < 0 || rowIndex >= this.lines.length) break;
+        const row = this.getGlyphs(rowIndex).filter(({ char }) => !isBlank(char));
+        const leftIndex = row.findIndex((glyph) => (
+          leftCorner.test(glyph.char)
+          && Math.abs(glyph.displayStart - left.displayStart) <= 4
+        ));
+        if (leftIndex === -1) continue;
+        let index = leftIndex + 1;
+        while (index < row.length && FRAME_HORIZONTAL.test(row[index].char)) index += 1;
+        const corner = row[index];
+        const fullWidthCornerStart = row[leftIndex].displayStart + ((index - leftIndex) * 2);
+        if (
+          index - leftIndex - 1 >= 2
+          && corner
+          && rightCorner.test(corner.char)
+          && (
+            Math.abs(corner.displayStart - right.displayStart) <= drift
+            || (
+              !this.visualUnitWidths
+              && Math.abs(fullWidthCornerStart - right.displayStart) <= drift
+            )
+          )
+        ) return true;
+        // Between the cap and the text row only wall rows are allowed.
+        if (!hasWallPair(rowIndex, drift)) return false;
+      }
+      return false;
+    };
+    const hasCornerFrameBox = hasCornerFrameCap(-1) && hasCornerFrameCap(1);
+
     // A real closed box needs independent top and bottom caps. The previous
     // one-sided test was the main source of body/face AA being learned as a
     // speech bubble.
@@ -442,7 +507,87 @@ export class SpatialContextAnalyzer {
       && hasFlexibleLowerWallContinuity
       && hasSpikedCap(-1, /^＼$/u, /^／$/u)
       && hasSpikedCap(1, /^／$/u, /^＼$/u);
-    return hasStrictClosedBox || hasProportionalRoundedBox || hasSpikedShoutBox;
+    return hasStrictClosedBox
+      || hasCornerFrameBox
+      || hasProportionalRoundedBox
+      || hasSpikedShoutBox;
+  }
+
+  // Tail bubbles open towards the speaker and point with ＞/＜:
+  //   ￣￣￣￣＼          ／￣￣￣￣
+  //   text　　＞    or   ＜　text
+  //   ＿＿＿＿／          ＼＿＿＿＿
+  // The closed side carries no wall, so both ridge caps must span the text
+  // and end in the matching diagonal right above / below the arrow.
+  private hasTailBubbleContainer(
+    lineIndex: number,
+    displayStart: number,
+    displayEnd: number,
+  ) {
+    const glyphs = this.getGlyphs(lineIndex);
+    const solid = glyphs.filter(({ char }) => !isBlank(char));
+    const rightArrow = solid.find((glyph) => glyph.displayStart >= displayEnd);
+    const leftArrow = [...solid].reverse().find((glyph) => glyph.displayEnd <= displayStart);
+    const capTolerance = 8;
+
+    const hasRidgeCap = (
+      direction: -1 | 1,
+      fill: RegExp,
+      corner: RegExp,
+      cornerX: number,
+      side: 'right' | 'left',
+    ) => {
+      for (let distance = 1; distance <= 2; distance += 1) {
+        const rowIndex = lineIndex + (distance * direction);
+        if (rowIndex < 0 || rowIndex >= this.lines.length) break;
+        const row = this.getGlyphs(rowIndex).filter(({ char }) => !isBlank(char));
+        for (let index = 0; index < row.length; index += 1) {
+          const cornerGlyph = row[index];
+          if (
+            !corner.test(cornerGlyph.char)
+            || Math.abs(cornerGlyph.displayStart - cornerX) > capTolerance
+          ) continue;
+          const step = side === 'right' ? -1 : 1;
+          let cursor = index + step;
+          let runLength = 0;
+          while (cursor >= 0 && cursor < row.length && fill.test(row[cursor].char)) {
+            runLength += 1;
+            cursor += step;
+          }
+          if (runLength < 4) continue;
+          const farEnd = row[cursor - step];
+          const coversText = side === 'right'
+            ? farEnd.displayStart <= displayStart + capTolerance
+            : farEnd.displayEnd >= displayEnd - capTolerance;
+          if (coversText) return true;
+        }
+      }
+      return false;
+    };
+
+    if (
+      rightArrow
+      && TAIL_ARROW_RIGHT.test(rightArrow.normalized)
+      && rightArrow.displayStart - displayEnd <= 24
+      && !solid.some((glyph) => (
+        glyph.displayStart >= displayEnd
+        && glyph.displayEnd <= rightArrow.displayStart
+      ))
+      && hasRidgeCap(-1, TAIL_TOP_FILL, /^[＼\\]$/u, rightArrow.displayStart, 'right')
+      && hasRidgeCap(1, TAIL_BOTTOM_FILL, /^[／/]$/u, rightArrow.displayStart, 'right')
+    ) return true;
+
+    return Boolean(
+      leftArrow
+      && TAIL_ARROW_LEFT.test(leftArrow.normalized)
+      && displayStart - leftArrow.displayEnd <= 24
+      && !solid.some((glyph) => (
+        glyph.displayStart >= leftArrow.displayEnd
+        && glyph.displayEnd <= displayStart
+      ))
+      && hasRidgeCap(-1, TAIL_TOP_FILL, /^[／/]$/u, leftArrow.displayStart, 'left')
+      && hasRidgeCap(1, TAIL_BOTTOM_FILL, /^[＼\\]$/u, leftArrow.displayStart, 'left'),
+    );
   }
 
   private hasDottedDialogueContainer(
@@ -655,6 +800,36 @@ function isCombiningCodePoint(codePoint: number) {
     || (codePoint >= 0x1dc0 && codePoint <= 0x1dff)
     || (codePoint >= 0x20d0 && codePoint <= 0x20ff)
     || (codePoint >= 0xfe20 && codePoint <= 0xfe2f);
+}
+
+// Contiguous alignment dots touching a box wall, walking inward from it
+// (direction 1 = rightwards from a left wall, -1 = leftwards from a right wall).
+function collectWallPadding(
+  glyphs: SpatialGlyph[],
+  wall: SpatialGlyph,
+  direction: 1 | -1,
+) {
+  const padding = new Set<SpatialGlyph>();
+  const wallIndex = glyphs.indexOf(wall);
+  for (
+    let index = wallIndex + direction;
+    index >= 0 && index < glyphs.length && padding.size < MAX_WALL_PADDING;
+    index += direction
+  ) {
+    const glyph = glyphs[index];
+    if (!WALL_PADDING.test(glyph.char)) break;
+    padding.add(glyph);
+  }
+  // A padding run must be followed by blank space before the text, otherwise
+  // it is punctuation or AA texture touching the candidate.
+  const next = glyphs[wallIndex + direction * (padding.size + 1)];
+  if (padding.size > 0 && (!next || !isBlank(next.char))) padding.clear();
+  return padding;
+}
+
+function isBoxTextGlyph(glyph: SpatialGlyph) {
+  return (glyph.isJapanese && !glyph.isDrawing)
+    || BOX_TEXT_PUNCTUATION.test(glyph.char);
 }
 
 function isBlank(character: string) {
