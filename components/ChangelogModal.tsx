@@ -8,6 +8,16 @@ interface ChangelogModalProps {
 
 const changelogData = [
   {
+    version: '1.12.1',
+    date: '2026-10-18',
+    title: '레스 헤더 제외·본문 답글 자동 선택',
+    changes: [
+      '번호·이름·날짜·ID가 적힌 레스 머리줄은 전체 선택에서 제외',
+      '머리줄 아래 일반 본문은 乙·草 같은 한 글자 답글까지 자동 선택',
+      '본문 안이라도 그림 획 글자뿐인 줄은 계속 제외',
+    ],
+  },
+  {
     version: '1.12.0',
     date: '2026-10-18',
     title: 'Vertex AI 지원·박스 대사 인식·대용량 파일 속도 개선',

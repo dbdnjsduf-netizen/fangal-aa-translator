@@ -1613,3 +1613,41 @@ test('￣＼ / ＞ / ＿／ 꼬리 말풍선은 왼쪽 벽이 없어도 자동�
   assert.ok(selected.includes('ね、ねぇーー'), JSON.stringify(selected));
   assert.ok(selected.includes('はい、おでん缶だお'), JSON.stringify(selected));
 });
+
+test('레스 헤더(번호·이름·날짜·ID)는 자동선택하지 않고 아래 일반 본문은 한 글자 답글까지 선택한다', () => {
+  const sample = [
+    '760 名前：普通の名無しさん[sage] 投稿日：2016/06/14(火) 23:11:05 ID:IQJyI0kg [7/7]',
+    'シュールｗ',
+    '',
+    '７６３ 名前：普通の名無しさん[sage] 投稿日：2016/06/14(火) 23:16:00 ID:QQQ',
+    '乙',
+    '>>760',
+    '草',
+    '',
+    '374 ：アマゾン ◆OZcRL0X5xE：2014/11/28(金) 22:39:59 ID:byKNqOds',
+    'いや、これは流石に笑うわ',
+    '',
+  ].join('\n');
+  const segments = selectAllTranslatableSegments(segment(sample));
+  const selected = segments.filter(({ isSelected }) => isSelected).map(({ text }) => text);
+
+  assert.deepEqual(selected, ['シュールｗ', '乙', '草', 'いや、これは流石に笑うわ']);
+  for (const header of segments.filter(({ text }) => /名前|アマゾン/u.test(text))) {
+    assert.equal(header.isAutoSelectExcluded, true, JSON.stringify(header));
+  }
+});
+
+test('레스 본문 안이어도 AA 획 글자뿐인 줄과 반각 가나 조각은 일반 본문으로 승격하지 않는다', () => {
+  const sample = [
+    '765 名前：普通の名無しさん 投稿日：2016/06/14(火) 23:17:00 ID:abc',
+    '　　　　ミ　　　　ミ',
+    '　　　　ノ　ノ',
+    '　　　　ﾄ ﾑ',
+    '',
+  ].join('\n');
+  const selected = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text);
+
+  assert.deepEqual(selected, []);
+});

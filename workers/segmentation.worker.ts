@@ -67,7 +67,41 @@ const RE_AA_CHARS = /[二三七彡八人入ヌノト一へヘ大イムくミシ�
 const RE_NON_JP_G = /[^\u3040-\u309f\u30a0-\u30ff\uff66-\uff9f\u4e00-\u9faf\u3400-\u4dbf]/g;
 const RE_SYMBOLS_G = /[^\u3040-\u309f\u30a0-\u30ff\uff66-\uff9f\u4e00-\u9faf\u3400-\u4dbf!?！？。、…「」『』（）［］【】♥♡\s]/g;
 const RE_HALFWIDTH_PUNCT = /[\uff61-\uff65]/;
-const RE_THREAD_NAME = /^\s*\d+\s*[:：].*?(?:◆|ID[:：]\w|\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2})/;
+// Post headers: "374 ：name ◆trip：2014/11/28(金) … ID:xxx",
+// "760 名前：name[sage] 投稿日：2016/06/14(火) …", also with full-width numbers.
+const RE_THREAD_NAME = /^\s*[0-9０-９]+\s*(?:[:：]|名前\s*[:：]).*?(?:◆|ID[:：]\w|[0-9０-９]{4}[\/\-／][0-9０-９]{1,2}[\/\-／][0-9０-９]{1,2}|投稿日)/u;
+// Characters a plain (non-AA) post-body line may consist of: Japanese text,
+// letters/digits, everyday punctuation and ">>123" anchors.
+const RE_PLAIN_POST_TEXT_LINE = /^[\s\u3000ぁ-ゖゝゞァ-ヺー・ヽヾ一-龯々〆〇ｦ-ﾟA-Za-zＡ-Ｚａ-ｚ0-9０-９。、，．,.…‥！？!?「」『』（）()【】〈〉《》〜～ー＝=＋+％%＃#＠@：:；;”“"'’＞>♪☆★♡♥ｗ]+$/u;
+// Kana/kanji that AA uses as strokes; a line made only of these is art.
+const RE_AA_STROKE_LETTER = /[ノハイトミムヘへレソツシ人八乂从入丶くしつ]/u;
+const RE_HALFWIDTH_KANA_TOKEN = /^[ｦ-ﾟ]{1,2}$/u;
+
+const isPlainPostTextLine = (line: string): boolean => {
+  const trimmed = line.trim();
+  if (!trimmed || !RE_PLAIN_POST_TEXT_LINE.test(trimmed)) return false;
+  const letters = trimmed.match(/[ぁ-ゖァ-ヺ一-龯々〆ｦ-ﾟ]/gu) || [];
+  if (letters.length === 0) return false;
+  if (letters.every((letter) => RE_AA_STROKE_LETTER.test(letter))) return false;
+  // "ﾄ ﾑ" style half-width fragments are face/body strokes, not words.
+  return !trimmed.split(/[\s\u3000]+/u).some((token) => RE_HALFWIDTH_KANA_TOKEN.test(token));
+};
+
+// Lines between a post header and the next header that are plain text, so
+// short replies such as "乙" or "シュールｗ" are selected even without the
+// spatial evidence AA dialogue needs.
+const detectPlainPostBodyLines = (lines: string[]): Set<number> => {
+  const plain = new Set<number>();
+  let isInsidePost = false;
+  lines.forEach((line, index) => {
+    if (RE_THREAD_NAME.test(line)) {
+      isInsidePost = true;
+      return;
+    }
+    if (isInsidePost && isPlainPostTextLine(line)) plain.add(index);
+  });
+  return plain;
+};
 // Box border chars: horiz ─━ (U+2500-01), vert │┃ (U+2502-03), dashed (U+2504-05,2508-09), corners/intersections (U+250C-254D), double (U+2550,2552-2573), ASCII/fullwidth pipes (|｜)
 const RE_BOX_HORIZONTAL_BORDER = /^[\s\u200B￣＿\u2500-\u2503\u2504\u2505\u2508\u2509\u250C-\u254D\u2550\u2552-\u2573\-|｜]*$/;
 const RE_BOX_BORDER_ANY = /^[\s\u200B\u3000\u00A0\u2000-\u200B￣＿\-\u2500-\u257F｜|＞＜／＼人从⌒YWV^‐―＝≡   \[\]｛｝［］★◆■□●○◎◇△▽▲▼＋＊*#+\-_=f,x'´｀ヽヾ乂ノﾚﾉ:.]*$/;
@@ -1176,6 +1210,7 @@ function segmentContent(
   const lines = content.split('\n');
   const spatialAnalyzer = new SpatialContextAnalyzer(lines, visualWidthProfile);
   const statusWindowTextRanges = detectStatusWindowTextRanges(lines);
+  const plainPostBodyLines = detectPlainPostBodyLines(lines);
   const newSegments: WorkerTextSegment[] = [];
 
   const progressInterval = Math.max(100, Math.ceil(lines.length / 100));
@@ -2245,15 +2280,23 @@ function segmentContent(
         : isJapanese
             ? 'high'
             : undefined;
+      const isPlainPostBodyText = isJp
+        && plainPostBodyLines.has(lineIdx)
+        && RE_JAPANESE_SCRIPT.test(part);
       newSegments.push({
         id: `seg-${lineIdx}-${currentOffset}`,
         text: part,
         original: part,
-        isJapanese,
-        isAutoSelected: isIsolatedKanaBlock
+        isJapanese: isJapanese || isPlainPostBodyText,
+        // Post headers (names, trips, dates) are never auto-selected; they can
+        // still be selected by hand.
+        isAutoSelected: !isThreadNameLine && (
+          isIsolatedKanaBlock
           || isContextPatternApproved
           || hasFourSideLocalWhitespace
-          || isAdjacentDialogueContinuation,
+          || isAdjacentDialogueContinuation
+          || isPlainPostBodyText
+        ),
         isStrictJapanese: isStrict,
         isBoxedDialogue: isBoxedDialogue,
         isContextDialogue: isContextDlg,
@@ -2261,8 +2304,8 @@ function segmentContent(
         isVerticalBox: isVerticalBox,
         isIndentedDialogue: isIndentedDialogue,
         isIsolatedDialogue: isIsolatedDialogue,
-        isContextPatternApproved,
-        isAutoSelectExcluded: isAutoSelectExcluded,
+        isContextPatternApproved: isContextPatternApproved || isPlainPostBodyText,
+        isAutoSelectExcluded: isThreadNameLine || (isAutoSelectExcluded && !isPlainPostBodyText),
         detectionConfidence,
         detectionContextSignature: spatialContext?.contextSignature,
         isSelected: false,
@@ -2272,7 +2315,7 @@ function segmentContent(
       currentOffset += part.length;
     });
 
-    const spacedDialogue = findSpacedHorizontalDialogue(line);
+    const spacedDialogue = isThreadNameLine ? null : findSpacedHorizontalDialogue(line);
     if (spacedDialogue) {
       const lineSegments = newSegments.splice(lineSegmentStart);
       newSegments.push(...mergeSpacedHorizontalDialogue(
