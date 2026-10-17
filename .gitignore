@@ -18,3 +18,6 @@ Thumbs.db
 *.key
 credentials*.json
 secrets*.json
+
+# Vertex AI service-account credentials (contains a private key)
+vertex-config.json

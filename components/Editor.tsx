@@ -49,6 +49,101 @@ interface EditorProps {
   isLightMode?: boolean;
 }
 
+interface SmartLineProps {
+  lineIndex: number;
+  segments: TextSegment[];
+  aaLineHeight: number;
+  // Any drag/capture mode is active, so plain clicks do not toggle selection.
+  isCaptureMode: boolean;
+  // Manual text capture can start on non-Japanese glyphs too.
+  isTextCaptureMode: boolean;
+  isLightMode: boolean;
+}
+
+const getJapaneseSegmentClassName = (
+  seg: TextSegment,
+  isCaptureMode: boolean,
+  isLightMode: boolean,
+) => `
+  rounded transition-colors duration-75
+  ${!isCaptureMode && isSegmentTranslationSelectable(seg) ? 'cursor-pointer' : 'cursor-default'}
+  ${seg.isSelected
+     ? seg.isManualRegexSelection
+       ? 'bg-cyan-600 text-white shadow-[0_0_10px_rgba(8,145,178,0.5)]'
+     : seg.isManualVerticalSelection
+       ? 'bg-fuchsia-600 text-white shadow-[0_0_10px_rgba(192,38,211,0.55)]'
+       : seg.isVerticalText
+       ? 'bg-purple-600 text-white shadow-[0_0_10px_rgba(147,51,234,0.5)]'
+       : seg.isManualSelection
+         ? 'bg-orange-600 text-white shadow-[0_0_10px_rgba(234,88,12,0.45)]'
+       : 'bg-blue-600 text-white shadow-[0_0_10px_rgba(37,99,235,0.5)]'
+     : seg.isTranslated
+         ? isLightMode ? 'text-green-700 hover:bg-green-100' : 'text-green-400 hover:bg-slate-800'
+         : seg.isUserExcluded
+           ? isLightMode ? 'text-red-700 bg-red-100/70 line-through decoration-red-500/70' : 'text-red-300 bg-red-950/30 line-through decoration-red-500/70'
+         : seg.isManualRegexSelection
+           ? isLightMode ? 'text-cyan-800 hover:bg-cyan-100' : 'text-cyan-200 hover:bg-cyan-900/30'
+         : seg.isManualVerticalSelection
+           ? isLightMode ? 'text-fuchsia-800 hover:bg-fuchsia-100' : 'text-fuchsia-200 hover:bg-fuchsia-900/30'
+           : seg.isVerticalText
+           ? isLightMode ? 'text-purple-800 hover:bg-purple-100' : 'text-purple-200 hover:bg-purple-900/30'
+           : isLightMode ? 'text-amber-900 hover:bg-amber-100' : 'text-yellow-100 hover:bg-slate-700'
+  }
+  ${!seg.isTranslated && !seg.isSelected ? 'underline decoration-slate-600/50 decoration-dotted' : ''}
+`;
+
+// One rendered AA row. Large episodes have tens of thousands of rows, so a row
+// only re-renders when one of its own segment objects (or a display flag)
+// changes; drag-box updates and single-segment toggles stay cheap.
+const SmartLine = React.memo(({
+  lineIndex,
+  segments,
+  aaLineHeight,
+  isCaptureMode,
+  isTextCaptureMode,
+  isLightMode,
+}: SmartLineProps) => (
+  <div
+    data-smart-line-index={lineIndex}
+    style={{
+      contentVisibility: 'auto',
+      containIntrinsicSize: `auto ${aaLineHeight}px`,
+      minHeight: `${aaLineHeight}px`,
+      width: 'max-content',
+      minWidth: '100%',
+    }}
+  >
+    {segments.length === 0 ? ' ' : segments.map((seg) => (
+      seg.isJapanese ? (
+        <span
+          key={seg.id}
+          id={seg.id}
+          data-segment-id={seg.id}
+          className={getJapaneseSegmentClassName(seg, isCaptureMode, isLightMode)}
+        >
+          {seg.text}
+        </span>
+      ) : (
+        <span
+          key={seg.id}
+          data-segment-id={seg.id}
+          className={isTextCaptureMode ? 'opacity-90' : 'opacity-70 pointer-events-none'}
+        >
+          {seg.text}
+        </span>
+      )
+    ))}
+  </div>
+), (previous, next) => (
+  previous.lineIndex === next.lineIndex
+  && previous.aaLineHeight === next.aaLineHeight
+  && previous.isCaptureMode === next.isCaptureMode
+  && previous.isTextCaptureMode === next.isTextCaptureMode
+  && previous.isLightMode === next.isLightMode
+  && previous.segments.length === next.segments.length
+  && previous.segments.every((segment, index) => segment === next.segments[index])
+));
+
 export const Editor: React.FC<EditorProps> = ({ 
   content,
   fileName = "",
@@ -222,6 +317,43 @@ export const Editor: React.FC<EditorProps> = ({
     return lines;
   }, [segments]);
 
+  const isCaptureMode = isDragMode
+    || isManualSelectMode
+    || isManualVerticalMode
+    || isBanMode
+    || isManualRegexMode;
+  const isTextCaptureMode = isManualSelectMode || isManualRegexMode;
+  // Memoized so pointer-move updates of the drag box never walk every row.
+  const renderedLines = useMemo(() => segmentLines.map((lineSegments, lineIndex) => (
+    <SmartLine
+      key={`smart-line-${lineIndex}`}
+      lineIndex={lineIndex}
+      segments={lineSegments}
+      aaLineHeight={aaLineHeight}
+      isCaptureMode={isCaptureMode}
+      isTextCaptureMode={isTextCaptureMode}
+      isLightMode={isLightMode}
+    />
+  )), [segmentLines, aaLineHeight, isCaptureMode, isTextCaptureMode, isLightMode]);
+
+  const segmentById = useMemo(
+    () => new Map(segments.map((segment) => [segment.id, segment])),
+    [segments],
+  );
+
+  // One delegated handler instead of a closure per segment, which would make
+  // every row look changed on each render.
+  const handleSmartClick = (e: React.MouseEvent) => {
+    if (isCaptureMode) return;
+    const element = e.target instanceof Element
+      ? e.target.closest<HTMLElement>('[data-segment-id]')
+      : null;
+    const segment = element?.dataset.segmentId
+      ? segmentById.get(element.dataset.segmentId)
+      : undefined;
+    if (segment?.isJapanese) toggleSegmentSelection(segment.id);
+  };
+
   const getSegmentElementsInYRange = (
     container: HTMLElement,
     y1: number,
@@ -256,9 +388,6 @@ export const Editor: React.FC<EditorProps> = ({
     const container = containerRef.current;
     if (!container) return [];
     const containerRect = container.getBoundingClientRect();
-    const segmentById = new Map<string, TextSegment>(
-      segments.map((segment) => [segment.id, segment]),
-    );
     const rangeBySegmentId = new Map<string, ManualSelectionRange>();
 
     for (const element of getSegmentElementsInYRange(container, y1, y2)) {
@@ -514,9 +643,15 @@ export const Editor: React.FC<EditorProps> = ({
     } else if (isManualSelectMode) {
       captureManualTextBox(x1, y1, x2, y2);
     } else {
-        // Find intersecting segments
+        // Measure only rows inside the box: forcing layout for every segment
+        // of a huge episode made box selection take seconds.
+        const candidateIds = new Set(
+          getSegmentElementsInYRange(container, y1, y2)
+            .map((element) => element.dataset.segmentId)
+            .filter((id): id is string => Boolean(id)),
+        );
         const intersectedSegments = segments.map(seg => {
-          if (!isSegmentTranslationSelectable(seg)) return seg;
+          if (!candidateIds.has(seg.id) || !isSegmentTranslationSelectable(seg)) return seg;
 
           const el = document.getElementById(seg.id);
           if (el && containerRef.current) {
@@ -641,77 +776,9 @@ export const Editor: React.FC<EditorProps> = ({
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerCancel}
+          onClick={handleSmartClick}
         >
-           {segmentLines.map((lineSegments, lineIndex) => (
-             <div
-               key={`smart-line-${lineIndex}`}
-               data-smart-line-index={lineIndex}
-               style={{
-                 contentVisibility: 'auto',
-                 containIntrinsicSize: `auto ${aaLineHeight}px`,
-                 minHeight: `${aaLineHeight}px`,
-                 width: 'max-content',
-                 minWidth: '100%',
-               }}
-             >
-             {lineSegments.length === 0 ? '\u00a0' : lineSegments.map((seg) => {
-             if (seg.isJapanese) {
-               return (
-                 <span
-                   key={seg.id}
-                   id={seg.id}
-                   data-segment-id={seg.id}
-                   onClick={(e) => {
-                     if (isDragMode || isManualSelectMode || isManualVerticalMode || isBanMode || isManualRegexMode) return;
-                     e.stopPropagation();
-                     toggleSegmentSelection(seg.id);
-                   }}
-                   className={`
-                     rounded transition-colors duration-75
-                     ${!isDragMode && !isManualSelectMode && !isManualVerticalMode && !isBanMode && !isManualRegexMode && isSegmentTranslationSelectable(seg) ? 'cursor-pointer' : 'cursor-default'}
-                     ${seg.isSelected 
-                        ? seg.isManualRegexSelection
-                          ? 'bg-cyan-600 text-white shadow-[0_0_10px_rgba(8,145,178,0.5)]'
-                        : seg.isManualVerticalSelection
-                          ? 'bg-fuchsia-600 text-white shadow-[0_0_10px_rgba(192,38,211,0.55)]'
-                          : seg.isVerticalText
-                          ? 'bg-purple-600 text-white shadow-[0_0_10px_rgba(147,51,234,0.5)]'
-                          : seg.isManualSelection
-                            ? 'bg-orange-600 text-white shadow-[0_0_10px_rgba(234,88,12,0.45)]'
-                          : 'bg-blue-600 text-white shadow-[0_0_10px_rgba(37,99,235,0.5)]'
-                        : seg.isTranslated 
-                            ? isLightMode ? 'text-green-700 hover:bg-green-100' : 'text-green-400 hover:bg-slate-800'
-                            : seg.isUserExcluded
-                              ? isLightMode ? 'text-red-700 bg-red-100/70 line-through decoration-red-500/70' : 'text-red-300 bg-red-950/30 line-through decoration-red-500/70'
-                            : seg.isManualRegexSelection
-                              ? isLightMode ? 'text-cyan-800 hover:bg-cyan-100' : 'text-cyan-200 hover:bg-cyan-900/30'
-                            : seg.isManualVerticalSelection
-                              ? isLightMode ? 'text-fuchsia-800 hover:bg-fuchsia-100' : 'text-fuchsia-200 hover:bg-fuchsia-900/30'
-                              : seg.isVerticalText
-                              ? isLightMode ? 'text-purple-800 hover:bg-purple-100' : 'text-purple-200 hover:bg-purple-900/30'
-                              : isLightMode ? 'text-amber-900 hover:bg-amber-100' : 'text-yellow-100 hover:bg-slate-700'
-                     }
-                     ${!seg.isTranslated && !seg.isSelected ? 'underline decoration-slate-600/50 decoration-dotted' : ''}
-                   `}
-                 >
-                   {seg.text}
-                 </span>
-               );
-             }
-             return (
-               <span
-                 key={seg.id}
-                  data-segment-id={seg.id}
-                  className={isManualSelectMode || isManualRegexMode
-                    ? 'opacity-90'
-                    : 'opacity-70 pointer-events-none'}
-               >
-                 {seg.text}
-               </span>
-             );
-             })}
-             </div>
-           ))}
+           {renderedLines}
 
            {isSmartProcessing && segments.length === 0 && (
              <div className={`sticky left-4 top-4 inline-flex min-w-72 flex-col gap-2 rounded-lg px-3 py-2 text-sm shadow-lg ${

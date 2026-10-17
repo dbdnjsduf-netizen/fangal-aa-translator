@@ -91,3 +91,33 @@ test('비례 공백의 실제 시각 폭으로 소스 열이 크게 다른 둥�
   assert.equal(legacy.isClosedDialogueContainer, false);
   assert.equal(visual.isClosedDialogueContainer, true);
 });
+
+test('꼬리 말풍선은 ＞ 위아래에 ￣＼ / ＿／ 능선이 모두 있어야 닫힌 박스로 인정한다', () => {
+  const closed = [
+    '　　　　￣￣￣￣￣￣￣￣＼',
+    '　　　　ね、ねぇーー　　＞',
+    '　　　　＿＿＿＿＿＿＿＿／',
+  ];
+  const start = closed[1].indexOf('ね');
+  const analyze = (lines: string[]) => new SpatialContextAnalyzer(lines)
+    .analyze(1, start, start + 'ね、ねぇーー'.length)
+    .isClosedDialogueContainer;
+
+  assert.equal(analyze(closed), true);
+  assert.equal(analyze([closed[0], closed[1], '']), false);
+  assert.equal(analyze(['', closed[1], closed[2]]), false);
+  assert.equal(analyze([closed[0], '　　　　ね、ねぇーー　|　＞', closed[2]]), false);
+
+  const leftTail = [
+    '　　　　／￣￣￣￣￣￣￣￣',
+    '　　　　＜　　ね、ねぇーー',
+    '　　　　＼＿＿＿＿＿＿＿＿',
+  ];
+  const leftStart = leftTail[1].indexOf('ね');
+  assert.equal(
+    new SpatialContextAnalyzer(leftTail)
+      .analyze(1, leftStart, leftStart + 'ね、ねぇーー'.length)
+      .isClosedDialogueContainer,
+    true,
+  );
+});

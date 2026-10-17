@@ -1,4 +1,4 @@
-import { ApiUsageStats, DictionaryEntry } from '../types';
+import { ApiUsageStats, DictionaryEntry, VertexConfig } from '../types';
 import {
   BatchTranslationFailure,
   BatchTranslationResult,
@@ -16,9 +16,10 @@ import {
   validateTranslatedItems,
 } from './ollamaService';
 
-export const GEMINI_MODEL = 'gemini-3.6-flash';
+export const GEMINI_MODEL = 'gemini-3.8-flash';
 export const GEMINI_MODELS = [
-  { id: GEMINI_MODEL, label: 'Gemini 3.6 Flash' },
+  { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash' },
+  { id: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash' },
   { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash-Lite' },
 ] as const;
 export type GeminiModel = typeof GEMINI_MODELS[number]['id'];
@@ -67,6 +68,13 @@ export function hasGeminiApiKey(apiKey: string) {
   return apiKey.trim().length > 0;
 }
 
+export function isGeminiReady(apiKey: string, vertexConfig?: VertexConfig) {
+  if (vertexConfig?.useVertex) {
+    return Boolean(vertexConfig.vertexCredentials?.trim());
+  }
+  return hasGeminiApiKey(apiKey);
+}
+
 export function normalizeGeminiModel(value: string | null | undefined): GeminiModel {
   return GEMINI_MODELS.some((model) => model.id === value)
     ? value as GeminiModel
@@ -80,8 +88,9 @@ export async function translateSelection(
   useDefaultDict = true,
   systemInstruction: TranslationInstruction = DEFAULT_SYSTEM_PROMPT,
   model: GeminiModel = GEMINI_MODEL,
+  vertexConfig?: VertexConfig,
 ): Promise<TranslationResponseData> {
-  assertApiKey(apiKey);
+  assertApiKey(apiKey, vertexConfig);
   const result = await translateChunk(
     [textToTranslate],
     [],
@@ -90,6 +99,7 @@ export async function translateSelection(
     customDict,
     useDefaultDict,
     systemInstruction,
+    vertexConfig,
   );
   return { text: result.translations[0], usage: result.usage };
 }
@@ -103,8 +113,9 @@ export async function translateBatch(
   onProgress?: (progress: TranslationProgress) => void,
   onPartialResult?: (translations: string[], usage: ApiUsageStats) => void,
   model: GeminiModel = GEMINI_MODEL,
+  vertexConfig?: VertexConfig,
 ): Promise<BatchTranslationResult> {
-  assertApiKey(apiKey);
+  assertApiKey(apiKey, vertexConfig);
   const { chunks, chunkGaps } = createChunks(texts, {
     softChars: 2_800,
     hardChars: 3_600,
@@ -163,6 +174,9 @@ export async function translateBatch(
             });
             emitPartial();
           },
+          0,
+          false,
+          vertexConfig,
         );
         results[index] = result.translations;
         result.translations.forEach((_, itemIndex) => completedItems[index].add(itemIndex));
@@ -222,6 +236,7 @@ async function translateChunk(
   customDict: DictionaryEntry[],
   useDefaultDict: boolean,
   systemInstruction: TranslationInstruction,
+  vertexConfig?: VertexConfig,
 ) {
   const prompt = buildTranslationPrompt(chunk, gaps, customDict, useDefaultDict);
   const accumulatedUsage = emptyUsage();
@@ -244,6 +259,7 @@ async function translateChunk(
         buildTranslationSystemInstruction(systemInstruction),
         prompt + retryInstruction,
         chunk.length,
+        vertexConfig,
       );
       mergeUsage(accumulatedUsage, response.usage);
 
@@ -292,6 +308,7 @@ async function translateChunkResilient(
   onRecoveredPartial?: (offset: number, translations: string[]) => void,
   baseOffset = 0,
   isRecoveryChild = false,
+  vertexConfig?: VertexConfig,
 ): Promise<{ translations: string[]; usage: Usage }> {
   try {
     const result = await translateChunk(
@@ -302,6 +319,7 @@ async function translateChunkResilient(
       customDict,
       useDefaultDict,
       systemInstruction,
+      vertexConfig,
     );
     if (isRecoveryChild) onRecoveredPartial?.(baseOffset, result.translations);
     return result;
@@ -333,6 +351,10 @@ async function translateChunkResilient(
             customDict,
             useDefaultDict,
             systemInstruction,
+            undefined,
+            0,
+            false,
+            vertexConfig,
           );
           recovered[invalidIndex] = repaired.translations[0];
           mergeUsage(recoveredUsage, repaired.usage);
@@ -369,6 +391,7 @@ async function translateChunkResilient(
         onRecoveredPartial,
         baseOffset,
         true,
+        vertexConfig,
       );
     } catch (leftError) {
       attachUsage(leftError, parentUsage);
@@ -388,6 +411,7 @@ async function translateChunkResilient(
         onRecoveredPartial,
         baseOffset + splitIndex,
         true,
+        vertexConfig,
       );
     } catch (rightError) {
       attachUsage(rightError, parentUsage, leftResult.usage);
@@ -407,21 +431,24 @@ async function requestGemini(
   systemInstruction: string,
   userPrompt: string,
   expectedCount: number,
+  vertexConfig?: VertexConfig,
 ): Promise<{ text: string; usage: Usage }> {
+  const isVertex = Boolean(vertexConfig?.useVertex);
+  const timeoutMs = isVertex && vertexConfig?.flex ? 960_000 : REQUEST_TIMEOUT_MS;
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   const startedAt = performance.now();
 
   try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-      {
+    let response: Response;
+    if (isVertex) {
+      response = await fetch('/api/vertex/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-goog-api-key': apiKey,
         },
         body: JSON.stringify({
+          model,
           systemInstruction: {
             parts: [{ text: systemInstruction }],
           },
@@ -438,12 +465,54 @@ async function requestGemini(
               items: { type: 'string' },
             },
           },
+          vertexCredentials: vertexConfig?.vertexCredentials,
+          projectId: vertexConfig?.projectId,
+          location: vertexConfig?.location,
+          flex: vertexConfig?.flex,
         }),
         signal: controller.signal,
-      },
-    );
+      });
+    } else {
+      response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': apiKey,
+          },
+          body: JSON.stringify({
+            systemInstruction: {
+              parts: [{ text: systemInstruction }],
+            },
+            contents: [{
+              role: 'user',
+              parts: [{ text: userPrompt }],
+            }],
+            generationConfig: {
+              responseMimeType: 'application/json',
+              responseSchema: {
+                type: 'array',
+                minItems: expectedCount,
+                maxItems: expectedCount,
+                items: { type: 'string' },
+              },
+            },
+          }),
+          signal: controller.signal,
+        },
+      );
+    }
     const payload = await response.json().catch(() => ({})) as GeminiResponse;
-    if (!response.ok) throw createGeminiHttpError(response.status, payload);
+    if (!response.ok) {
+      if (isVertex) {
+        const errMsg = (payload as any)?.error || response.statusText || 'Vertex AI 요청 실패';
+        const error = new Error(errMsg) as TranslationError;
+        error.retryable = response.status === 429 || response.status >= 500;
+        throw error;
+      }
+      throw createGeminiHttpError(response.status, payload);
+    }
 
     const text = payload.candidates?.[0]?.content?.parts
       ?.map((part) => part.text || '')
@@ -470,7 +539,9 @@ async function requestGemini(
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
       const timeoutError = new Error(
-        'Gemini 응답 대기 시간이 초과되었습니다.',
+        isVertex
+          ? `Vertex AI 응답 대기 시간이 초과되었습니다 (${vertexConfig?.flex ? '16분' : '5.5분'}).`
+          : 'Gemini 응답 대기 시간이 초과되었습니다.',
       ) as TranslationError;
       timeoutError.retryable = true;
       throw timeoutError;
@@ -494,7 +565,13 @@ function createGeminiHttpError(status: number, payload: GeminiResponse) {
   return error;
 }
 
-function assertApiKey(apiKey: string) {
+function assertApiKey(apiKey: string, vertexConfig?: VertexConfig) {
+  if (vertexConfig?.useVertex) {
+    if (!vertexConfig.vertexCredentials?.trim()) {
+      throw new Error('Vertex AI를 사용하려면 서비스 계정 JSON 키를 입력하거나 선택하세요.');
+    }
+    return;
+  }
   if (!hasGeminiApiKey(apiKey)) {
     throw new Error('Gemini 모드를 사용하려면 설정에서 API 키를 입력하세요.');
   }

@@ -1,4 +1,4 @@
-import { CodexRuntimeInfo, DictionaryEntry, TranslationProvider } from '../types';
+import { CodexRuntimeInfo, DictionaryEntry, TranslationProvider, VertexConfig, VertexRuntimeInfo } from '../types';
 import {
   BatchTranslationResult,
   DEFAULT_SYSTEM_PROMPT,
@@ -19,6 +19,7 @@ import {
   GEMINI_MODELS,
   GeminiModel,
   hasGeminiApiKey,
+  isGeminiReady,
   normalizeGeminiModel,
   translateBatch as translateBatchWithGemini,
   translateSelection as translateSelectionWithGemini,
@@ -61,15 +62,18 @@ export {
   resolveStoredSystemPrompt,
   TRANSLATION_POST_BOUNDARY,
   isTranslationPostHeader,
+  isGeminiReady,
 };
 export type { TranslationBatchInput } from './ollamaService';
 export type { TranslationInstruction, TranslationPromptMode } from './ollamaService';
 export type { GeminiModel } from './geminiService';
 export type { CodexModel, CodexReasoningEffort } from './codexService';
+export type { VertexConfig, VertexRuntimeInfo };
 
 export const DEFAULT_TRANSLATION_PROVIDER: TranslationProvider = 'ollama';
 export const TRANSLATION_PROVIDER_STORAGE_KEY = 'aat_translation_provider';
 export const GEMINI_SESSION_KEY = 'aat_gemini_api_key';
+export const VERTEX_CONFIG_STORAGE_KEY = 'aat_vertex_config';
 export const OPENROUTER_SESSION_KEY = 'aat_openrouter_api_key';
 export const OLLAMA_MODEL_STORAGE_KEY = 'aat_ollama_model';
 export const GEMINI_MODEL_STORAGE_KEY = 'aat_gemini_model';
@@ -84,8 +88,13 @@ export function normalizeTranslationProvider(value: string | null): TranslationP
     : DEFAULT_TRANSLATION_PROVIDER;
 }
 
-export function getTranslationProviderLabel(provider: TranslationProvider) {
-  if (provider === 'gemini') return 'Gemini';
+export function getTranslationProviderLabel(provider: TranslationProvider, vertexConfig?: VertexConfig) {
+  if (provider === 'gemini') {
+    if (vertexConfig?.useVertex) {
+      return vertexConfig.flex ? 'Gemini (Vertex Flex)' : 'Gemini (Vertex 즉시)';
+    }
+    return 'Gemini';
+  }
   if (provider === 'codex') return 'Codex';
   if (provider === 'openrouter') return 'OpenRouter';
   return 'Ollama';
@@ -96,8 +105,14 @@ export function getProviderModelLabel(
   ollamaModel = 'gemma4:31b-cloud',
   geminiModel: GeminiModel = GEMINI_MODEL,
   codexModel: CodexModel = CODEX_MODEL,
+  vertexConfig?: VertexConfig,
 ) {
-  if (provider === 'gemini') return geminiModel;
+  if (provider === 'gemini') {
+    if (vertexConfig?.useVertex) {
+      return `${geminiModel}${vertexConfig.flex ? ' · FLEX' : ' · 즉시'}`;
+    }
+    return geminiModel;
+  }
   if (provider === 'codex') return codexModel;
   if (provider === 'openrouter') return OPENROUTER_MODEL;
   return ollamaModel;
@@ -108,8 +123,9 @@ export function isProviderReady(
   apiKey: string,
   ollamaReady: boolean,
   codexStatus?: CodexRuntimeInfo | null,
+  vertexConfig?: VertexConfig,
 ) {
-  if (provider === 'gemini') return hasGeminiApiKey(apiKey);
+  if (provider === 'gemini') return isGeminiReady(apiKey, vertexConfig);
   if (provider === 'openrouter') return hasOpenRouterApiKey(apiKey);
   if (provider === 'codex') return Boolean(codexStatus?.ok && codexStatus.authenticated);
   return ollamaReady;
@@ -124,6 +140,7 @@ export async function translateSelection(
   systemInstruction: TranslationInstruction = DEFAULT_SYSTEM_PROMPT,
   model?: string,
   codexReasoningEffort: CodexReasoningEffort = CODEX_REASONING_EFFORT,
+  vertexConfig?: VertexConfig,
 ): Promise<TranslationResponseData> {
   if (provider === 'gemini') {
     return translateSelectionWithGemini(
@@ -133,6 +150,7 @@ export async function translateSelection(
       useDefaultDict,
       systemInstruction,
       normalizeGeminiModel(model),
+      vertexConfig,
     );
   }
   if (provider === 'codex') {
@@ -182,6 +200,7 @@ export async function translateBatch(
   ) => void,
   model?: string,
   codexReasoningEffort: CodexReasoningEffort = CODEX_REASONING_EFFORT,
+  vertexConfig?: VertexConfig,
 ): Promise<BatchTranslationResult> {
   if (provider === 'gemini') {
     return translateBatchWithGemini(
@@ -193,6 +212,7 @@ export async function translateBatch(
       onProgress,
       onPartialResult,
       normalizeGeminiModel(model),
+      vertexConfig,
     );
   }
   if (provider === 'codex') {

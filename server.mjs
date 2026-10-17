@@ -2,10 +2,11 @@ import 'dotenv/config';
 import express from 'express';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile, readdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseServiceAccount, getServiceAccountToken, maskSecrets } from './scripts/vertexAuth.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDevelopment = process.argv.includes('--dev');
@@ -37,6 +38,9 @@ const codexGate = createAdaptiveConcurrencyGate(
   10,
 );
 const openRouterGate = createConcurrencyGate(readInteger('OPENROUTER_MAX_CONCURRENCY', 3, 1, 3), 20);
+const vertexConfigFile = path.join(__dirname, 'vertex-config.json');
+const selectableVertexModels = new Set(['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.1-flash-lite']);
+const vertexGate = createConcurrencyGate(readInteger('VERTEX_MAX_CONCURRENCY', 3, 1, 5), 20);
 const updateRepository = 'dbdnjsduf-netizen/fangal-aa-translator';
 const updateBranch = 'main';
 const updateStatePath = path.join(__dirname, '.fangal-update-state.json');
@@ -514,6 +518,202 @@ app.post('/api/openrouter/chat', async (request, response) => {
   }
 });
 
+async function loadSavedVertexConfig() {
+  try {
+    const raw = await readFile(vertexConfigFile, 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    // vertex-config.json이 없을 때 루트 디렉토리나 인접 프로젝트 폴더에서 서비스 계정 json 키 감지
+    const searchDirs = [
+      __dirname,
+      path.join(__dirname, '..', '나노바나나2 이미지 번역기 (Vertex-Flex)'),
+      path.join(__dirname, '..', 'FLUX.3 이미지 번역기')
+    ];
+    for (const dir of searchDirs) {
+      try {
+        const files = await readdir(dir);
+        const keyFile = files.find(f => f.endsWith('.json') && !f.includes('package') && !f.includes('tsconfig') && !f.includes('update') && !f.includes('metadata'));
+        if (keyFile) {
+          const content = await readFile(path.join(dir, keyFile), 'utf8');
+          const sa = JSON.parse(content);
+          if (sa.client_email && sa.private_key) {
+            return {
+              vertexCredentials: content,
+              projectId: sa.project_id || '',
+              location: 'global',
+              flex: true
+            };
+          }
+        }
+      } catch {}
+    }
+  }
+  return {};
+}
+
+app.get('/api/vertex/config', async (_request, response) => {
+  try {
+    const config = await loadSavedVertexConfig();
+    response.json(config);
+  } catch (error) {
+    response.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/vertex/config', async (request, response) => {
+  try {
+    let current = {};
+    try {
+      current = JSON.parse(await readFile(vertexConfigFile, 'utf8'));
+    } catch {}
+    const updated = { ...current, ...request.body };
+    if (updated.vertexCredentials) {
+      const sa = parseServiceAccount(updated.vertexCredentials);
+      if (!updated.projectId && sa.project_id) {
+        updated.projectId = sa.project_id;
+      }
+    }
+    await writeFile(vertexConfigFile, JSON.stringify(updated, null, 2), 'utf8');
+    response.json({ ok: true, config: updated });
+  } catch (error) {
+    response.status(400).json({ error: error.message });
+  }
+});
+
+app.get('/api/vertex/status', async (request, response) => {
+  try {
+    const config = await loadSavedVertexConfig();
+    const creds = request.query?.credentials || config.vertexCredentials;
+    if (!creds) {
+      return response.status(400).json({ ok: false, message: '설정된 Vertex AI 서비스 계정이 없습니다.' });
+    }
+    const tokenInfo = await getServiceAccountToken(creds);
+    return response.json({
+      ok: true,
+      projectId: tokenInfo.projectId || config.projectId,
+      clientEmail: tokenInfo.clientEmail,
+      location: config.location || 'global',
+      flex: config.flex ?? true
+    });
+  } catch (error) {
+    return response.status(503).json({
+      ok: false,
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+app.post('/api/vertex/chat', async (request, response) => {
+  const model = request.body?.model || 'gemini-3.8-flash';
+  if (!selectableVertexModels.has(model)) {
+    return response.status(400).json({ error: `허용되지 않은 Gemini 모델입니다: ${model}` });
+  }
+
+  const savedConfig = await loadSavedVertexConfig().catch(() => ({}));
+  let creds = request.body?.vertexCredentials || savedConfig.vertexCredentials;
+  if (!creds) {
+    return response.status(401).json({ error: 'Vertex AI 사용을 위해 서비스 계정 JSON 키가 필요합니다.' });
+  }
+
+  let sa;
+  try {
+    sa = parseServiceAccount(creds);
+  } catch (e) {
+    return response.status(400).json({ error: e.message });
+  }
+
+  const projectId = (request.body?.projectId || sa.project_id || savedConfig.projectId || '').trim();
+  if (!projectId) {
+    return response.status(400).json({ error: 'Google Cloud 프로젝트 ID가 필요합니다.' });
+  }
+
+  const location = (request.body?.location || savedConfig.location || 'global').trim();
+  const isFlex = request.body?.flex ?? savedConfig.flex ?? false;
+
+  let releaseSlot;
+  const startedAt = Date.now();
+  const timeoutMs = isFlex ? 900_000 : 330_000;
+
+  try {
+    releaseSlot = await vertexGate.acquire();
+    const { accessToken } = await getServiceAccountToken(sa);
+
+    let url;
+    if (location === 'global') {
+      url = `https://aiplatform.googleapis.com/v1/projects/${projectId}/locations/global/publishers/google/models/${model}:generateContent`;
+    } else {
+      url = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${model}:generateContent`;
+    }
+
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${accessToken}`,
+    };
+
+    if (isFlex) {
+      headers['X-Vertex-AI-LLM-Request-Type'] = 'shared';
+      headers['X-Vertex-AI-LLM-Shared-Request-Type'] = 'flex';
+    }
+
+    const requestPayload = {
+      contents: request.body?.contents,
+      generationConfig: request.body?.generationConfig,
+    };
+    if (request.body?.systemInstruction) {
+      requestPayload.systemInstruction = request.body.systemInstruction;
+    }
+
+    let upstream;
+    let retryCount = 2;
+    while (true) {
+      try {
+        upstream = await fetchWithTimeout(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(requestPayload),
+        }, timeoutMs);
+        if ((upstream.status === 429 || upstream.status === 503) && retryCount > 0) {
+          retryCount--;
+          await new Promise(r => setTimeout(r, 2000 * (3 - retryCount)));
+          continue;
+        }
+        break;
+      } catch (err) {
+        if (retryCount > 0 && err?.name !== 'AbortError') {
+          retryCount--;
+          await new Promise(r => setTimeout(r, 2000));
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    const payload = await readJsonResponse(upstream);
+    if (!upstream.ok) {
+      const rawMsg = payload?.error?.message || upstream.statusText || '요청 실패';
+      const cleanMsg = maskSecrets(rawMsg, accessToken, sa.private_key);
+      return response.status(normalizeUpstreamStatus(upstream.status)).json({
+        error: `Vertex AI (${upstream.status}): ${cleanMsg}`,
+        status: upstream.status,
+      });
+    }
+
+    return response.json({ ...payload, duration_ms: Date.now() - startedAt });
+  } catch (error) {
+    if (error?.code === 'OLLAMA_QUEUE_FULL') {
+      return response.status(429).json({ error: 'Vertex 번역 대기열이 가득 찼습니다.' });
+    }
+    const timedOut = error?.name === 'AbortError';
+    return response.status(timedOut ? 504 : 500).json({
+      error: timedOut
+        ? `Vertex AI 응답 대기시간(${isFlex ? '15분' : '5.5분'})을 초과했습니다.${isFlex ? ' Flex 작업 대기열이 지연 중일 수 있습니다.' : ''}`
+        : maskSecrets(error instanceof Error ? error.message : String(error), sa?.private_key),
+    });
+  } finally {
+    releaseSlot?.();
+  }
+});
+
 if (isDevelopment) {
   const { createServer: createViteServer } = await import('vite');
   viteServer = await createViteServer({
@@ -536,6 +736,14 @@ httpServer = app.listen(port, appHost, () => {
     }`,
   );
 });
+
+// Flex 등 장시간 작업 대기 시 연결 끊김 방지
+if (httpServer) {
+  httpServer.requestTimeout = 0;
+  httpServer.timeout = 0;
+  httpServer.keepAliveTimeout = 1200000;
+  httpServer.headersTimeout = 1200000;
+}
 
 process.once('SIGINT', () => shutdownServer('SIGINT'));
 process.once('SIGTERM', () => shutdownServer('SIGTERM'));
