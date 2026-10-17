@@ -130,4 +130,3 @@ export interface VertexRuntimeInfo {
   flex?: boolean;
   message?: string;
 }
-
