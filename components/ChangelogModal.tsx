@@ -8,6 +8,18 @@ interface ChangelogModalProps {
 
 const changelogData = [
   {
+    version: '1.13.0',
+    date: '2026-10-22',
+    title: 'Claude Code 번역 연동·Gemini 멈춤 해결',
+    changes: [
+      '상단 Claude 내보내기·가져오기로 Claude Code가 채운 번역을 안전하게 적용',
+      '원문·번호가 바뀐 작업 파일은 거부하고 원문이 남은 자리에만 적용',
+      'Gemini 응답이 3분 없으면 묶음을 반으로 나눠 다시 요청',
+      'Vertex AI 요청 기록(.fangal-logs/vertex.log), 새 번역마다 초기화',
+      '레스 머리줄은 노란 표시·클릭 선택에서도 제외',
+    ],
+  },
+  {
     version: '1.12.1',
     date: '2026-10-18',
     title: '레스 헤더 제외·본문 답글 자동 선택',

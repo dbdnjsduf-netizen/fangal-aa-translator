@@ -5,7 +5,7 @@ import {
   annotateVerticalTextSegments,
   detectVerticalTextGroups,
 } from '../services/verticalText';
-import { selectAllTranslatableSegments } from '../services/translationApplication';
+import { selectAllTranslatableSegments, toggleSegmentTranslationSelection } from '../services/translationApplication';
 import type { VisualWidthProfile } from '../services/visualTextMetrics';
 import type { ManualRegexRules, SelectionExclusionRules } from '../types';
 
@@ -1614,7 +1614,7 @@ test('￣＼ / ＞ / ＿／ 꼬리 말풍선은 왼쪽 벽이 없어도 자동�
   assert.ok(selected.includes('はい、おでん缶だお'), JSON.stringify(selected));
 });
 
-test('레스 헤더(번호·이름·날짜·ID)는 자동선택하지 않고 아래 일반 본문은 한 글자 답글까지 선택한다', () => {
+test('레스 헤더(번호·이름·날짜·ID)는 번역 대상으로 표시하지 않고 아래 일반 본문은 한 글자 답글까지 선택한다', () => {
   const sample = [
     '760 名前：普通の名無しさん[sage] 投稿日：2016/06/14(火) 23:11:05 ID:IQJyI0kg [7/7]',
     'シュールｗ',
@@ -1632,8 +1632,16 @@ test('레스 헤더(번호·이름·날짜·ID)는 자동선택하지 않고 아
   const selected = segments.filter(({ isSelected }) => isSelected).map(({ text }) => text);
 
   assert.deepEqual(selected, ['シュールｗ', '乙', '草', 'いや、これは流石に笑うわ']);
-  for (const header of segments.filter(({ text }) => /名前|アマゾン/u.test(text))) {
-    assert.equal(header.isAutoSelectExcluded, true, JSON.stringify(header));
+  const headers = segments.filter(({ text }) => /名前|アマゾン/u.test(text));
+  assert.ok(headers.length >= 3, JSON.stringify(headers));
+  for (const header of headers) {
+    // 노란 표시도, 클릭 선택도 되지 않아야 한다.
+    assert.equal(header.isJapanese, false, JSON.stringify(header));
+    assert.equal(
+      toggleSegmentTranslationSelection(segments, header.id),
+      segments,
+      JSON.stringify(header),
+    );
   }
 });
 

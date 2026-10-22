@@ -288,3 +288,64 @@ test('Gemini도 일부 청크 실패 시 정상 항목을 반환하고 실패 �
     }
   }
 });
+
+test('Gemini 응답이 너무 오래 없으면 같은 청크를 기다리지 않고 쪼개서 다시 보낸다', async () => {
+  const previousFetch = globalThis.fetch;
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const inputs = ['原文0', '原文1', '原文2', '原文3'];
+  const requestedSizes: number[] = [];
+
+  // 요청 대기 시간 초과 타이머만 즉시 발동시킨다.
+  Object.defineProperty(globalThis, 'window', {
+    value: {
+      setTimeout: (handler: () => void, ms?: number) => (
+        globalThis.setTimeout(handler, (ms ?? 0) >= 100_000 ? 0 : ms)
+      ),
+      clearTimeout: (timer: ReturnType<typeof setTimeout>) => globalThis.clearTimeout(timer),
+    },
+    writable: true,
+    configurable: true,
+  });
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body));
+    const prompt = String(body.contents[0].parts[0].text);
+    const chunk = JSON.parse(prompt.split('INPUT_JSON:\n')[1]) as string[];
+    requestedSizes.push(chunk.length);
+    if (chunk.length > 1) {
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('aborted', 'AbortError'));
+        });
+      });
+    }
+    return new Response(JSON.stringify({
+      candidates: [{
+        content: { parts: [{ text: JSON.stringify([`번역${chunk[0].replace("原文", "")}`]) }] },
+        finishReason: 'STOP',
+      }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    const result = await translateBatchWithGemini(
+      inputs,
+      'TEST_ONLY_NOT_A_REAL_KEY',
+      [],
+      false,
+      'Translate.',
+    );
+    assert.deepEqual(result.translations, inputs.map((_, index) => `번역${index}`));
+    assert.deepEqual(result.failures, []);
+    assert.deepEqual(requestedSizes, [4, 2, 1, 1, 2, 1, 1]);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousWindow) {
+      Object.defineProperty(globalThis, 'window', previousWindow);
+    } else {
+      Reflect.deleteProperty(globalThis, 'window');
+    }
+  }
+});

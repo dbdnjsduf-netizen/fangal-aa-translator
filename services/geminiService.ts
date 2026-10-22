@@ -25,7 +25,9 @@ export const GEMINI_MODELS = [
 export type GeminiModel = typeof GEMINI_MODELS[number]['id'];
 const GEMINI_MAX_CONCURRENCY = 2;
 const MAX_RETRIES = 3;
-const REQUEST_TIMEOUT_MS = 330_000;
+// 응답이 이만큼 없으면 같은 청크를 다시 기다리지 않고 반으로 쪼개서 보낸다.
+const REQUEST_TIMEOUT_MS = 180_000;
+const FLEX_REQUEST_TIMEOUT_MS = 960_000;
 
 interface Usage {
   inputTokens: number;
@@ -129,6 +131,9 @@ export async function translateBatch(
       failures: [],
     };
   }
+  if (vertexConfig?.useVertex) {
+    await resetVertexLog(normalizeGeminiModel(model), chunks.flat().length);
+  }
 
   const results = chunks.map((chunk) => [...chunk]);
   const chunkStarts = getChunkStartIndices(chunks);
@@ -217,6 +222,19 @@ export async function translateBatch(
   }
 
   return { translations: results.flat(), usage, failures };
+}
+
+// 서버의 .fangal-logs/vertex.log를 새 번역 기준으로 비운다. 실패해도 번역은 계속한다.
+async function resetVertexLog(model: GeminiModel, itemCount: number) {
+  try {
+    await fetch('/api/vertex/log/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, itemCount }),
+    });
+  } catch {
+    // 기록용이므로 무시
+  }
 }
 
 function getChunkStartIndices(chunks: string[][]) {
@@ -434,7 +452,7 @@ async function requestGemini(
   vertexConfig?: VertexConfig,
 ): Promise<{ text: string; usage: Usage }> {
   const isVertex = Boolean(vertexConfig?.useVertex);
-  const timeoutMs = isVertex && vertexConfig?.flex ? 960_000 : REQUEST_TIMEOUT_MS;
+  const timeoutMs = isVertex && vertexConfig?.flex ? FLEX_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   const startedAt = performance.now();
@@ -509,6 +527,8 @@ async function requestGemini(
         const errMsg = (payload as any)?.error || response.statusText || 'Vertex AI 요청 실패';
         const error = new Error(errMsg) as TranslationError;
         error.retryable = response.status === 429 || response.status >= 500;
+        // 서버 쪽 응답 대기 초과(504)도 청크가 너무 커서일 수 있으니 쪼개서 다시 보낸다.
+        error.splitRecoverable = response.status === 504;
         throw error;
       }
       throw createGeminiHttpError(response.status, payload);
@@ -539,11 +559,10 @@ async function requestGemini(
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
       const timeoutError = new Error(
-        isVertex
-          ? `Vertex AI 응답 대기 시간이 초과되었습니다 (${vertexConfig?.flex ? '16분' : '5.5분'}).`
-          : 'Gemini 응답 대기 시간이 초과되었습니다.',
+        `${isVertex ? 'Vertex AI' : 'Gemini'} 응답 대기 시간이 초과되었습니다 (${Math.round(timeoutMs / 60_000)}분).`,
       ) as TranslationError;
       timeoutError.retryable = true;
+      timeoutError.splitRecoverable = true;
       throw timeoutError;
     }
     throw error;

@@ -2,7 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile, readdir } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile, readdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -41,6 +41,8 @@ const openRouterGate = createConcurrencyGate(readInteger('OPENROUTER_MAX_CONCURR
 const vertexConfigFile = path.join(__dirname, 'vertex-config.json');
 const selectableVertexModels = new Set(['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.1-flash-lite']);
 const vertexGate = createConcurrencyGate(readInteger('VERTEX_MAX_CONCURRENCY', 3, 1, 5), 20);
+// 새 번역을 시작할 때마다 비우는 Vertex 요청 기록 (요청당 한 줄)
+const vertexLogFile = path.join(__dirname, '.fangal-logs', 'vertex.log');
 const updateRepository = 'dbdnjsduf-netizen/fangal-aa-translator';
 const updateBranch = 'main';
 const updateStatePath = path.join(__dirname, '.fangal-update-state.json');
@@ -603,6 +605,18 @@ app.get('/api/vertex/status', async (request, response) => {
   }
 });
 
+app.post('/api/vertex/log/reset', async (request, response) => {
+  const model = String(request.body?.model || '').slice(0, 64);
+  const header = `=== 새 번역 시작 ${formatLogTime()} ${model} (총 ${Number(request.body?.itemCount) || 0}줄) ===\n`;
+  try {
+    await mkdir(path.dirname(vertexLogFile), { recursive: true });
+    await writeFile(vertexLogFile, header, 'utf8');
+    response.json({ ok: true });
+  } catch (error) {
+    response.status(500).json({ ok: false, error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
 app.post('/api/vertex/chat', async (request, response) => {
   const model = request.body?.model || 'gemini-3.8-flash';
   if (!selectableVertexModels.has(model)) {
@@ -633,9 +647,20 @@ app.post('/api/vertex/chat', async (request, response) => {
   let releaseSlot;
   const startedAt = Date.now();
   const timeoutMs = isFlex ? 900_000 : 330_000;
+  // 브라우저가 기다리다 포기하면(청크 쪼개기 등) 이 요청도 끊어서 동시 처리 칸을 비운다.
+  const clientAbort = new AbortController();
+  response.on('close', () => {
+    if (!response.writableFinished) clientAbort.abort();
+  });
+  const itemCount = request.body?.generationConfig?.responseSchema?.maxItems ?? '?';
+  let logOutcome = '알 수 없음';
 
   try {
     releaseSlot = await vertexGate.acquire();
+    if (clientAbort.signal.aborted) {
+      logOutcome = '보내기 전에 브라우저가 대기 중단';
+      return;
+    }
     const { accessToken } = await getServiceAccountToken(sa);
 
     let url;
@@ -671,15 +696,20 @@ app.post('/api/vertex/chat', async (request, response) => {
           method: 'POST',
           headers,
           body: JSON.stringify(requestPayload),
+          signal: clientAbort.signal,
         }, timeoutMs);
         if ((upstream.status === 429 || upstream.status === 503) && retryCount > 0) {
           retryCount--;
           await new Promise(r => setTimeout(r, 2000 * (3 - retryCount)));
+          if (clientAbort.signal.aborted) {
+            logOutcome = `HTTP ${upstream.status} 재시도 대기 중 브라우저가 대기 중단`;
+            return;
+          }
           continue;
         }
         break;
       } catch (err) {
-        if (retryCount > 0 && err?.name !== 'AbortError') {
+        if (retryCount > 0 && err?.name !== 'AbortError' && !clientAbort.signal.aborted) {
           retryCount--;
           await new Promise(r => setTimeout(r, 2000));
           continue;
@@ -692,18 +722,37 @@ app.post('/api/vertex/chat', async (request, response) => {
     if (!upstream.ok) {
       const rawMsg = payload?.error?.message || upstream.statusText || '요청 실패';
       const cleanMsg = maskSecrets(rawMsg, accessToken, sa.private_key);
+      logOutcome = `HTTP ${upstream.status} ${String(cleanMsg).replace(/\s+/g, ' ').slice(0, 200)}`;
       return response.status(normalizeUpstreamStatus(upstream.status)).json({
         error: `Vertex AI (${upstream.status}): ${cleanMsg}`,
         status: upstream.status,
       });
     }
 
+    const candidate = payload?.candidates?.[0];
+    const usage = payload?.usageMetadata || {};
+    logOutcome = [
+      'HTTP 200',
+      `finish=${candidate?.finishReason || '-'}`,
+      `block=${payload?.promptFeedback?.blockReason || '-'}`,
+      `입력=${usage.promptTokenCount ?? '-'}`,
+      `출력=${usage.candidatesTokenCount ?? '-'}`,
+      `생각=${usage.thoughtsTokenCount ?? '-'}`,
+    ].join(' ');
     return response.json({ ...payload, duration_ms: Date.now() - startedAt });
   } catch (error) {
+    if (clientAbort.signal.aborted) {
+      logOutcome = '응답 대기 중 브라우저가 대기 중단 (시간 초과 → 쪼개서 재전송)';
+      return;
+    }
     if (error?.code === 'OLLAMA_QUEUE_FULL') {
+      logOutcome = '서버 대기열 가득 참';
       return response.status(429).json({ error: 'Vertex 번역 대기열이 가득 찼습니다.' });
     }
     const timedOut = error?.name === 'AbortError';
+    logOutcome = timedOut
+      ? '서버 대기 시간 초과'
+      : `오류 ${maskSecrets(error instanceof Error ? error.message : String(error), sa?.private_key).slice(0, 200)}`;
     return response.status(timedOut ? 504 : 500).json({
       error: timedOut
         ? `Vertex AI 응답 대기시간(${isFlex ? '15분' : '5.5분'})을 초과했습니다.${isFlex ? ' Flex 작업 대기열이 지연 중일 수 있습니다.' : ''}`
@@ -711,8 +760,20 @@ app.post('/api/vertex/chat', async (request, response) => {
     });
   } finally {
     releaseSlot?.();
+    const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+    appendVertexLog(`${formatLogTime()} ${model} ${itemCount}줄 ${seconds}초 ${logOutcome}`);
   }
 });
+
+function formatLogTime() {
+  return new Date().toLocaleTimeString('en-GB', { hour12: false });
+}
+
+function appendVertexLog(line) {
+  mkdir(path.dirname(vertexLogFile), { recursive: true })
+    .then(() => appendFile(vertexLogFile, `${line}\n`, 'utf8'))
+    .catch(() => {});
+}
 
 if (isDevelopment) {
   const { createServer: createViteServer } = await import('vite');
@@ -1300,8 +1361,9 @@ function isLoopbackHost(host = '') {
 async function fetchWithTimeout(url, init, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const signal = init?.signal ? AbortSignal.any([controller.signal, init.signal]) : controller.signal;
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    return await fetch(url, { ...init, signal });
   } finally {
     clearTimeout(timer);
   }
