@@ -2287,9 +2287,9 @@ function segmentContent(
         id: `seg-${lineIdx}-${currentOffset}`,
         text: part,
         original: part,
-        isJapanese: isJapanese || isPlainPostBodyText,
-        // Post headers (names, trips, dates) are never auto-selected; they can
-        // still be selected by hand.
+        // Post headers (numbers, names, trips, dates, IDs) are not translation
+        // targets at all: no highlight and no click selection.
+        isJapanese: !isThreadNameLine && (isJapanese || isPlainPostBodyText),
         isAutoSelected: !isThreadNameLine && (
           isIsolatedKanaBlock
           || isContextPatternApproved

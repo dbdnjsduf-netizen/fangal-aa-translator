@@ -55,17 +55,14 @@ import {
   getOllamaRuntimeInfo,
   getCodexRuntimeInfo,
   resolveStoredSystemPrompt,
-  TRANSLATION_POST_BOUNDARY,
-  isTranslationPostHeader,
 } from './services/translationService';
-import type { CodexModel, CodexReasoningEffort, TranslationBatchInput, TranslationInstruction, TranslationPromptMode, VertexConfig } from './services/translationService';
+import type { CodexModel, CodexReasoningEffort, TranslationInstruction, TranslationPromptMode, VertexConfig } from './services/translationService';
 import {
   applyVerticalTranslations,
-  detectVerticalTextGroups,
   fitTranslationToDisplayWidth,
-  makeVerticalTranslationRequest,
-  VerticalTextGroup,
 } from './services/verticalText';
+import { buildSmartTranslationPlan, SmartTranslationUnit } from './services/translationPlan';
+import { buildClaudeJob, planClaudeJobImport } from './services/claudeCodeExchange';
 import {
   applyNormalTranslationUpdates,
   clearCompletedSelections,
@@ -91,25 +88,11 @@ import {
 } from './services/manualRegex';
 import { APP_THEME_STORAGE_KEY, normalizeAppTheme } from './services/appTheme';
 import { AppUpdateStatus, fetchAppUpdateStatus } from './services/appUpdate';
-import { Ban, Braces, FileText, Info, Activity, Download, Image as ImageIcon, Timer, History, Book, MessageSquareQuote, Server, CheckSquare, Moon, Sun, CloudDownload } from 'lucide-react';
+import { Ban, Braces, FileText, Info, Activity, Download, Image as ImageIcon, Timer, History, Book, MessageSquareQuote, Server, CheckSquare, Moon, Sun, CloudDownload, FileDown, FileUp } from 'lucide-react';
 
 const ImageExportModal = lazy(() => import('./components/ImageExportModal').then((module) => ({
   default: module.ImageExportModal,
 })));
-
-type SmartTranslationUnit =
-  | {
-      kind: 'normal';
-      segmentId: string;
-      sourceText: string;
-      requestText: string;
-    }
-  | {
-      kind: 'vertical';
-      group: VerticalTextGroup;
-      sourceText: string;
-      requestText: string;
-    };
 
 function getProviderSetupMessage(provider: TranslationProvider, vertexConfig?: VertexConfig) {
   if (provider === 'gemini') {
@@ -126,6 +109,7 @@ function getProviderSetupMessage(provider: TranslationProvider, vertexConfig?: V
 function App() {
   const manualRegexStorageTimerRef = useRef<number | null>(null);
   const latestManualRegexRulesRef = useRef<ManualRegexRules | null>(null);
+  const claudeJobInputRef = useRef<HTMLInputElement>(null);
   const segmentsRef = useRef<TextSegment[]>([]);
   const [content, setContent] = useState<string>("");
   const [fileName, setFileName] = useState<string>("");
@@ -614,67 +598,7 @@ function App() {
     const statsBeforeBatch = apiStats;
 
     try {
-      const verticalGroups = detectVerticalTextGroups(content, segments);
-      const verticalGroupBySegmentId = new Map<string, VerticalTextGroup>();
-      verticalGroups.forEach((group) => {
-        group.segmentIds.forEach((segmentId) => verticalGroupBySegmentId.set(segmentId, group));
-      });
-
-      const textsToTranslate: TranslationBatchInput[] = [];
-      const translationUnits: SmartTranslationUnit[] = [];
-      const addedVerticalGroups = new Set<string>();
-      let lastUnitSegmentIndex = -1;
-      let sourceLine = '';
-      let pendingPostBoundary = false;
-
-      const addUnit = (unit: SmartTranslationUnit, segmentIndex: number) => {
-        if (lastUnitSegmentIndex !== -1) {
-          const gapSegments = segments.slice(lastUnitSegmentIndex + 1, segmentIndex);
-          const newlineCount = gapSegments.reduce(
-            (count, segment) => count + (segment.text.split('\n').length - 1),
-            0,
-          );
-          if (newlineCount >= 3 || gapSegments.length > 20) {
-            textsToTranslate.push(null);
-          }
-        }
-        if (pendingPostBoundary && translationUnits.length > 0) {
-          textsToTranslate.push(TRANSLATION_POST_BOUNDARY);
-        }
-        pendingPostBoundary = false;
-        translationUnits.push(unit);
-        textsToTranslate.push(unit.requestText);
-        lastUnitSegmentIndex = segmentIndex;
-      };
-
-      segments.forEach((segment, segmentIndex) => {
-        const sourceFragment = segment.original || segment.text;
-        if (sourceFragment === '\n') {
-          if (isTranslationPostHeader(sourceLine)) pendingPostBoundary = true;
-          sourceLine = '';
-          return;
-        }
-        sourceLine += sourceFragment;
-        if (!segment.isSelected || !isSegmentTranslationSelectable(segment)) return;
-        const verticalGroup = verticalGroupBySegmentId.get(segment.id);
-        if (verticalGroup) {
-          if (addedVerticalGroups.has(verticalGroup.id)) return;
-          addedVerticalGroups.add(verticalGroup.id);
-          addUnit({
-            kind: 'vertical',
-            group: verticalGroup,
-            sourceText: verticalGroup.sourceText,
-            requestText: makeVerticalTranslationRequest(verticalGroup),
-          }, segmentIndex);
-          return;
-        }
-        addUnit({
-          kind: 'normal',
-          segmentId: segment.id,
-          sourceText: segment.text,
-          requestText: segment.text,
-        }, segmentIndex);
-      });
+      const { textsToTranslate, translationUnits } = buildSmartTranslationPlan(content, segments);
 
       if (translationUnits.length === 0) {
         throw new Error('번역할 수 있는 텍스트 그룹을 찾지 못했습니다.');
@@ -820,6 +744,92 @@ function App() {
     } finally {
       setIsTranslating(false);
       setTranslationProgress(null);
+    }
+  };
+
+  // 선택한 대사를 Claude Code가 채울 작업 파일(JSON)로 내보낸다.
+  const handleExportClaudeJob = async () => {
+    try {
+      const { textsToTranslate, translationUnits } = buildSmartTranslationPlan(content, segments);
+      if (translationUnits.length === 0) {
+        throw new Error('번역할 수 있는 텍스트 그룹을 찾지 못했습니다.');
+      }
+      const job = await buildClaudeJob({
+        content,
+        sourceFileName: fileName || 'translation.txt',
+        textsToTranslate,
+        translationUnits,
+        systemInstruction: activeTranslationInstruction,
+        customDictionary,
+        useDefaultDictionary,
+      });
+      const baseName = (fileName || 'translation').replace(/\.[^/.]+$/u, '');
+      const blob = new Blob([JSON.stringify(job, null, 2)], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${baseName}.claude-job.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      alert(
+        `${translationUnits.length}개 항목을 작업 파일로 내보냈습니다.\n`
+        + 'Claude Code에 이 파일의 translation 칸을 채워 달라고 한 뒤 상단 Claude "가져오기"로 불러오세요.\n'
+        + '가져오기 전까지 이 문서를 그대로 열어 두면 가장 안전합니다.',
+      );
+    } catch (error: any) {
+      alert(`작업 파일 내보내기 실패: ${error.message || '알 수 없는 오류'}`);
+    }
+  };
+
+  const handleImportClaudeJob = async (file: File) => {
+    try {
+      const plan = await planClaudeJobImport(await file.text(), content, segments);
+      const appliedCandidates = plan.normalUpdates.length + plan.verticalAssignments.length;
+      if (appliedCandidates === 0) {
+        alert(
+          '적용할 번역이 없습니다.\n'
+          + `빈 칸 ${plan.emptyIds.length}개, 검사 실패 ${plan.rejected.length}개, 위치 불일치 ${plan.stale.length}개\n\n`
+          + [...plan.rejected, ...plan.stale].slice(0, 5).join('\n'),
+        );
+        return;
+      }
+      if (plan.documentChanged && !confirm(
+        '내보낸 뒤 문서 내용이 바뀌었습니다.\n원문이 같은 자리에 그대로 남아 있는 항목만 적용할까요?',
+      )) return;
+
+      setHistory({ prevContent: content, prevSegments: [...segments] });
+      const verticalResult = applyVerticalTranslations(segments, plan.verticalAssignments);
+      const normalResult = applyNormalTranslationUpdates(
+        verticalResult.segments,
+        plan.normalUpdates,
+        true,
+      );
+      const newSegments = clearCompletedSelections(normalResult.segments);
+      const skippedVertical = plan.verticalAssignments.flatMap(({ group }, index) => {
+        const item = verticalResult.items[index];
+        return item?.applied ? [] : [`${group.sourceText}: ${item?.reason || '좌표를 복구하지 못했습니다.'}`];
+      });
+      setSegments(newSegments);
+      setContent(newSegments.map((segment) => segment.text).join(''));
+
+      const appliedCount = appliedCandidates - skippedVertical.length;
+      const notApplied = [...plan.rejected, ...plan.stale, ...skippedVertical];
+      setLastTranslated({
+        original: `${appliedCount}/${plan.totalItems} items`,
+        translated: appliedCount === plan.totalItems ? 'Done' : 'Partial',
+      });
+      alert(
+        `번역 가져오기: ${plan.totalItems}개 중 ${appliedCount}개 적용\n`
+        + (plan.emptyIds.length > 0 ? `빈 칸으로 남아 그대로 둔 항목 ${plan.emptyIds.length}개\n` : '')
+        + (notApplied.length > 0 ? `적용하지 않은 항목 ${notApplied.length}개:\n${notApplied.slice(0, 5).join('\n')}\n` : '')
+        + (normalResult.layoutFailures.length > 0
+          ? `\n위치가 일부 확장된 항목 ${normalResult.layoutFailures.length}개:\n${normalResult.layoutFailures.slice(0, 3).join('\n')}`
+          : ''),
+      );
+    } catch (error: any) {
+      alert(`번역 가져오기 실패: ${error.message || '알 수 없는 오류'}`);
     }
   };
 
@@ -996,6 +1006,43 @@ function App() {
                     <CheckSquare className="w-3.5 h-3.5" />
                     <span className="hidden sm:inline">전체 선택</span>
                 </button>
+            )}
+
+            {content && viewMode === 'smart' && (
+                <div className="flex items-center rounded border border-amber-600/70 overflow-hidden shrink-0">
+                    <span className="px-2 text-[11px] font-semibold text-amber-500">Claude</span>
+                    <button
+                        onClick={handleExportClaudeJob}
+                        disabled={isTranslating || !segments.some(
+                          (segment) => segment.isSelected && isSegmentTranslationSelectable(segment),
+                        )}
+                        className="flex items-center gap-1 px-2 py-1.5 whitespace-nowrap bg-amber-600 hover:bg-amber-500 disabled:opacity-40 disabled:hover:bg-amber-600 text-white text-xs font-medium transition-colors"
+                        title="선택한 대사를 Claude Code가 번역할 작업 파일(JSON)로 내보내기"
+                    >
+                        <FileDown className="w-3.5 h-3.5" />
+                        <span>내보내기</span>
+                    </button>
+                    <input
+                        ref={claudeJobInputRef}
+                        type="file"
+                        accept=".json,application/json"
+                        className="hidden"
+                        onChange={(event) => {
+                          const file = event.target.files?.[0];
+                          event.target.value = '';
+                          if (file) void handleImportClaudeJob(file);
+                        }}
+                    />
+                    <button
+                        onClick={() => claudeJobInputRef.current?.click()}
+                        disabled={isTranslating}
+                        className="flex items-center gap-1 px-2 py-1.5 whitespace-nowrap bg-amber-700 hover:bg-amber-600 disabled:opacity-40 text-white text-xs font-medium transition-colors"
+                        title="Claude Code가 translation 칸을 채운 작업 파일(.claude-job.json)을 불러와 적용"
+                    >
+                        <FileUp className="w-3.5 h-3.5" />
+                        <span>가져오기</span>
+                    </button>
+                </div>
             )}
 
             {(content || fileName) && (
