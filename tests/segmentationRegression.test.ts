@@ -1981,3 +1981,25 @@ test('그림 끝 가나 없는 획(ノ三ミ)과 긴 공백 뒤 문장을 한 �
   assert.ok(!result.some(({ text, isSelected }) => isSelected && /三ミ/u.test(text)));
   assert.equal(result.map(({ text }) => text).join(''), source);
 });
+
+test('주변이 빈 숫자 사이 쉼표 단문(１０、１０ね)을 자동선택하고 그림에 붙은 것은 제외한다', () => {
+  const source = [
+    '　　　　　　　　　　　　／─　　─＼',
+    '　　　　　　　　　　 ／（ ●） 　（●）＼',
+    '　　　　　　　　　／ :::::⌒（__人__）⌒:::::＼　　　　　　　　　　１０、１０ね',
+    '　　　　　　　　　|　　　　　|r┬-|　　 　　 |',
+    '　　　　　　　　　＼ 　　 　 `ー\'´ 　 　_／',
+  ].join('\n');
+  const result = selectAllTranslatableSegments(segmentWithPostProcessing(source));
+  assert.equal(result.find(({ text }) => text === '１０、１０ね')?.isSelected, true);
+  assert.ok(!result.some(({ text, isSelected }) => isSelected && /[|:⌒]/u.test(text)));
+  assert.equal(result.map(({ text }) => text).join(''), source);
+
+  const embedded = [
+    '|:::::|:::::|:::::|:::::|:::::|:::::|',
+    '|:::::|:::|１０、１０ね|::::|:::::|',
+    '|:::::|:::::|:::::|:::::|:::::|:::::|',
+  ].join('\n');
+  const embeddedResult = selectAllTranslatableSegments(segmentWithPostProcessing(embedded));
+  assert.ok(!embeddedResult.some(({ text, isSelected }) => isSelected && text.includes('１０')));
+});

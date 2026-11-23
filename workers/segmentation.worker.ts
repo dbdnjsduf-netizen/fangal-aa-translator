@@ -779,9 +779,12 @@ const isJapaneseNotationPhrase = (text: string, hasRubyGloss = false): boolean =
 const isShortNumericJapanesePhrase = (text: string): boolean => {
   const normalized = text.normalize('NFKC')
     .replace(/[\s\u3000\u00a0\u2000-\u200b]+/gu, '');
-  if (!/^[0-9ぁ-んァ-ヶ一-龯々〆ヵヶー]{2,12}[!?！？。、…]*$/u.test(normalized)) {
+  // A comma or middle dot may also separate repeated numbers ("10、10ね").
+  if (!/^[0-9ぁ-んァ-ヶ一-龯々〆ヵヶー]+(?:[、,・][0-9ぁ-んァ-ヶ一-龯々〆ヵヶー]+)*[!?！？。、…]*$/u.test(normalized)) {
     return false;
   }
+  const letters = normalized.match(/[0-9ぁ-んァ-ヶ一-龯々〆ヵヶー]/gu) || [];
+  if (letters.length < 2 || letters.length > 12) return false;
   const digits = normalized.match(/[0-9]/gu) || [];
   const japanese = normalized.match(/[ぁ-んァ-ヶ一-龯々〆ヵヶ]/gu) || [];
   return digits.length >= 1
