@@ -521,18 +521,6 @@ test('눈꺼풀 AA의 한자형 획 사이에 낀 작은 가나를 대사로 선
   assert.match(selectedText, /真っ直ぐ進め！/u);
 });
 
-test('같은 한자·작은 가나 조합이라도 사방이 비어 있으면 문자열만으로 제외하지 않는다', () => {
-  const sample = [
-    '',
-    '　　　　　　　　　　　斗ぅ笊气',
-    '',
-  ].join('\n');
-  const selected = selectAllTranslatableSegments(segment(sample))
-    .filter(({ isSelected }) => isSelected)
-    .map(({ text }) => text);
-
-  assert.deepEqual(selected, ['斗ぅ笊气']);
-});
 
 test('눈 주변 AA에 밀착된 짧은 혼합 일본어 조각을 눈썹 대사로 선택하지 않는다', () => {
   const sample = [
@@ -1658,4 +1646,338 @@ test('레스 본문 안이어도 AA 획 글자뿐인 줄과 반각 가나 조각
     .map(({ text }) => text);
 
   assert.deepEqual(selected, []);
+});
+
+const FACE_AA = [
+  '　　　 ／￣￣＼',
+  '　　 ／ 　 _ノ　 ＼',
+  '　　 |　 （ ●）（●）',
+  '　　 | 　　（__人__）',
+  '　　　|　　　｀ ⌒´ﾉ',
+];
+
+function selectedBetweenFaceLines(text: string) {
+  const sample = [...FACE_AA.slice(0, 2), `　　　　　${text}`, ...FACE_AA.slice(2)].join('\n');
+  return selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text: selected }) => selected.trim());
+}
+
+test('그림 줄 사이에 끼인 반각 효과음은 자동 선택한다 (수동정규식 학습)', () => {
+  for (const text of ['ｼﾞｬﾗｯ', 'ﾓｸﾞﾓｸﾞ', 'ｸｽｸｽｸｽ', 'ｹﾎｯ', 'ｼﾞｨｨｨ']) {
+    assert.ok(selectedBetweenFaceLines(text).includes(text), text);
+  }
+});
+
+test('그림 줄 사이의 채움 무늬·선 조각은 효과음으로 보지 않는다', () => {
+  for (const text of ['海海海海', '米米米米米米米', 'ﾆﾆﾆﾆﾆﾆ', 'ヨヨヨヨヨヨヨヨ']) {
+    assert.deepEqual(selectedBetweenFaceLines(text), [], text);
+  }
+});
+
+test('AA 획 글자가 대부분인 조각은 혼자 있어도 선택하지 않는다 (금지항목 학습)', () => {
+  for (const text of ['乂弋こｿ', '厶圭圭圭圭圭ア', '从 イ ）乂', '斗ぅ笊气']) {
+    const sample = ['', `　　　　　　${text}`, ''].join('\n');
+    const selected = selectAllTranslatableSegments(segment(sample))
+      .filter(({ isSelected }) => isSelected)
+      .map(({ text: selectedText }) => selectedText.trim());
+    assert.deepEqual(selected, [], text);
+  }
+});
+
+test('머리카락 윗선(乂ﾐ:::乂ﾊ)처럼 획 글자와 채움 기호로 된 AA 줄은 전체 선택하지 않는다', () => {
+  const sample = [
+    '',
+    '　　　　　　　　＿=‐､)＼ｊ:ヽ',
+    '　　　　　　乂ﾐ:::::::::::::::::::::::::乂ﾊ',
+    '　　　 __､(`::::_:::::::::::_::::_:::::_::::::∠ｨ',
+    '　　　 ＞:::::_　ﾚlハ八ﾉ_)ﾉ_)人::::У',
+    '　　　 しﾚ::|..ｨﾗﾆ二ミーｯr＞=ﾆｼ',
+    '　　　乂::/ヽ:! \'､弋ﾃ≧´ﾄtﾁ㍉く',
+    '　 ／/r::{( b:l 　 \'"´ 　　|｀ 　|:lj',
+    '／／ラ:::ヽYﾐ_　　 ､　‐/　　 |:i　　　　　　　　　　　　分かったわ　今日の献立は',
+    '／/ 人从≧´l |　　￣二´　ﾑ\'',
+    '. / /三三三三ﾄ､　　 Ξ　 \'＿＿＿_　　　　　　　　 クリームシチューね',
+    '',
+  ].join('\n');
+  const selected = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text.trim());
+
+  assert.deepEqual(selected, ['分かったわ　今日の献立は', 'クリームシチューね']);
+});
+
+test('반각 >>앵커로 시작하는 줄도 앵커 뒤 문장을 자동선택한다', () => {
+  const sample = [
+    '',
+    '>>2564　いや、別にTwitterで酷評されてる',
+    '',
+    '　　　　|:.:.:.:.:.:i|:.:.∧__＿＿_　　イ:.:.:/　　　　　>>12　いや、別にTwitterで酷評されてる',
+    '',
+  ].join('\n');
+  const selected = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text.trim());
+
+  assert.deepEqual(selected, [
+    'いや、別にTwitterで酷評されてる',
+    'いや、別にTwitterで酷評されてる',
+  ]);
+});
+
+test('AA 옆 대사에 섞인 영어 단어(BETA·PC·SNS)를 AA 조각으로 오인하지 않는다', () => {
+  const sample = [
+    '',
+    '　　　　　 /:.:..:/;|　_ . ．-──-... ヽ　　　　　　　BETA相手に勝てるわけないだろ',
+    '　　　　|:.:.:.:.:.:i|:.:|:.|:.:.:.:.:.:.:.:.:.:::::i|:.:.i|: .:|　　　　　　　俺のPCが壊れた…',
+    '　　　　|:.:.:.:.:.:i|:.:.∧__＿＿_　　イ:.:.:/　　　　　　　SNSで拡散されてる',
+    '　　　　|:.:.:.:.:.人:.:.:.i!ﾉ､___ﾉﾏ:.:.:イ:.:/',
+    '',
+  ].join('\n');
+  const selected = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text.trim());
+
+  assert.deepEqual(selected, ['BETA相手に勝てるわけないだろ', '俺のPCが壊れた…', 'SNSで拡散されてる']);
+});
+
+// 얼굴 AA 오른쪽에 대사가 붙는 가장 흔한 배치. 대사 칸만 바꿔 가며 쓴다.
+const sideDialogueSample = (dialogue: string[]) => [
+  "　　　　　/::::::/::::::::/::::::::::::::::::::::::::::::::::',::::::.",
+  "　　　　 .':::::::;′:::/ |:::::::::::/:::::j{;;;;;l:::::: |:::::::.",
+  '　　　　 |:::::::|::::::/　 :::::::::::|i::::/　　|::::: |:::::::|',
+  '　　　　 |:::::::|:::/　　|:::/:::::|::/　　　|::::::|:::::::|',
+  `　　　　 |:::::::|/＿.ノ∨:::::::|/\`'ー--|:::::ﾊ::::j|　　　　 ${dialogue[0] || ''}`,
+  "　　　　 |:::::::|'＾ 　 __､|::::从 ‐,ｨ=ミ |:::{ァv::i{",
+  `　　　　 |:::::::|、,ｨ==ﾐ |:::ﾊ|　´　　　|::l'/, }::::',　　　　${dialogue[1] || ''}`,
+  "　　　　 |:::::::L　　　　|/ i　　 　 　 |:ﾉ) /:i＼',",
+  `　　　　 |::|::::|iﾊ　　　　 　 　 　 u ,':j\`ｲ::::'　　　　　${dialogue[2] || ''}`,
+  "　　　　 |::|::::|i:人　 　 r　　つ 　 //i:i:|::::'",
+  "　　　　,jﾉ|::::|i:i:i:i:i＞　　　　　イ7i:i:i:i:i|:::'",
+].join('\n');
+
+const selectedTexts = (sample: string) => selectAllTranslatableSegments(segment(sample))
+  .filter(({ isSelected }) => isSelected)
+  .map(({ text }) => text.trim());
+
+test('AA 옆 대사의 전각 마침표 말줄임(．．．)과 반각 읽기 표기(-ﾌﾟﾛﾛｰｸﾞ-)를 그림으로 보지 않는다', () => {
+  const dialogue = ['なんか．．．', '強烈な序章-ﾌﾟﾛﾛｰｸﾞ-だな．．．', 'だからこそ伝説になったんだろうが'];
+
+  assert.deepEqual(selectedTexts(sideDialogueSample(dialogue)), dialogue);
+});
+
+test('AA 옆 대사의 점 말줄임(... ・・・)과 반각 가타카나 단어를 전체선택한다', () => {
+  const dialogue = ['そうだな...', 'まさか・・・', 'ﾌﾟﾛﾛｰｸﾞが強烈だ'];
+
+  assert.deepEqual(selectedTexts(sideDialogueSample(dialogue)), dialogue);
+  assert.deepEqual(
+    selectedTexts(sideDialogueSample(['運命-ｻﾀﾞﾒ-', 'それが俺の正義-ｼﾞｬｽﾃｨｽ-'])),
+    ['運命-ｻﾀﾞﾒ-', 'それが俺の正義-ｼﾞｬｽﾃｨｽ-'],
+  );
+});
+
+test('AA 옆 대사에 섞인 등급 글자·영어 단어·코드(Ｓ級·Excel·No.1)를 전체선택한다', () => {
+  const groups = [
+    ['Ｓ級の魔物か．．．', 'S級ハンター', 'これがＡランク冒険者の力か'],
+    ['BETAの大群', '対BETA戦', 'NPCです'],
+    ['Twitterで見た', 'Excelで計算する', 'Googleで調べろ'],
+    ['No.1ヒーロー', 'A-01部隊', '1d100で判定'],
+    ['MP回復', 'Fate世界', '第3話 Bパート'],
+    ['S級', 'Fクラス', 'YESだね'],
+  ];
+
+  for (const dialogue of groups) {
+    assert.deepEqual(selectedTexts(sideDialogueSample(dialogue)), dialogue);
+  }
+});
+
+// 그림 옆에 한 줄만 놓는다. gap은 그림과 대사 사이의 전각 공백 수.
+const besideDrawingSample = (dialogue: string, gap = 2) => sideDialogueSample([])
+  .split('\n')
+  .map((row, index) => (index === 6 ? `${row.trimEnd()}${'　'.repeat(gap)}${dialogue}` : row.trimEnd()))
+  .join('\n');
+
+test('그림 옆에 떨어져 놓인 대사는 그림과 가까워도 글자 모양만 보고 전체선택한다 (수동정규식 학습)', () => {
+  const dialogues = [
+    'D&Dのゴブリンには人間と交配するという設定は無かった',
+    '昼間は政務、夜間は性交', '今日未明、○○市で殺人事件が', '‐　後は作業だった　‐',
+    '【間桐雁夜？】', '富竹「富竹フラー――」', 'eスポーツ、ゲームか．．．', 'ｱﾙﾎﾞﾗ山脈',
+    'ﾊﾟﾁﾊﾟﾁﾊﾟﾁ', 'ﾑﾆﾑﾆ♥', 'ｶﾁｬ', 'ﾜﾀｼﾉｾｲﾀﾞ', 'ｺｺ　ｵｷｬｸﾉ　ｲﾅｲ　ﾍﾔﾅﾝﾀﾞｵ',
+    'おーーー', 'はーーい♪', 'やる夫く～ん♪', 'お、お、おーーー♪',
+    'え？', 'あっ', 'ね？', 'ん……', 'ふぅ', '誰？', '白……',
+    '大使', '陛下', '社長', '火竜山', '殺せ', 'スイッチ',
+    '５歳', '２０００だ', '５００っ！？', '３０、か',
+  ];
+
+  for (const dialogue of dialogues) {
+    for (const gap of [2, 4]) {
+      assert.deepEqual(selectedTexts(besideDrawingSample(dialogue, gap)), [dialogue], `${dialogue} (${gap}칸)`);
+    }
+  }
+});
+
+test('그림 옆 칸이어도 금지항목으로 배운 그림 획 조각은 전체선택하지 않는다', () => {
+  const fragments = [
+    '斗ャテテ', '隠丐圭ミ心', '鑾戀淡炎', '災父爻炎价', '森森森杉', '寸王王王',
+    'ﾏﾆ!', 'ﾊｰﾍ', 'ﾐ ｰｲ', 'イニニニ', 'ﾆﾆﾆﾆﾆﾆﾆﾆﾆ!',
+    'じ ﾍ ｰそ', 'ヨヨヨヨヨヨヨヨ', 'ｲｶﾞﾚｽｺﾝｽﾀﾝﾂｧﾒﾘﾗｹｾｱﾍﾟﾘﾗｹｱﾒﾘｶﾞｴ',
+  ];
+
+  for (const fragment of fragments) {
+    assert.deepEqual(selectedTexts(besideDrawingSample(fragment)), [], fragment);
+  }
+});
+
+test('그림이 위아래 줄에서 감싸고 있는 자리는 그림 옆 칸으로 보지 않는다', () => {
+  const rows = sideDialogueSample([]).split('\n').map((row) => row.trimEnd());
+  rows[5] = `${rows[5]}　　　　　ヽ:::::::ﾊ`;
+  rows[6] = `${rows[6]}　　ｶﾁｬ`;
+  rows[7] = `${rows[7]}　　　　　　　ﾉ::::::/`;
+
+  assert.deepEqual(selectedTexts(rows.join('\n')), []);
+});
+
+test('그림 끝이 들쭉날쭉해 한쪽 줄만 몇 칸 튀어나온 자리의 긴 대사는 전체선택한다', () => {
+  const sentence = 'D&Dのゴブリンには人間と交配するという設定は無かった';
+  const raggedSample = (dialogue: string, wrapBelow: boolean) => [
+    '　　　　 |:::::::|::::::/　 :::::::::::|i::::/　　|::::: |:::::::|',
+    '　　　　 |:::::::|:::/　　|:::/:::::|::/　　　|::::::|:::::::|',
+    `　　　　 |:::::::|/＿.ノ∨:::::::|/\`'ー--|:::::ﾊ::::j|　　${dialogue}`,
+    `　　　　 |:::::::|'＾ 　 __､|::::从 ‐,ｨ=ミ |:::{ァv::i{${wrapBelow ? '::::::|' : ''}`,
+    "　　　　 |:::::::|、,ｨ==ﾐ |:::ﾊ|　´　　　|::l'/, }::::',",
+  ].join('\n');
+
+  // 윗줄 그림이 대사 시작보다 4칸 더 나와 있지만 아랫줄은 비어 있다.
+  assert.deepEqual(selectedTexts(raggedSample(sentence, false)), [sentence]);
+  // 위아래가 모두 덮으면 그림 속으로 본다.
+  assert.deepEqual(selectedTexts(raggedSample(sentence, true)), []);
+  // 짧은 조각은 튀어나온 그림에 대부분 가려지므로 허용하지 않는다.
+  assert.deepEqual(selectedTexts(raggedSample('え？', false)), []);
+});
+
+test('닫힌 박스 안의 영어 섞인 짧은 대사를 전체선택한다', () => {
+  for (const dialogue of ['BETAの大群', 'TSFに乗れ', 'No.1ヒーロー', 'S級', '運命-ｻﾀﾞﾒ-']) {
+    const width = Array.from(dialogue).length + 2;
+    const sample = [
+      `　┌${'─'.repeat(width)}┐`,
+      `　│　${dialogue}　│`,
+      `　└${'─'.repeat(width)}┘`,
+    ].join('\n');
+
+    assert.deepEqual(selectedTexts(sample), [dialogue], dialogue);
+  }
+});
+
+test('영문자가 낀 AA 획 조각은 영어 단어로 보지 않고 계속 제외한다', () => {
+  const fragments = [
+    'ﾊHHﾊ从', 'ﾉAAﾊ', 'NV从ﾐ', 'ｨSﾊ', 'Ｎ人', 'Ｈ彡ﾐ',
+    'ﾄ-ｲ-ｲ-', 'ミ...彡', 'ｨﾊﾐ::ｨﾊﾐ', 'ノ．．．ヽ', 'Ｖ字ﾊ', '人-ﾊﾊ-', 'ﾐCDﾐ',
+  ];
+  const rows = sideDialogueSample([]).split('\n');
+  const sample = [
+    ...rows.map((row, index) => `${row.trimEnd()}　　　　${fragments[index] || ''}`),
+    `　　 　 　 |::::|i:i:|ニ〔◎ニニニニニニ|:::|　　　　${fragments[11]}`,
+    `　　 　 　 ∨|i:人ﾆﾆア￣￣￣∨ﾆ／L:|　　　　${fragments[12]}`,
+    '　　　　　ﾉ从ﾊ MP ﾊ从ヽ',
+    '　　　　 ｲ ﾘ ｉｌ ﾄ ､ GM 彡ﾐ',
+  ].join('\n');
+
+  assert.deepEqual(selectedTexts(sample), []);
+});
+
+test('레스 본문 안의 ﾆﾆﾆ·점무늬(: : :) AA 줄을 평문 본문으로 자동선택하지 않는다', () => {
+  const sample = [
+    '3051 名前： ◆D.SvjqEYaM[] 投稿日：2019/12/21(土) 21:02:19 ID:t5gLJLYs0 [63/63]',
+    '',
+    '　　　　|:.:.:.:.:.:i|:∧""　 　 　 　 "" .:.:|　　　　　　　続く！　へばばねー！',
+    '　　　　　　　,ﾆﾆﾆﾆﾆﾆ/ ⌒jノ　.ﾉ',
+    '　　 　 ／ﾆﾆﾆﾆﾆ/:＼/: : : : : : : : : : : ＼',
+    '　　　　）ﾆﾆﾆﾆイ: : : : : : : : : : : : : : : : : : i',
+    '　　 ／ﾆﾆ二_≧--- ､: : : : : : : : : : : : ／',
+    '',
+  ].join('\n');
+  const selected = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text.trim());
+
+  assert.deepEqual(selected, ['続く！　へばばねー！']);
+});
+
+test('레스 본문 판정은 일본어 단어 근거가 있는 줄에만 적용한다', () => {
+  const sample = [
+    '3052 名前： 名無し[sage] 投稿日：2019/12/21(土) 21:03:00 ID:abcdEFGH0',
+    '乙',
+    '草',
+    'シュールｗ',
+    'へーｗ',
+    'BETAはやっぱり強いな',
+    '）ﾆイ',
+    'ノイ',
+    '人ハ',
+    'ヌフ',
+    'ﾛ工ｪ',
+    '',
+  ].join('\n');
+  const selected = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text.trim());
+
+  assert.deepEqual(selected, ['乙', '草', 'シュールｗ', 'へーｗ', 'BETAはやっぱり強いな']);
+});
+
+test('>>앵커 분리는 앵커가 끼어든 AA 조각을 새로 선택하지 않는다', () => {
+  const sample = [
+    '3051 名前： ◆D.SvjqEYaM[] 投稿日：2019/12/21(土) 21:02:19 ID:t5gLJLYs0',
+    '　　|>>1ﾉ人ヽ|',
+    '　＞＞2ﾊﾉ　　ｲ',
+    '　≫3ﾍ ｲﾄ',
+    '　ヽ>>7ﾆﾆﾆイ',
+    '　 >>12ﾉ　ﾊ',
+    '　>>3ﾐOO彡',
+    '　　　　|:.:.:.:.:.人:.:.:.i!ﾉ､>>45___ﾉﾏ:.:.:イ:.:/',
+    '　　　　　　　,ﾆﾆﾆﾆﾆﾆ/ ⌒jノ>>6-8　.ﾉ',
+    '',
+  ].join('\n');
+  const selected = selectAllTranslatableSegments(segment(sample))
+    .filter(({ isSelected }) => isSelected)
+    .map(({ text }) => text.trim());
+
+  assert.deepEqual(selected, []);
+});
+
+test('그림과 전각 공백 한 칸 사이의 줄 끝 문장과 숫자 사이 ／가 든 문장을 자동선택한다', () => {
+  const source = [
+    '　　　 ／ニニニ |ﾆﾆﾆﾆﾆ ::|ﾆﾆﾆﾆﾆ//　　　　　∨∧ﾆ:::::::::: |ﾆﾆﾆﾆ / ∧　八、戦闘の経験値は平和なこの世界では積めない',
+    '　 ／ﾆﾆﾆﾆﾆ|ﾆﾆﾆﾆﾆ ::|ﾆﾆﾆﾆ//─ﾐ　　_.-∨∧ ::::::: |ﾆﾆﾆﾆﾆｺ',
+    '　_..::ﾆﾆﾆﾆﾆﾆ|ﾆﾆﾆﾆﾆ ::|ﾆﾆﾆﾆ|//　　　　 __}　|::::::: |ﾆﾆﾆ/ﾆﾆﾆ/　九、このゲームの進行速度はあらゆるゲームの中で最も遅い',
+    '　　|:::::::::::|　　 弋彡　　 |:::/　　　　 弋彡　 / |!::::::::::!　　　　　ていうか16／16でも離れ業だよな',
+    '　　/i::::::::::::ﾊ　　　　　　 \'　　　　　　　　　　|　|i:::::::::{　　　　　里見さんって、何かやってたの？',
+  ].join('\n');
+  const result = selectAllTranslatableSegments(segmentWithPostProcessing(source));
+  for (const phrase of [
+    '八、戦闘の経験値は平和なこの世界では積めない',
+    '九、このゲームの進行速度はあらゆるゲームの中で最も遅い',
+    'ていうか16／16でも離れ業だよな',
+    '里見さんって、何かやってたの？',
+  ]) {
+    const target = result.find(({ text }) => text === phrase);
+    assert.equal(target?.isSelected, true, phrase);
+  }
+  assert.ok(!result.some(({ text, isSelected }) => isSelected && /[|:∧ﾆ]/u.test(text)));
+  assert.equal(result.map(({ text }) => text).join(''), source);
+});
+
+test('그림 끝 가나 없는 획(ノ三ミ)과 긴 공백 뒤 문장을 한 조각으로 묶지 않는다', () => {
+  const source = [
+    '　　　　　　　　　　　 | ^辷二二二二二二辷､ヽ　　　　　　　,イ三ﾆ､',
+    '　　　　　　　　　　　 |ﾇ\'\'\'"z──一----ヾヾヽ　　 /:::　　...:::::::　ノ三ミ　　　　　　　　　　　金を集めたが',
+    '　　　　　　 　 　 　 ﾍ　}.:.:.:.:.:丁 l　　　 |ｰ-ｨ\'三ﾆﾐ　　　　　　　　　　　　　 それを自分達の逃走資金に使いおった',
+  ].join('\n');
+  const result = selectAllTranslatableSegments(segmentWithPostProcessing(source));
+  for (const phrase of ['金を集めたが', 'それを自分達の逃走資金に使いおった']) {
+    const target = result.find(({ text }) => text === phrase);
+    assert.equal(target?.isSelected, true, phrase);
+  }
+  assert.ok(!result.some(({ text, isSelected }) => isSelected && /三ミ/u.test(text)));
+  assert.equal(result.map(({ text }) => text).join(''), source);
 });

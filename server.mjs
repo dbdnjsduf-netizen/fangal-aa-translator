@@ -761,7 +761,7 @@ app.post('/api/vertex/chat', async (request, response) => {
   } finally {
     releaseSlot?.();
     const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
-    appendVertexLog(`${formatLogTime()} ${model} ${itemCount}줄 ${seconds}초 ${logOutcome}`);
+    appendVertexLog(`${formatLogTime()} ${model} ${isFlex ? 'Flex' : '즉시'} ${itemCount}줄 ${seconds}초 ${logOutcome}`);
   }
 });
 

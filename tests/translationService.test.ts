@@ -159,6 +159,7 @@ test('Gemini 요청은 키를 URL이 아닌 헤더로 보내고 고정 길이 JS
     );
     assert.equal(capturedBody.generationConfig.responseSchema.minItems, 1);
     assert.equal(capturedBody.generationConfig.responseSchema.maxItems, 1);
+    assert.deepEqual(capturedBody.generationConfig.thinkingConfig, { thinkingLevel: 'low' });
   } finally {
     globalThis.fetch = previousFetch;
     if (previousWindow) {
@@ -299,7 +300,7 @@ test('Gemini 응답이 너무 오래 없으면 같은 청크를 기다리지 않
   Object.defineProperty(globalThis, 'window', {
     value: {
       setTimeout: (handler: () => void, ms?: number) => (
-        globalThis.setTimeout(handler, (ms ?? 0) >= 100_000 ? 0 : ms)
+        globalThis.setTimeout(handler, (ms ?? 0) >= 60_000 ? 0 : ms)
       ),
       clearTimeout: (timer: ReturnType<typeof setTimeout>) => globalThis.clearTimeout(timer),
     },
@@ -339,7 +340,213 @@ test('Gemini 응답이 너무 오래 없으면 같은 청크를 기다리지 않
     );
     assert.deepEqual(result.translations, inputs.map((_, index) => `번역${index}`));
     assert.deepEqual(result.failures, []);
-    assert.deepEqual(requestedSizes, [4, 2, 1, 1, 2, 1, 1]);
+    // 쪼갠 두 절반은 동시에 나가므로 순서 대신 크기 구성만 확인한다.
+    assert.deepEqual([...requestedSizes].sort((a, b) => b - a), [4, 2, 2, 1, 1, 1, 1]);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousWindow) {
+      Object.defineProperty(globalThis, 'window', previousWindow);
+    } else {
+      Reflect.deleteProperty(globalThis, 'window');
+    }
+  }
+});
+
+test('Vertex Flex 요청이 끊기면 같은 묶음을 즉시 방식으로 다시 보내고 이후 묶음도 즉시 방식으로 보낸다', async () => {
+  const previousFetch = globalThis.fetch;
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const flexFlags: boolean[] = [];
+  const vertexConfig = {
+    useVertex: true,
+    vertexCredentials: '{"type":"service_account"}',
+    projectId: 'test-project',
+    location: 'global',
+    flex: true,
+  };
+
+  Object.defineProperty(globalThis, 'window', {
+    value: globalThis,
+    writable: true,
+    configurable: true,
+  });
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes('/api/vertex/log/reset')) {
+      return new Response('{"ok":true}', { status: 200 });
+    }
+    const body = JSON.parse(String(init?.body));
+    flexFlags.push(Boolean(body.flex));
+    if (body.flex) {
+      return new Response(JSON.stringify({ error: 'fetch failed' }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    const prompt = String(body.contents[0].parts[0].text);
+    // 재시도 요청은 INPUT_JSON 뒤에 교정 문구가 붙으므로 첫 줄만 읽는다.
+    const chunk = JSON.parse(prompt.split('INPUT_JSON:\n')[1].split('\n')[0]) as string[];
+    return new Response(JSON.stringify({
+      candidates: [{
+        content: { parts: [{ text: JSON.stringify(chunk.map((_, index) => `번역${index}`)) }] },
+        finishReason: 'STOP',
+      }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    const inputs = Array.from({ length: 130 }, (_, index) => `原文${index}`);
+    const result = await translateBatchWithGemini(
+      inputs,
+      '',
+      [],
+      false,
+      'Translate.',
+      undefined,
+      undefined,
+      'gemini-3.8-flash',
+      vertexConfig,
+    );
+    assert.deepEqual(result.failures, []);
+    assert.ok(result.translations.every((text) => text.startsWith('번역')));
+    // 첫 Flex 실패 뒤로는 모두 즉시 방식이고, 병렬로 이미 나간 Flex 요청만 한 번 더 실패할 수 있다.
+    assert.equal(flexFlags[0], true);
+    assert.ok(flexFlags.filter(Boolean).length <= 2, JSON.stringify(flexFlags));
+    assert.equal(flexFlags.at(-1), false);
+    // 화면의 설정 값은 바꾸지 않는다.
+    assert.equal(vertexConfig.flex, true);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousWindow) {
+      Object.defineProperty(globalThis, 'window', previousWindow);
+    } else {
+      Reflect.deleteProperty(globalThis, 'window');
+    }
+  }
+});
+
+test('Flex로 보낸 묶음이 형식 오류로 쪼개지면 나눈 요청은 즉시 방식으로 보낸다', async () => {
+  const previousFetch = globalThis.fetch;
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const requests: Array<{ flex: boolean; size: number }> = [];
+
+  Object.defineProperty(globalThis, 'window', {
+    value: globalThis,
+    writable: true,
+    configurable: true,
+  });
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes('/api/vertex/log/reset')) {
+      return new Response('{"ok":true}', { status: 200 });
+    }
+    const body = JSON.parse(String(init?.body));
+    const prompt = String(body.contents[0].parts[0].text);
+    const chunk = JSON.parse(prompt.split('INPUT_JSON:\n')[1].split('\n')[0]) as string[];
+    requests.push({ flex: Boolean(body.flex), size: chunk.length });
+    // Flex 응답은 항목 수가 하나 모자라 쪼개기 복구로 넘어간다.
+    const count = body.flex ? chunk.length - 1 : chunk.length;
+    return new Response(JSON.stringify({
+      candidates: [{
+        content: { parts: [{ text: JSON.stringify(Array.from({ length: count }, (_, index) => `번역${index}`)) }] },
+        finishReason: 'STOP',
+      }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    const result = await translateBatchWithGemini(
+      ['原文0', '原文1', '原文2', '原文3'],
+      '',
+      [],
+      false,
+      'Translate.',
+      undefined,
+      undefined,
+      'gemini-3.8-flash',
+      {
+        useVertex: true,
+        vertexCredentials: '{"type":"service_account"}',
+        projectId: 'test-project',
+        location: 'global',
+        flex: true,
+      },
+    );
+    assert.deepEqual(result.failures, []);
+    assert.ok(result.translations.every((text) => text.startsWith('번역')), JSON.stringify(result.translations));
+    assert.ok(requests.some(({ flex, size }) => flex && size === 4), JSON.stringify(requests));
+    assert.ok(
+      requests.filter(({ size }) => size < 4).every(({ flex }) => !flex),
+      JSON.stringify(requests),
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousWindow) {
+      Object.defineProperty(globalThis, 'window', previousWindow);
+    } else {
+      Reflect.deleteProperty(globalThis, 'window');
+    }
+  }
+});
+
+test('쪼갠 절반은 동시에 보내고, 같은 구간이 계속 시간 초과되면 더 쪼개지 않고 그 줄만 남긴다', async () => {
+  const previousFetch = globalThis.fetch;
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const requestedSizes: number[] = [];
+  let pending = 0;
+  let maxPending = 0;
+
+  Object.defineProperty(globalThis, 'window', {
+    value: {
+      setTimeout: (handler: () => void, ms?: number) => (
+        globalThis.setTimeout(handler, (ms ?? 0) >= 60_000 ? 5 : ms)
+      ),
+      clearTimeout: (timer: ReturnType<typeof setTimeout>) => globalThis.clearTimeout(timer),
+    },
+    writable: true,
+    configurable: true,
+  });
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body));
+    const prompt = String(body.contents[0].parts[0].text);
+    const chunk = JSON.parse(prompt.split('INPUT_JSON:\n')[1].split('\n')[0]) as string[];
+    requestedSizes.push(chunk.length);
+    pending += 1;
+    maxPending = Math.max(maxPending, pending);
+    try {
+      if (chunk.includes('原文3')) {
+        // 이 줄이 든 요청은 응답하지 않는다.
+        return await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        });
+      }
+      await new Promise((resolve) => globalThis.setTimeout(resolve, 1));
+      return new Response(JSON.stringify({
+        candidates: [{
+          content: { parts: [{ text: JSON.stringify(chunk.map((source) => `번역${source.replace('原文', '')}`)) }] },
+          finishReason: 'STOP',
+        }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    } finally {
+      pending -= 1;
+    }
+  }) as typeof fetch;
+
+  try {
+    const inputs = Array.from({ length: 8 }, (_, index) => `原文${index}`);
+    const result = await translateBatchWithGemini(inputs, 'TEST_ONLY_NOT_A_REAL_KEY', [], false, 'Translate.');
+    // 8 → 4 → 2까지만 쪼개고, 原文3이 든 2줄은 번역하지 않은 채 남긴다.
+    assert.deepEqual(result.failures.flatMap(({ itemIndices }) => itemIndices), [2, 3]);
+    assert.deepEqual(
+      result.translations,
+      ['번역0', '번역1', '原文2', '原文3', '번역4', '번역5', '번역6', '번역7'],
+    );
+    assert.ok(!requestedSizes.includes(1), JSON.stringify(requestedSizes));
+    assert.ok(maxPending >= 2, `동시 요청 ${maxPending}`);
+    assert.ok(maxPending <= 3, `동시 요청 ${maxPending}`);
   } finally {
     globalThis.fetch = previousFetch;
     if (previousWindow) {
