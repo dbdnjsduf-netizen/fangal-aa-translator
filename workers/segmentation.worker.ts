@@ -3,6 +3,12 @@ import type { VisualWidthProfile } from '../services/visualTextMetrics';
 import { annotateVerticalTextSegments } from '../services/verticalText';
 import { applyManualRegexRules } from '../services/manualRegex';
 import { applySelectionExclusions } from '../services/selectionExclusions';
+import {
+  hasSpeechShape,
+  isAAGlyphSoup,
+  isAAStrokeGlyph,
+  isReadableUtterance,
+} from '../services/aaGlyphs';
 import type {
   ManualRegexRules,
   SelectionExclusionRules,
@@ -30,7 +36,10 @@ const STRUCTURAL_SEPARATOR_SOURCE = String.raw`[|│┃｜＞＜\u2500-\u257F／
 // A run ending at whitespace is decoration. A run joined directly to Japanese
 // (`◆◆市`) is an anonymized name prefix and must stay with the sentence.
 const DECORATIVE_SEPARATOR_SOURCE = `[★◆]+(?=(?:${SPACE_TOKEN_SOURCE})|$)`;
-const DRAWING_SEPARATOR_SOURCE = `(?:${STRUCTURAL_SEPARATOR_SOURCE}|${DECORATIVE_SEPARATOR_SOURCE})`;
+// Reply anchors (`>>2564`, `＞＞12-15`) split off like a gap, so the `>`
+// AA-stroke guards never reject the sentence that follows them.
+const REPLY_ANCHOR_SOURCE = String.raw`(?:>>|＞＞|≫)[0-9０-９]+(?:[-,－，][0-9０-９]+)*`;
+const DRAWING_SEPARATOR_SOURCE = `(?:${REPLY_ANCHOR_SOURCE}|${STRUCTURAL_SEPARATOR_SOURCE}|${DECORATIVE_SEPARATOR_SOURCE})`;
 const RE_GAP = new RegExp(
   `((?:${SPACE_TOKEN_SOURCE})*(?:${DRAWING_SEPARATOR_SOURCE}|(?:${SPACE_TOKEN_SOURCE}){2,})(?:${SPACE_TOKEN_SOURCE})*)`,
   'i',
@@ -74,15 +83,25 @@ const RE_THREAD_NAME = /^\s*[0-9０-９]+\s*(?:[:：]|名前\s*[:：]).*?(?:◆|
 // letters/digits, everyday punctuation and ">>123" anchors.
 const RE_PLAIN_POST_TEXT_LINE = /^[\s\u3000ぁ-ゖゝゞァ-ヺー・ヽヾ一-龯々〆〇ｦ-ﾟA-Za-zＡ-Ｚａ-ｚ0-9０-９。、，．,.…‥！？!?「」『』（）()【】〈〉《》〜～ー＝=＋+％%＃#＠@：:；;”“"'’＞>♪☆★♡♥ｗ]+$/u;
 // Kana/kanji that AA uses as strokes; a line made only of these is art.
-const RE_AA_STROKE_LETTER = /[ノハイトミムヘへレソツシ人八乂从入丶くしつ]/u;
+const RE_AA_STROKE_LETTER = /[ノハイトミムヘへレソツシ人八乂从入丶くしつﾉﾊｲﾄﾐﾑﾍﾚｿﾂｼニﾆ二]/u;
 const RE_HALFWIDTH_KANA_TOKEN = /^[ｦ-ﾟ]{1,2}$/u;
+// Body-fill textures: "ﾆﾆﾆﾆ" horizontal strokes and ": : : :" dot shading.
+const RE_PLAIN_POST_AA_TEXTURE = /([ﾆニ二])\1{2,}|(?:[:：][\s　.．]{0,2}){4,}/u;
+
+// Post-body text must read as Japanese: a natural phrase, a letter AA never
+// draws with ("乙", "草", "シュール"), or a stretched kana ("へー").
+const hasJapaneseWordEvidence = (text: string): boolean => {
+  if (isNaturalJapaneseText(text, true)) return true;
+  if (/[へくしつ][ーｰ～〜]/u.test(text)) return true;
+  const letters = text.match(/[ぁ-ゖァ-ヺ一-龯々〆ｦ-ﾝ]/gu) || [];
+  return letters.some((letter) => !RE_AA_CHARS.test(letter) && !RE_AA_STROKE_LETTER.test(letter));
+};
 
 const isPlainPostTextLine = (line: string): boolean => {
   const trimmed = line.trim();
   if (!trimmed || !RE_PLAIN_POST_TEXT_LINE.test(trimmed)) return false;
-  const letters = trimmed.match(/[ぁ-ゖァ-ヺ一-龯々〆ｦ-ﾟ]/gu) || [];
-  if (letters.length === 0) return false;
-  if (letters.every((letter) => RE_AA_STROKE_LETTER.test(letter))) return false;
+  if (RE_PLAIN_POST_AA_TEXTURE.test(trimmed)) return false;
+  if (!hasJapaneseWordEvidence(trimmed)) return false;
   // "ﾄ ﾑ" style half-width fragments are face/body strokes, not words.
   return !trimmed.split(/[\s\u3000]+/u).some((token) => RE_HALFWIDTH_KANA_TOKEN.test(token));
 };
@@ -110,6 +129,7 @@ const RE_STRICT_BLANK = new RegExp(`^(?:${SPACE_TOKEN_SOURCE})*$`, 'i');
 const RE_HW_DAKUTEN = /[\uff9e\uff9f]/;
 const RE_DISQUALIFIED = /[}｝囗＿|ｌl丿／｜><]/;
 const RE_AUTO_SELECT_EXCLUDE = /[＼＞＜]|(^[ﾆ二ニ々]+$)/;
+
 const RE_NOISE_ONLY = /^[\s\u3000\u00A0\u2000-\u200B从人f´￣｀ヽ_！]+$/;
 const RE_FACE_FRAME = /[()（）<>＜＞〈〉《》「」『』\[\]｛｝{}´｀'"＾^⌒ﾟ°・]/u;
 const RE_AA_CONTEXT_GLYPH = /[|│┃｜/／\\＼_＿￣─━\-~～^＾<>＜＞()（）\[\]｛｝{}´｀'"`.,:;・ﾟ°vVyYwWjJiIlLfFxX]/u;
@@ -426,7 +446,9 @@ const isNaturalJapaneseText = (text: string, allowShort = false): boolean => {
     /[ぁ-んァ-ヶ\uff66-\uff9f]/.test(character)
   )).length;
   const cjkCount = scriptCharacters.filter((character) => /[一-龯]/.test(character)).length;
-  const symbolCount = (text.match(RE_SYMBOLS_G) || []).filter((character) => (
+  // The dashes around a reading gloss ("運命-ｻﾀﾞﾒ-") are notation, not strokes.
+  const symbolSource = hasRubyReading(text) ? text.replace(/[-‐‑–—―－]/gu, '') : text;
+  const symbolCount = (symbolSource.match(RE_SYMBOLS_G) || []).filter((character) => (
     !/[A-Za-z0-9Ａ-Ｚａ-ｚ０-９ｗＷ]/.test(character)
   )).length;
   if (symbolCount > scriptCharacters.length * 1.5) return false;
@@ -505,7 +527,8 @@ const isLikelyAAFaceFragment = (text: string): boolean => {
     return false;
   }
   const aaCount = characters.filter((character) => RE_AA_CHARS.test(character)).length;
-  const symbols = text.match(RE_SYMBOLS_G) || [];
+  // "No.1ヒーロー": the letters of a Latin word are not face-frame symbols.
+  const symbols = analyzeInlineLatin(text).stripped.match(RE_SYMBOLS_G) || [];
   const mostlyShapeGlyphs = aaCount / characters.length >= 0.5;
   const repetitiveShapes = new Set(characters).size <= 2 && mostlyShapeGlyphs;
   const framedLikeFace = RE_FACE_FRAME.test(text) && mostlyShapeGlyphs;
@@ -721,7 +744,15 @@ const isShortMixedJapanesePhrase = (text: string): boolean => {
 const isAcronymCjkPhrase = (text: string): boolean => {
   const normalized = text.normalize('NFKC')
     .replace(/[\s\u3000\u00a0\u2000-\u200b]+/gu, '');
-  return /^[A-Z][A-Z0-9]{1,7}[一-龯々〆ヵヶ]{1,8}[.!?！？。、…]*$/u.test(normalized);
+  if (/^[A-Z][A-Z0-9]{1,7}[一-龯々〆ヵヶ]{1,8}[.!?！？。、…]*$/u.test(normalized)) return true;
+  // One rank/class letter ("S級", "Aクラス"). Stroke-shaped capitals (I, L, V,
+  // Y…) and a first letter AA also draws with stay out.
+  const rank = /^([A-Z])([一-龯々〆ヵヶァ-ヺー]{1,8})[.!?！？。、…]*$/u.exec(normalized);
+  return Boolean(
+    rank
+    && !RE_LATIN_STROKE_LETTER.test(rank[1])
+    && isSolidJapaneseLetter(rank[2][0]),
+  );
 };
 
 /**
@@ -729,18 +760,19 @@ const isAcronymCjkPhrase = (text: string): boolean => {
  * notation inside Japanese prose, not evidence of mixed-script AA texture.
  * Spatial checks remain mandatory at each call site.
  */
-const isJapaneseNotationPhrase = (text: string): boolean => {
+const isJapaneseNotationPhrase = (text: string, hasRubyGloss = false): boolean => {
   const normalized = text.normalize('NFKC').trim();
   const hasQuotedIdentifier = /[「『(【][A-Za-z0-9]{1,8}[」』)】]/u.test(normalized);
   const hasAnonymizedName = /(?:^|[\s　])[●○■□◆◇★☆]{2,}(?=[ぁ-んァ-ヶ一-龯々〆ヵヶ])/u
     .test(normalized);
-  if (!hasQuotedIdentifier && !hasAnonymizedName) return false;
+  if (!hasQuotedIdentifier && !hasAnonymizedName && !hasRubyGloss) return false;
 
   const japanese = normalized.match(RE_JAPANESE_CHARS_G) || [];
   const hiraganaCount = japanese.filter((character) => /[ぁ-ん]/u.test(character)).length;
   const cjkCount = japanese.filter((character) => /[一-龯々〆ヵヶ]/u.test(character)).length;
   return japanese.length >= 4
-    && (hiraganaCount >= 2 || cjkCount >= 2)
+    // A gloss already pairs its kanji with a spelled-out reading.
+    && (hiraganaCount >= 2 || cjkCount >= 2 || hasRubyGloss)
     && hasStrongLexicalEvidence(normalized);
 };
 
@@ -957,6 +989,132 @@ const isHorizontalAAStructureRun = (text: string): boolean => {
 
 const RE_AA_EFFECTS = /．・｀ｰ"|｀ｰ"/;
 
+// --- Latin words and reading glosses inside Japanese sentences ---
+// "Ｓ級", "BETAが来る", "No.1ヒーロー" put Latin letters into ordinary
+// dialogue. AA uses Latin letters too, but as lone strokes (i, l, j, V, Y…),
+// so a token only counts as a word when it cannot be read as strokes.
+const RE_LATIN_STROKE_LETTER = /[iljvyxfrtILJVYXT]/;
+const RE_ANY_LATIN_LETTER = /[A-Za-zＡ-Ｚａ-ｚ]/u;
+const RE_INLINE_LATIN_TOKEN = /[A-Za-z0-9]+(?:[.\-][A-Za-z0-9]+)*/g;
+// Length-preserving, unlike NFKC, so token offsets stay valid in the source.
+const toAsciiAlnum = (text: string): string => text.replace(
+  /[Ａ-Ｚａ-ｚ０-９]/gu,
+  (character) => String.fromCharCode(character.charCodeAt(0) - 0xfee0),
+);
+// A kana/kanji that AA does not also use as a stroke.
+const isSolidJapaneseLetter = (character: string | undefined): boolean => Boolean(
+  character
+  && /[ぁ-ゖァ-ヺ一-龯々〆]/u.test(character)
+  && !RE_AA_CHARS.test(character)
+  && !isAAStrokeGlyph(character)
+);
+
+// Letters AA does not draw with. A long-vowel mark counts when it extends
+// such a letter ("ヒーロー"), not when it stands alone as a line.
+const countSolidJapaneseLetters = (text: string): number => {
+  let count = 0;
+  let previousSolid = false;
+  for (const character of text) {
+    const solid = isSolidJapaneseLetter(character) || (character === 'ー' && previousSolid);
+    if (solid) count += 1;
+    previousSolid = solid;
+  }
+  return count;
+};
+
+interface InlineLatinInfo {
+  // Every Latin token is a word/acronym/code and there is at least one.
+  allWordlike: boolean;
+  // The text with those word tokens removed, for shape and symbol checks.
+  stripped: string;
+}
+
+const analyzeInlineLatin = (text: string): InlineLatinInfo => {
+  if (!RE_ANY_LATIN_LETTER.test(text)) return { allWordlike: false, stripped: text };
+  const ascii = toAsciiAlnum(text);
+  let hasWord = false;
+  let hasStrokeToken = false;
+  let stripped = '';
+  let cursor = 0;
+  for (const match of ascii.matchAll(RE_INLINE_LATIN_TOKEN)) {
+    const token = match[0];
+    const start = match.index ?? 0;
+    const letters = token.replace(/[^A-Za-z]/g, '');
+    // Plain numbers and "ｗｗｗ" laughter are judged by the existing rules.
+    if (letters.length === 0 || /^[wW]+$/.test(token)) continue;
+    const hasSolidLetter = Array.from(letters).some((letter) => !RE_LATIN_STROKE_LETTER.test(letter));
+    const hasUppercase = /[A-Z]/.test(letters);
+    const isAllUppercase = letters === letters.toUpperCase();
+    let isWord: boolean;
+    if (/[0-9]/.test(token)) {
+      // Codes: "A-01", "No.1", "Lv50", "1d100", "3D".
+      isWord = token.length >= 3 ? (hasSolidLetter || hasUppercase) : (hasSolidLetter && hasUppercase);
+    } else if (letters.length >= 3) {
+      // Words and acronyms: "Fate", "Twitter", "NPC".
+      isWord = hasSolidLetter && (isAllUppercase || /[aeiouAEIOU]/.test(letters));
+    } else if (letters.length === 2) {
+      isWord = hasSolidLetter && isAllUppercase;
+    } else if (hasSolidLetter) {
+      // Rank/class letters: "Ｓ級", "Aクラス", "ランクＳ".
+      isWord = hasUppercase && (
+        isSolidJapaneseLetter(text[start - 1])
+        || isSolidJapaneseLetter(text[start + 1])
+      );
+    } else {
+      // A stroke-shaped capital needs a whole katakana word after it
+      // ("Tシャツ", "Ｖサイン") before it stops looking like AA.
+      const following = /^[ァ-ヺー]{3,}/u.exec(text.slice(start + 1))?.[0] || '';
+      isWord = hasUppercase
+        && new Set(following).size >= 2
+        && Array.from(following).some((character) => isSolidJapaneseLetter(character));
+    }
+    if (!isWord) {
+      hasStrokeToken = true;
+      continue;
+    }
+    hasWord = true;
+    stripped += text.slice(cursor, start);
+    cursor = start + token.length;
+  }
+  stripped += text.slice(cursor);
+  return { allWordlike: hasWord && !hasStrokeToken, stripped };
+};
+
+// Half-width katakana also spells real words ("ﾌﾟﾛﾛｰｸﾞ", "ｻﾀﾞﾒ"). Texture runs
+// ("ﾆﾆﾆ", "ｨﾊﾐ") lack sound marks or use only stroke-shaped kana.
+const isHalfwidthKanaWord = (run: string): boolean => {
+  const base = Array.from(run).filter((character) => !/[ﾞﾟｰ]/u.test(character));
+  if (base.length < 2 || new Set(base).size < 2) return false;
+  if (base.every((character) => (
+    RE_AA_CHARS.test(character)
+    || RE_AA_STROKE_LETTER.test(character)
+    || /[ｧｨｩｪｫ]/u.test(character)
+  ))) return false;
+  return /[ﾞﾟｰｯｬｭｮ]/u.test(run) ? run.length >= 3 : new Set(base).size >= 4;
+};
+
+const hasOnlyHalfwidthKanaWords = (text: string): boolean => {
+  const runs = text.match(/[ｦ-ﾟ]+/gu);
+  return Boolean(runs && runs.every(isHalfwidthKanaWord));
+};
+
+// Reading gloss attached to kanji: "序章-ﾌﾟﾛﾛｰｸﾞ-", "運命（ｻﾀﾞﾒ）".
+const RE_RUBY_READING = /[一-龯々〆ヵヶ](?:[-‐‑–—―－]([ァ-ヺーｦ-ﾟ]{2,14})[-‐‑–—―－]|[（(]([ｦ-ﾟ]{2,14})[）)])/u;
+const hasRubyReading = (text: string): boolean => {
+  const match = RE_RUBY_READING.exec(text);
+  const reading = match?.[1] || match?.[2];
+  if (!reading) return false;
+  if (/[ｦ-ﾟ]/u.test(reading)) return isHalfwidthKanaWord(reading);
+  const kana = Array.from(reading).filter((character) => character !== 'ー');
+  return new Set(kana).size >= 2 && kana.some((character) => isSolidJapaneseLetter(character));
+};
+
+// Dot runs used as an ellipsis ("なんか．．．", "まさか・・・").
+const RE_ELLIPSIS_DOT_RUN = /[.．・･‥]{2,}/gu;
+// Characters of a plain Japanese sentence in a detached right-hand slot,
+// including dot ellipses and counters ("そうだな...", "第3話").
+const RE_DETACHED_PHRASE_BODY = /^[ぁ-んァ-ヶ\uff66-\uff9f一-龯々〆ヵヶー!?！？。、…♥♡「」『』（）()\s\u3000.．・‥0-9０-９]+$/u;
+
 const isDrawing = (text: string) => {
   if (RE_STRUCTURAL_REPEAT.test(text)) return true;
   if (RE_LINE_BORDERS.test(text)) return true;
@@ -967,7 +1125,8 @@ const isDrawing = (text: string) => {
   if (hasBoundaryDrawingLines && !hasStdHiragana) return true;
 
   const jpChars = text.match(RE_JAPANESE_CHARS_G) || [];
-  const symbols = text.match(RE_SYMBOLS_G) || [];
+  // The letters of an inline Latin word are text, not drawing symbols.
+  const symbols = analyzeInlineLatin(text).stripped.match(RE_SYMBOLS_G) || [];
   const hasNaturalKanaRun = /[ぁ-ん]{2,}|[ァ-ヶ]{3,}/u.test(text);
 
   // If symbols significantly outnumber Japanese characters, it's likely a drawing
@@ -1004,6 +1163,43 @@ const isDrawing = (text: string) => {
   }
 
   return false;
+};
+
+// Text on a neighbouring row that may share a dialogue column: readable
+// phrases and bare punctuation, never strokes.
+const isReadableColumnNeighbor = (region: string): boolean => region
+  .split(/[\s　]{2,}/u)
+  .filter((piece) => piece.trim().length > 0)
+  .every((piece) => {
+    if (!hasJapaneseChar(piece)) return /^[!?！？…‥・.．。、♪♥♡A-Za-zＡ-Ｚａ-ｚ0-9０-９\s　]+$/u.test(piece);
+    return isReadableUtterance(piece) || (
+      isNaturalJapaneseText(piece, true)
+      && hasStrongLexicalEvidence(piece)
+      && !isDrawing(piece)
+      && !isAAGlyphSoup(piece)
+    );
+  });
+
+// True when the rows directly above and below hold no drawing from two
+// columns left of the candidate to the end of the line.
+// A drawing's right edge is ragged, so one of the two rows may overhang the
+// start of a long line by a few columns as long as the other row is clear.
+const hasClearSideColumn = (lines: string[], lineIdx: number, offset: number, width: number): boolean => {
+  const startColumn = getDisplayWidth(lines[lineIdx].substring(0, offset));
+  const isClearFrom = (row: string | undefined, column: number): boolean => {
+    if (row === undefined || RE_THREAD_NAME.test(row)) return true;
+    const region = substringByDisplayCols(row, Math.max(0, column), Number.MAX_SAFE_INTEGER);
+    return RE_STRICT_BLANK.test(region) || isReadableColumnNeighbor(region);
+  };
+  const above = lines[lineIdx - 1];
+  const below = lines[lineIdx + 1];
+  const strictAbove = isClearFrom(above, startColumn - 2);
+  const strictBelow = isClearFrom(below, startColumn - 2);
+  if (strictAbove && strictBelow) return true;
+  if (!strictAbove && !strictBelow) return false;
+  const overhang = Math.min(6, Math.floor(width / 3));
+  if (overhang < 2) return false;
+  return isClearFrom(strictAbove ? below : above, startColumn + overhang);
 };
 
 // --- Segment interface (plain object, no imports needed) ---
@@ -1201,6 +1397,91 @@ const mergeSpacedHorizontalDialogue = (
   return result;
 };
 
+// Captions written to the right of a picture often sit only one blank cell
+// away from the art ("|ﾆﾆ / ∧　八、戦闘の経験値は…") or contain a slash between
+// numbers ("ていうか16／16でも…"). The gap splitter then glues the sentence to
+// the art or cuts it at the slash. A trailing run that reaches the line end,
+// uses only text characters and reads as a real sentence is dialogue.
+const RE_TRAILING_SENTENCE_CHARS = /^[ぁ-ゖゝゞァ-ヺー・一-龯々〆〇ｦ-ﾟA-Za-zＡ-Ｚａ-ｚ0-9０-９。、，,．.…‥！？!?「」『』（）()【】〈〉《》〜～＝%％♪☆♡♥ｗ：:\s　／/]+$/u;
+const RE_TRAILING_SENTENCE_BAD_SLASH = /(?:^|[\s　／/])[／/]|[／/](?:$|[\s　])/u;
+
+const isTrailingSentenceChunk = (chunk: string): boolean => {
+  const japanese = chunk.match(RE_JAPANESE_CHARS_G) || [];
+  if (japanese.length >= 2 && japanese.some((character) => !RE_AA_STROKE_LETTER.test(character))) {
+    return true;
+  }
+  // Lone punctuation such as "…" or "！？" between clauses.
+  return japanese.length === 0 && /^[。、…‥！？!?・]+$/u.test(chunk);
+};
+
+const findTrailingLineSentence = (line: string): SpacedHorizontalDialogueRange | undefined => {
+  const trimmed = line.replace(/[\s　]+$/u, '');
+  const gaps = trimmed.matchAll(/[\s　]+/gu);
+  for (const gap of gaps) {
+    const start = (gap.index ?? 0) + gap[0].length;
+    if (start === 0 || start >= trimmed.length) continue;
+    const tail = trimmed.slice(start);
+    if (!RE_TRAILING_SENTENCE_CHARS.test(tail) || RE_TRAILING_SENTENCE_BAD_SLASH.test(tail)) continue;
+    if (/^[ー・]/u.test(tail)) continue;
+    const chunks = tail.split(/[\s　]+/u).filter(Boolean);
+    if (!chunks.every(isTrailingSentenceChunk)) continue;
+    // A wide blank (2+ cells) inside the tail is a layout gap, not a word
+    // space. Kana-free AA glyphs before it ("ノ三ミ　　　　金を集めたが") belong to
+    // the picture, so start the sentence after that gap instead.
+    const wideGapGroups = tail.split(/[\s　]{2,}/u).filter(Boolean);
+    if (
+      wideGapGroups.length > 1
+      && !/[ぁ-ん]/u.test(wideGapGroups[0])
+      && !/^[。、…‥！？!?・]+$/u.test(wideGapGroups[0])
+    ) continue;
+
+    const compact = tail.replace(/[\s　]+/gu, '').replace(/[／/]/gu, '');
+    const japanese = compact.match(RE_JAPANESE_CHARS_G) || [];
+    if (
+      japanese.length < 6
+      || !/[ぁ-ん]{2,}/u.test(compact)
+      || !hasStrongLexicalEvidence(compact)
+      || !isNaturalJapaneseText(compact)
+      || hasStructuralGlyphDominance(compact)
+    ) continue;
+
+    return { start, end: trimmed.length, isBoxed: false, isIsolated: true };
+  }
+  return undefined;
+};
+
+const isSelectableWorkerSegment = (segment: WorkerTextSegment): boolean => (
+  !segment.isAutoSelectExcluded
+  && Boolean(
+    segment.isStrictJapanese
+    || segment.isAutoSelected
+    || segment.isBoxedDialogue
+    || segment.isContextDialogue
+    || segment.isArrowBox
+    || segment.isVerticalBox
+    || segment.isIndentedDialogue
+    || segment.isIsolatedDialogue
+  )
+);
+
+// Only repair a sentence the per-part detector missed or cut apart; a line
+// whose Japanese inside the range is already one selectable piece is kept.
+const needsTrailingSentenceRepair = (
+  lineSegments: WorkerTextSegment[],
+  range: SpacedHorizontalDialogueRange,
+): boolean => {
+  let cursor = 0;
+  const overlapping: WorkerTextSegment[] = [];
+  for (const segment of lineSegments) {
+    const segmentStart = cursor;
+    cursor += segment.text.length;
+    if (cursor <= range.start || segmentStart >= range.end) continue;
+    if (hasJapaneseChar(segment.text)) overlapping.push(segment);
+  }
+  return overlapping.length > 1
+    || overlapping.some((segment) => !isSelectableWorkerSegment(segment));
+};
+
 // --- Main segmentation function ---
 function segmentContent(
   content: string,
@@ -1274,6 +1555,26 @@ function segmentContent(
 
       const requiredDistinctChars = hasNoAAChars ? 1 : (isIsolatedByGap ? 2 : 3);
       const hasEnoughDistinctJpChars = uniqueJpChars.size >= requiredDistinctChars;
+
+      // Latin words ("BETA", "Ｓ級") and reading glosses ("序章-ﾌﾟﾛﾛｰｸﾞ-")
+      // are part of the sentence; the AA-stroke guards below must not read
+      // their letters, dots and half-width kana as drawing texture.
+      const inlineLatin = analyzeInlineLatin(part);
+      // The Japanese around the word must read as language by itself; a
+      // Latin run between stroke kana ("ﾊHHﾊ从") is still a drawing.
+      const hasInlineLatinPhrase = inlineLatin.allWordlike
+        && jpCharsMatch.length >= 2
+        && (
+          countSolidJapaneseLetters(inlineLatin.stripped) >= 2
+          || isNaturalJapaneseText(inlineLatin.stripped, true)
+        );
+      const isDisqualified = RE_DISQUALIFIED.test(inlineLatin.stripped);
+      const hasRubyNotation = isJp && hasRubyReading(part);
+      const isReadableHalfwidthNotation = hasRubyNotation || (
+        isJp
+        && hasOnlyHalfwidthKanaWords(part)
+        && (part.match(/[ぁ-ん]/gu) || []).length >= 2
+      );
 
       // If line above is a thread name header, relax vertical isolation (only check below)
       const isAboveThreadName = lineIdx > 0 && RE_THREAD_NAME.test(lines[lineIdx - 1]);
@@ -1447,7 +1748,7 @@ function segmentContent(
       );
       const contentBeforeCandidate = line.substring(0, currentOffset);
       const contentAfterCandidate = line.substring(currentOffset + part.length);
-      const hasJapaneseNotation = isJapaneseNotationPhrase(part);
+      const hasJapaneseNotation = isJapaneseNotationPhrase(part, hasRubyNotation);
       const immediateLeftWhitespace = contentBeforeCandidate
         .match(/[\s\u3000\u00a0\u2000-\u200b]+$/u)?.[0] || '';
       const immediateRightWhitespace = contentAfterCandidate
@@ -1495,7 +1796,7 @@ function segmentContent(
         && hasStrongLanguage
         && jpCharsMatch.length >= 4
         && jpCharsMatch.length <= 24
-        && !/[\uff66-\uff9f]/u.test(trimmedPart)
+        && (!/[\uff66-\uff9f]/u.test(trimmedPart) || isReadableHalfwidthNotation)
         && !/([一-龯々〆ヵヶ])\1{3,}/u.test(trimmedPart)
         && leadingWhitespaceWidth >= 8
         && RE_STRICT_BLANK.test(contentAfterCandidate)
@@ -1505,8 +1806,17 @@ function segmentContent(
         // Hearts are ordinary terminal emotion marks in AA dialogue. Keep them
         // inside this far-right, large-gap natural-language path instead of
         // letting dense AA elsewhere on the same source row veto the slot.
-        && /^[ぁ-んァ-ヶ\uff66-\uff9f一-龯々〆ヵヶー!?！？。、…♥♡「」『』（）()\s\u3000]+$/u
-          .test(trimmedPart);
+        && RE_DETACHED_PHRASE_BODY.test(trimmedPart);
+      // The same far-right slot with a Latin word or rank letter in the
+      // sentence ("BETAの大群", "Ｓ級冒険者", "NPCです").
+      const isRightDetachedLatinJapanesePhrase = !isThreadNameLine
+        && hasInlineLatinPhrase
+        && jpCharsMatch.length <= 24
+        && (!/[\uff66-\uff9f]/u.test(trimmedPart) || isReadableHalfwidthNotation)
+        && !/([一-龯々〆ヵヶ])\1{3,}/u.test(trimmedPart)
+        && leadingWhitespaceWidth >= 8
+        && RE_STRICT_BLANK.test(contentAfterCandidate)
+        && RE_DETACHED_PHRASE_BODY.test(inlineLatin.stripped.trim());
       const isRightDetachedAcronymCjkPhrase = !isThreadNameLine
         && leadingWhitespaceWidth >= 8
         && RE_STRICT_BLANK.test(contentAfterCandidate)
@@ -1515,9 +1825,21 @@ function segmentContent(
         && hasJapaneseNotation
         && leadingWhitespaceWidth >= 8
         && RE_STRICT_BLANK.test(contentAfterCandidate);
-      const isRightDetachedNaturalAnnotation = isRightDetachedParentheticalGloss
+      // A phrase standing beside the drawing rather than inside it: a clear
+      // gap on its left, nothing on its right, and no strokes wrapped around
+      // it on the rows above and below. There the letters alone decide.
+      const isBesideDrawingUtterance = !isThreadNameLine
+        && isJp
+        && !isDisqualified
+        && RE_STRICT_BLANK.test(contentAfterCandidate)
+        && leadingWhitespaceWidth >= 4
+        && isReadableUtterance(part)
+        && hasClearSideColumn(lines, lineIdx, currentOffset, getDisplayWidth(part.trim()));
+      const isRightDetachedNaturalAnnotation = isBesideDrawingUtterance
+        || isRightDetachedParentheticalGloss
         || isRightDetachedKanaStutter
         || isRightDetachedNaturalJapanesePhrase
+        || isRightDetachedLatinJapanesePhrase
         || isRightDetachedAcronymCjkPhrase
         || isRightDetachedNotationPhrase;
       const hasMixedKanjiHiragana = /[一-龯々〆ヵヶ]/u.test(trimmedPart)
@@ -1596,7 +1918,7 @@ function segmentContent(
         || isClosedBubblePatternPhrase
       )
         && !textTexture.hasRepeatedCjkRun
-        && !textTexture.hasMixedWidthScriptNoise;
+        && (!textTexture.hasMixedWidthScriptNoise || hasRubyNotation);
       const isEmbeddedMixedScriptEyebrowTexture = isMixedScriptEyebrowTexture
         && !hasVerifiedDialogueBox
         && hasBroadAADrawingNeighborhood(
@@ -1614,7 +1936,12 @@ function segmentContent(
         && !isStatusWindowTextSegment
         && !hasLocalFourSideWhitespace
         && !hasVerifiedDialogueBox;
-      const attachedDrawingGlyphCount = Array.from(part).filter((character) => (
+      // Latin words and an ellipsis written with dots ("なんか．．．") belong
+      // to the sentence, so they are not AA glyphs stuck to it.
+      const attachedGlyphSource = hasStrongLanguage
+        ? inlineLatin.stripped.replace(RE_ELLIPSIS_DOT_RUN, '')
+        : inlineLatin.stripped;
+      const attachedDrawingGlyphCount = Array.from(attachedGlyphSource).filter((character) => (
         !RE_JAPANESE_SCRIPT.test(character)
         && !/[A-Za-z0-9Ａ-Ｚａ-ｚ０-９]/u.test(character)
         && !RE_STRICT_BLANK.test(character)
@@ -1656,6 +1983,7 @@ function segmentContent(
         )
       )
         && !hasVerifiedDialogueBox
+        && !hasInlineLatinPhrase
         && (
           Boolean(faceShapeSpatialContext?.isConnectedToLargeDrawing)
           || Boolean(faceShapeSpatialContext?.isDenseDrawingNeighborhood)
@@ -1698,6 +2026,7 @@ function segmentContent(
         || hasMixedKanjiHiragana
         || hasSeparatedJapaneseWords
         || hasJapaneseNotation
+        || hasInlineLatinPhrase
         || (
         !hasStructuralDominance && !textTexture.isCandidate && (
           hasStrongLanguage
@@ -1768,14 +2097,17 @@ function segmentContent(
         && !hasStrongLanguage
         && !isClosedBubbleVocalization
         && !hasVerifiedDialogueBox;
-      const isNeverSelectable = RE_DISQUALIFIED.test(part)
+      const isLearnedAAGlyphSoup = !hasVerifiedDialogueBox && isAAGlyphSoup(part);
+      const hasLearnedSpeechShape = !isThreadNameLine && hasSpeechShape(part);
+      const isNeverSelectable = isDisqualified
         || RE_NOISE_ONLY.test(part)
+        || isLearnedAAGlyphSoup
         || !RE_MEANINGFUL_JP.test(part)
         || isLikelyFaceFragment
         || isContextualEmbeddedFaceFragment
         || isEmbeddedMixedScriptEyebrowTexture
         || isHorizontalStructure
-        || (isSpatialDrawing && !isClosedBubbleVocalization)
+        || (isSpatialDrawing && !isClosedBubbleVocalization && !hasLearnedSpeechShape)
         || isShortBarAttachedFragment
         || (!hasHiragana && isAllAAOnly && jpCharsMatch.length <= 1);
       const isAllSidesBlankQualified = isAllSidesBlank && !isNeverSelectable;
@@ -1803,7 +2135,7 @@ function segmentContent(
       const isLongJp = jpCharsMatch.length >= 5;
       
       // Guard: reject text where non-JP symbols outnumber or equal JP chars (likely AA art fragments like ".!丈zﾘ")
-      const symbolCount = (part.match(RE_SYMBOLS_G) || []).filter(c => !/[0-9]/.test(c)).length;
+      const symbolCount = (inlineLatin.stripped.match(RE_SYMBOLS_G) || []).filter(c => !/[0-9]/.test(c)).length;
       const hasExcessiveSymbols = symbolCount >= jpCharsMatch.length && jpCharsMatch.length > 0;
       
       // Guard: single AA-char segments with only a left border are likely AA art decoration, not dialogue
@@ -1918,7 +2250,7 @@ function segmentContent(
         && !getIsDrawing()
       );
 
-      const isArrowBox = !RE_DISQUALIFIED.test(part) && !RE_NOISE_ONLY.test(part) &&
+      const isArrowBox = !isDisqualified && !RE_NOISE_ONLY.test(part) &&
                          isNaturalText &&
                          (
                            jpCharsMatch.length >= 2
@@ -1957,7 +2289,7 @@ function segmentContent(
         }
       }
 
-      const isVerticalBox = !RE_DISQUALIFIED.test(part) && !RE_NOISE_ONLY.test(part) &&
+      const isVerticalBox = !isDisqualified && !RE_NOISE_ONLY.test(part) &&
                          (RE_JAPANESE_SCRIPT.test(part) || /^[\uff01-\uff5e\s\u3000\u00A0\u2000-\u200B\u2009│┃]*$/.test(part)) &&
                          vertLeftPipeIdx !== -1 && vertRightPipeIdx !== -1 &&
                          (
@@ -2086,7 +2418,7 @@ function segmentContent(
         // Reject if surrounded by drawings on both sides
         && !(lineIdx > 0 && lineIdx < lines.length - 1 && isDrawing(lines[lineIdx - 1]) && isDrawing(lines[lineIdx + 1]));
 
-      const isJapaneseCandidate = !RE_DISQUALIFIED.test(part)
+      const isJapaneseCandidate = !isDisqualified
         && !RE_STRICT_BLANK.test(part)
         && !RE_NOISE_ONLY.test(part)
         && !isEmbeddedMixedScriptEyebrowTexture
@@ -2110,9 +2442,16 @@ function segmentContent(
       const hasFullwidthLatinJapanesePhrase = /[Ａ-Ｚａ-ｚ]{2,}/u.test(part)
         && (part.match(/[ぁ-ん]/gu) || []).length >= 2
         && jpCharsMatch.length >= 4;
+      // A Latin word ("BETA", "PC", "Twitter") inside a hiragana sentence is a
+      // loanword, not the lone i/l/j/V strokes AA mixes into kana.
+      const hasLatinWordJapanesePhrase = /[A-Za-z]{2,}/u.test(part.normalize('NFKC'))
+        && (part.match(/[ぁ-ん]/gu) || []).length >= 2
+        && jpCharsMatch.length >= 3;
       const hasLatinJapaneseDrawingMix = /[A-Za-z]/u.test(part.normalize('NFKC'))
         && RE_JAPANESE_SCRIPT.test(part)
         && !hasFullwidthLatinJapanesePhrase
+        && !hasLatinWordJapanesePhrase
+        && !inlineLatin.allWordlike
         && !hasJapaneseNotation
         && (
           /[\uff66-\uff9f]/u.test(part)
@@ -2151,13 +2490,16 @@ function segmentContent(
         )
         && (
           isManualPatternJapaneseShape(part)
+          || isAcronymCjkPhrase(part)
+          // "No.1ヒーロー" inside a closed speech box.
+          || (hasVerifiedDialogueBox && hasInlineLatinPhrase)
           || (
             hasVerifiedDialogueBox
             && isShortBoxedCjkParticlePhrase(part)
           )
         );
       const isSpatiallyQualifiedShortMixedPhrase = !isThreadNameLine
-        && isShortMixedJapanesePhrase(part)
+        && (isShortMixedJapanesePhrase(part) || isAcronymCjkPhrase(part))
         && (
           hasVerifiedDialogueBox
           || isVerifiedPhysicalBoxPatternContext
@@ -2208,8 +2550,11 @@ function segmentContent(
         || isSpatiallyQualifiedShortNumericPhrase
         || isRightDetachedNaturalAnnotation
         || isStatusWindowTextSegment;
-      const isJapanese = isJapaneseCandidate || (
-        !RE_DISQUALIFIED.test(part)
+      // Sound effects / short reactions keep their speech shape even when the
+      // surrounding AA is dense, so dense-context guards below do not drop them.
+      const isLearnedSpeechShape = hasLearnedSpeechShape && !isNeverSelectable;
+      const isJapanese = isJapaneseCandidate || isLearnedSpeechShape || (
+        !isDisqualified
         && !RE_STRICT_BLANK.test(part)
         && !RE_NOISE_ONLY.test(part)
         && isContextPatternApproved
@@ -2236,12 +2581,20 @@ function segmentContent(
         && !isContextPatternApproved
         && !isAllSidesBlankQualified
         && (
-          textTexture.isCandidate
+          // A spelled-out half-width word or reading gloss is not texture.
+          (
+            textTexture.isCandidate
+            && !(
+              isReadableHalfwidthNotation
+              && !textTexture.hasRepeatedCjkRun
+              && !textTexture.hasLowVarietyLongScript
+            )
+          )
           || hasStructuralDominance
-          || !hasStrongLanguage
-          || hasMixedKanaWidth
+          || (!hasStrongLanguage && !hasInlineLatinPhrase)
+          || (hasMixedKanaWidth && !isReadableHalfwidthNotation)
           || hasLatinJapaneseDrawingMix
-          || hasCjkHeavySparseHiragana
+          || (hasCjkHeavySparseHiragana && !hasInlineLatinPhrase)
         )
         && hasDenseAADrawingContext(
           lines,
@@ -2257,9 +2610,10 @@ function segmentContent(
           && (isLikelyFaceFragment || isContextualEmbeddedFaceFragment)
         )
         || isHorizontalStructure
-        || isEmbeddedInDenseAA
+        || (isEmbeddedInDenseAA && !isLearnedSpeechShape)
         || (
           !hasDocumentSelectionEvidence
+          && !isLearnedSpeechShape
           && (
             (hasDenseAAContext && !isClosedBubbleVocalization)
             || isSpatialAmbiguous
@@ -2282,7 +2636,7 @@ function segmentContent(
             : undefined;
       const isPlainPostBodyText = isJp
         && plainPostBodyLines.has(lineIdx)
-        && RE_JAPANESE_SCRIPT.test(part);
+        && hasJapaneseWordEvidence(part);
       newSegments.push({
         id: `seg-${lineIdx}-${currentOffset}`,
         text: part,
@@ -2296,6 +2650,7 @@ function segmentContent(
           || hasFourSideLocalWhitespace
           || isAdjacentDialogueContinuation
           || isPlainPostBodyText
+          || isLearnedSpeechShape
         ),
         isStrictJapanese: isStrict,
         isBoxedDialogue: isBoxedDialogue,
@@ -2304,8 +2659,11 @@ function segmentContent(
         isVerticalBox: isVerticalBox,
         isIndentedDialogue: isIndentedDialogue,
         isIsolatedDialogue: isIsolatedDialogue,
-        isContextPatternApproved: isContextPatternApproved || isPlainPostBodyText,
-        isAutoSelectExcluded: isThreadNameLine || (isAutoSelectExcluded && !isPlainPostBodyText),
+        // A clear sound shape ("おーーー") is approved even with one letter.
+        isContextPatternApproved: isContextPatternApproved || isPlainPostBodyText || isLearnedSpeechShape,
+        isAutoSelectExcluded: isThreadNameLine
+          || isLearnedAAGlyphSoup
+          || (isAutoSelectExcluded && !isPlainPostBodyText),
         detectionConfidence,
         detectionContextSignature: spatialContext?.contextSignature,
         isSelected: false,
@@ -2323,6 +2681,19 @@ function segmentContent(
         lineIdx,
         spacedDialogue,
       ));
+    } else if (!isThreadNameLine && !plainPostBodyLines.has(lineIdx)) {
+      const trailingSentence = findTrailingLineSentence(line);
+      if (trailingSentence) {
+        const lineSegments = newSegments.slice(lineSegmentStart);
+        if (needsTrailingSentenceRepair(lineSegments, trailingSentence)) {
+          newSegments.splice(lineSegmentStart);
+          newSegments.push(...mergeSpacedHorizontalDialogue(
+            lineSegments,
+            lineIdx,
+            trailingSentence,
+          ));
+        }
+      }
     }
 
     newSegments.push({

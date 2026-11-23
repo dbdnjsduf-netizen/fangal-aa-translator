@@ -87,6 +87,7 @@ import {
   MANUAL_REGEX_STORAGE_KEY,
 } from './services/manualRegex';
 import { APP_THEME_STORAGE_KEY, normalizeAppTheme } from './services/appTheme';
+import { isAAGlyphSoup } from './services/aaGlyphs';
 import { AppUpdateStatus, fetchAppUpdateStatus } from './services/appUpdate';
 import { Ban, Braces, FileText, Info, Activity, Download, Image as ImageIcon, Timer, History, Book, MessageSquareQuote, Server, CheckSquare, Moon, Sun, CloudDownload, FileDown, FileUp } from 'lucide-react';
 
@@ -444,6 +445,16 @@ function App() {
         target.kind === 'normal' ? { ...target, isAbsolute: true } : target
       ))
       : requestedTargets;
+    // A rule made from AA texture ("乂ﾐ:::::乂ﾊ") would select the same
+    // picture fragment in every later file, so confirm before saving it.
+    const textureTargets = targets.filter((target) => isAAGlyphSoup(target.sourceText));
+    if (
+      textureTargets.length > 0
+      && !confirm(
+        `AA 그림 조각처럼 보이는 텍스트입니다.\n${textureTargets.map((target) => target.sourceText).slice(0, 3).join('\n')}\n\n`
+        + '규칙으로 저장하면 이후 파일에서도 계속 자동 선택됩니다. 그래도 추가할까요?',
+      )
+    ) return;
     const nextRules = targets.reduce(
       (rules, target) => addManualRegexRule(
         rules,

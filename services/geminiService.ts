@@ -26,7 +26,14 @@ export type GeminiModel = typeof GEMINI_MODELS[number]['id'];
 const GEMINI_MAX_CONCURRENCY = 2;
 const MAX_RETRIES = 3;
 // 응답이 이만큼 없으면 같은 청크를 다시 기다리지 않고 반으로 쪼개서 보낸다.
+// 작은 묶음은 더 짧게 기다린다 (60초 + 줄당 2초, 최대 3분).
 const REQUEST_TIMEOUT_MS = 180_000;
+const REQUEST_TIMEOUT_BASE_MS = 60_000;
+const REQUEST_TIMEOUT_PER_ITEM_MS = 2_000;
+// 반으로 쪼갠 뒤에도 같은 구간이 이만큼 연달아 시간 초과되면 더 쪼개지 않고 포기한다.
+const MAX_TIMEOUT_SPLITS = 2;
+// 쪼갠 요청까지 합쳐 동시에 나가는 요청 수 (서버 Vertex 동시 처리 칸과 같게).
+const GEMINI_MAX_IN_FLIGHT = 3;
 const FLEX_REQUEST_TIMEOUT_MS = 960_000;
 
 interface Usage {
@@ -39,6 +46,9 @@ interface Usage {
 type TranslationError = Error & {
   retryable?: boolean;
   splitRecoverable?: boolean;
+  // Vertex Flex dropped or timed out; retry on the immediate (standard) tier.
+  flexFallback?: boolean;
+  timedOut?: boolean;
   usage?: Usage;
   invalidIndices?: number[];
   partialTranslations?: Array<string | undefined>;
@@ -101,7 +111,7 @@ export async function translateSelection(
     customDict,
     useDefaultDict,
     systemInstruction,
-    vertexConfig,
+    toRuntimeVertexConfig(vertexConfig),
   );
   return { text: result.translations[0], usage: result.usage };
 }
@@ -115,9 +125,12 @@ export async function translateBatch(
   onProgress?: (progress: TranslationProgress) => void,
   onPartialResult?: (translations: string[], usage: ApiUsageStats) => void,
   model: GeminiModel = GEMINI_MODEL,
-  vertexConfig?: VertexConfig,
+  requestedVertexConfig?: VertexConfig,
 ): Promise<BatchTranslationResult> {
-  assertApiKey(apiKey, vertexConfig);
+  assertApiKey(apiKey, requestedVertexConfig);
+  // Shared by every chunk of this batch so one Flex failure moves the rest of
+  // the batch to the immediate tier instead of queueing again.
+  const vertexConfig = toRuntimeVertexConfig(requestedVertexConfig);
   const { chunks, chunkGaps } = createChunks(texts, {
     softChars: 2_800,
     hardChars: 3_600,
@@ -255,6 +268,7 @@ async function translateChunk(
   useDefaultDict: boolean,
   systemInstruction: TranslationInstruction,
   vertexConfig?: VertexConfig,
+  allowTimeoutRetry = true,
 ) {
   const prompt = buildTranslationPrompt(chunk, gaps, customDict, useDefaultDict);
   const accumulatedUsage = emptyUsage();
@@ -300,8 +314,21 @@ async function translateChunk(
     } catch (error) {
       lastError = error;
       lastRejectedTranslations = (error as TranslationError)?.rejectedTranslations;
+      if ((error as TranslationError)?.flexFallback && vertexConfig?.flex) {
+        // Flex queue dropped or stalled: resend now on the immediate tier
+        // without spending one of the regular retries.
+        vertexConfig.flex = false;
+        console.warn('[Gemini] Vertex Flex 응답 실패 → 즉시 방식으로 다시 요청합니다.', error);
+        // A dropped Flex request says nothing about the translation itself, so
+        // resend the original prompt without a correction note.
+        lastError = undefined;
+        attempt -= 1;
+        continue;
+      }
       if (!isRetryable(error) || attempt === MAX_RETRIES - 1) break;
       if ((error as TranslationError)?.splitRecoverable && chunk.length > 1) break;
+      // Inside a region that already timed out, do not wait again for the same lines.
+      if ((error as TranslationError)?.timedOut && !allowTimeoutRetry) break;
       if (!(error as TranslationError)?.splitRecoverable) {
         await delayWithJitter(Math.min(2_000 * (2 ** attempt), 12_000));
       }
@@ -327,6 +354,7 @@ async function translateChunkResilient(
   baseOffset = 0,
   isRecoveryChild = false,
   vertexConfig?: VertexConfig,
+  timeoutSplits = 0,
 ): Promise<{ translations: string[]; usage: Usage }> {
   try {
     const result = await translateChunk(
@@ -338,12 +366,19 @@ async function translateChunkResilient(
       useDefaultDict,
       systemInstruction,
       vertexConfig,
+      timeoutSplits === 0,
     );
     if (isRecoveryChild) onRecoveredPartial?.(baseOffset, result.translations);
     return result;
   } catch (error) {
     const parentUsage = getErrorUsage(error);
     const translationError = error as TranslationError;
+    // Repair and split requests are small follow-ups for a chunk that already
+    // failed (blocked, malformed, too slow); send them on the immediate tier
+    // instead of queueing them behind Flex again.
+    const recoveryVertexConfig = vertexConfig?.flex
+      ? { ...vertexConfig, flex: false }
+      : vertexConfig;
     const invalidIndices = translationError.invalidIndices || [];
     const partialTranslations = translationError.partialTranslations;
     if (
@@ -359,28 +394,39 @@ async function translateChunkResilient(
       const recoveredUsage = { ...parentUsage };
       onRecoveredPartial?.(baseOffset, recovered);
 
-      for (const invalidIndex of invalidIndices) {
-        try {
-          const repaired = await translateChunkResilient(
-            [chunk[invalidIndex]],
-            [],
-            apiKey,
-            model,
-            customDict,
-            useDefaultDict,
-            systemInstruction,
-            undefined,
-            0,
-            false,
-            vertexConfig,
-          );
-          recovered[invalidIndex] = repaired.translations[0];
-          mergeUsage(recoveredUsage, repaired.usage);
-          onRecoveredPartial?.(baseOffset + invalidIndex, repaired.translations);
-        } catch (repairError) {
-          attachUsage(repairError, recoveredUsage);
-          throw repairError;
+      // Repair the rejected lines at the same time rather than one by one.
+      const repairs = await Promise.allSettled(invalidIndices.map(async (invalidIndex) => {
+        const repaired = await translateChunkResilient(
+          [chunk[invalidIndex]],
+          [],
+          apiKey,
+          model,
+          customDict,
+          useDefaultDict,
+          systemInstruction,
+          undefined,
+          0,
+          false,
+          recoveryVertexConfig,
+        );
+        recovered[invalidIndex] = repaired.translations[0];
+        onRecoveredPartial?.(baseOffset + invalidIndex, repaired.translations);
+        return repaired;
+      }));
+      let firstRepairError: unknown;
+      for (const repair of repairs) {
+        if (repair.status === 'fulfilled') {
+          mergeUsage(recoveredUsage, repair.value.usage);
+        } else {
+          mergeUsage(recoveredUsage, getErrorUsage(repair.reason));
+          firstRepairError ??= repair.reason;
         }
+      }
+      if (firstRepairError !== undefined) {
+        if (firstRepairError instanceof Error) {
+          (firstRepairError as TranslationError).usage = recoveredUsage;
+        }
+        throw firstRepairError;
       }
 
       return {
@@ -389,6 +435,10 @@ async function translateChunkResilient(
       };
     }
     if (!translationError.splitRecoverable || chunk.length <= 1) throw error;
+    // The same region keeps timing out even after being halved: stop here and
+    // leave these lines selected instead of halving down to single lines.
+    const nextTimeoutSplits = timeoutSplits + (translationError.timedOut ? 1 : 0);
+    if (translationError.timedOut && nextTimeoutSplits > MAX_TIMEOUT_SPLITS) throw error;
 
     const splitIndex = chooseRecoverySplitIndex(chunk.length, gaps);
     const leftGaps = gaps.filter((gap) => gap < splitIndex);
@@ -396,9 +446,10 @@ async function translateChunkResilient(
       .filter((gap) => gap > splitIndex)
       .map((gap) => gap - splitIndex);
 
-    let leftResult: { translations: string[]; usage: Usage };
-    try {
-      leftResult = await translateChunkResilient(
+    // Both halves go out together; each one reports its own lines as soon as
+    // it finishes, so a slow half no longer holds the other back.
+    const [left, right] = await Promise.allSettled([
+      translateChunkResilient(
         chunk.slice(0, splitIndex),
         leftGaps,
         apiKey,
@@ -409,16 +460,10 @@ async function translateChunkResilient(
         onRecoveredPartial,
         baseOffset,
         true,
-        vertexConfig,
-      );
-    } catch (leftError) {
-      attachUsage(leftError, parentUsage);
-      throw leftError;
-    }
-
-    let rightResult: { translations: string[]; usage: Usage };
-    try {
-      rightResult = await translateChunkResilient(
+        recoveryVertexConfig,
+        nextTimeoutSplits,
+      ),
+      translateChunkResilient(
         chunk.slice(splitIndex),
         rightGaps,
         apiKey,
@@ -429,18 +474,52 @@ async function translateChunkResilient(
         onRecoveredPartial,
         baseOffset + splitIndex,
         true,
-        vertexConfig,
-      );
-    } catch (rightError) {
-      attachUsage(rightError, parentUsage, leftResult.usage);
-      throw rightError;
+        recoveryVertexConfig,
+        nextTimeoutSplits,
+      ),
+    ]);
+    const leftUsage = left.status === 'fulfilled' ? left.value.usage : getErrorUsage(left.reason);
+    const rightUsage = right.status === 'fulfilled' ? right.value.usage : getErrorUsage(right.reason);
+    if (left.status === 'rejected' || right.status === 'rejected') {
+      const failure = left.status === 'rejected' ? left.reason : (right as PromiseRejectedResult).reason;
+      if (failure instanceof Error) {
+        (failure as TranslationError).usage = sumUsage(parentUsage, leftUsage, rightUsage);
+      }
+      throw failure;
     }
 
     return {
-      translations: [...leftResult.translations, ...rightResult.translations],
-      usage: sumUsage(parentUsage, leftResult.usage, rightResult.usage),
+      translations: [...left.value.translations, ...right.value.translations],
+      usage: sumUsage(parentUsage, leftUsage, rightUsage),
     };
   }
+}
+
+// Translation needs little reasoning; the model's default (dynamic) thinking
+// spent 3-7x the output tokens on thinking and slowed every request.
+const GEMINI_THINKING_LEVEL = 'low';
+let thinkingLevelSupported = true;
+
+function buildGenerationConfig(expectedCount: number) {
+  return {
+    responseMimeType: 'application/json',
+    responseSchema: {
+      type: 'array',
+      minItems: expectedCount,
+      maxItems: expectedCount,
+      items: { type: 'string' },
+    },
+    ...(thinkingLevelSupported
+      ? { thinkingConfig: { thinkingLevel: GEMINI_THINKING_LEVEL } }
+      : {}),
+  };
+}
+
+// If a model rejects thinkingLevel, stop sending it and let the request retry.
+function disableThinkingLevelIfRejected(status: number, message: string) {
+  if (status !== 400 || !thinkingLevelSupported || !/thinking/i.test(message)) return false;
+  thinkingLevelSupported = false;
+  return true;
 }
 
 async function requestGemini(
@@ -452,7 +531,16 @@ async function requestGemini(
   vertexConfig?: VertexConfig,
 ): Promise<{ text: string; usage: Usage }> {
   const isVertex = Boolean(vertexConfig?.useVertex);
-  const timeoutMs = isVertex && vertexConfig?.flex ? FLEX_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
+  const isFlexAttempt = isVertex && Boolean(vertexConfig?.flex);
+  const timeoutMs = isFlexAttempt
+    ? FLEX_REQUEST_TIMEOUT_MS
+    : Math.min(
+      REQUEST_TIMEOUT_MS,
+      REQUEST_TIMEOUT_BASE_MS + expectedCount * REQUEST_TIMEOUT_PER_ITEM_MS,
+    );
+  // Wait for a free slot before starting the clock, so queued split requests
+  // are not counted as slow.
+  await acquireRequestSlot();
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   const startedAt = performance.now();
@@ -474,15 +562,7 @@ async function requestGemini(
             role: 'user',
             parts: [{ text: userPrompt }],
           }],
-          generationConfig: {
-            responseMimeType: 'application/json',
-            responseSchema: {
-              type: 'array',
-              minItems: expectedCount,
-              maxItems: expectedCount,
-              items: { type: 'string' },
-            },
-          },
+          generationConfig: buildGenerationConfig(expectedCount),
           vertexCredentials: vertexConfig?.vertexCredentials,
           projectId: vertexConfig?.projectId,
           location: vertexConfig?.location,
@@ -507,15 +587,7 @@ async function requestGemini(
               role: 'user',
               parts: [{ text: userPrompt }],
             }],
-            generationConfig: {
-              responseMimeType: 'application/json',
-              responseSchema: {
-                type: 'array',
-                minItems: expectedCount,
-                maxItems: expectedCount,
-                items: { type: 'string' },
-              },
-            },
+            generationConfig: buildGenerationConfig(expectedCount),
           }),
           signal: controller.signal,
         },
@@ -526,9 +598,14 @@ async function requestGemini(
       if (isVertex) {
         const errMsg = (payload as any)?.error || response.statusText || 'Vertex AI 요청 실패';
         const error = new Error(errMsg) as TranslationError;
-        error.retryable = response.status === 429 || response.status >= 500;
+        error.retryable = response.status === 429
+          || response.status >= 500
+          || disableThinkingLevelIfRejected(response.status, errMsg);
+        error.flexFallback = isFlexAttempt && (response.status === 429 || response.status >= 500);
         // 서버 쪽 응답 대기 초과(504)도 청크가 너무 커서일 수 있으니 쪼개서 다시 보낸다.
-        error.splitRecoverable = response.status === 504;
+        // Flex라면 먼저 같은 묶음을 즉시 방식으로 다시 보낸다.
+        error.splitRecoverable = response.status === 504 && !error.flexFallback;
+        error.timedOut = response.status === 504;
         throw error;
       }
       throw createGeminiHttpError(response.status, payload);
@@ -559,16 +636,40 @@ async function requestGemini(
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
       const timeoutError = new Error(
-        `${isVertex ? 'Vertex AI' : 'Gemini'} 응답 대기 시간이 초과되었습니다 (${Math.round(timeoutMs / 60_000)}분).`,
+        `${isVertex ? 'Vertex AI' : 'Gemini'} 응답 대기 시간이 초과되었습니다 (${Math.round(timeoutMs / 1000)}초).`,
       ) as TranslationError;
       timeoutError.retryable = true;
-      timeoutError.splitRecoverable = true;
+      timeoutError.timedOut = true;
+      timeoutError.flexFallback = isFlexAttempt;
+      timeoutError.splitRecoverable = !isFlexAttempt;
       throw timeoutError;
+    }
+    if (isFlexAttempt && error instanceof TypeError) {
+      (error as TranslationError).flexFallback = true;
     }
     throw error;
   } finally {
     window.clearTimeout(timer);
+    releaseRequestSlot();
   }
+}
+
+let requestsInFlight = 0;
+const requestSlotWaiters: Array<() => void> = [];
+
+async function acquireRequestSlot() {
+  if (requestsInFlight < GEMINI_MAX_IN_FLIGHT) {
+    requestsInFlight += 1;
+    return;
+  }
+  // The releasing request hands its slot straight to the next waiter.
+  await new Promise<void>((resolve) => requestSlotWaiters.push(resolve));
+}
+
+function releaseRequestSlot() {
+  const next = requestSlotWaiters.shift();
+  if (next) next();
+  else requestsInFlight = Math.max(0, requestsInFlight - 1);
 }
 
 function createGeminiHttpError(status: number, payload: GeminiResponse) {
@@ -580,8 +681,15 @@ function createGeminiHttpError(status: number, payload: GeminiResponse) {
     message = `Gemini 요청 한도에 도달했습니다. 잠시 후 다시 시도하세요. ${message}`;
   }
   const error = new Error(message) as TranslationError;
-  error.retryable = status === 408 || status === 429 || status >= 500;
+  error.retryable = status === 408
+    || status === 429
+    || status >= 500
+    || disableThinkingLevelIfRejected(status, message);
   return error;
+}
+
+function toRuntimeVertexConfig(vertexConfig?: VertexConfig) {
+  return vertexConfig ? { ...vertexConfig } : undefined;
 }
 
 function assertApiKey(apiKey: string, vertexConfig?: VertexConfig) {
