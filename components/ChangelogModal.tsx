@@ -8,6 +8,14 @@ interface ChangelogModalProps {
 
 const changelogData = [
   {
+    version: '1.13.2',
+    date: '2026-11-23',
+    title: '숫자 사이 쉼표가 든 짧은 대사 자동 선택',
+    changes: [
+      '１０、１０ね처럼 숫자 사이에 、·・가 든 짧은 대사를 주변이 비어 있으면 전체 선택 (그림에 붙은 것은 제외)',
+    ],
+  },
+  {
     version: '1.13.1',
     date: '2026-11-23',
     title: '영어 섞인 대사·효과음 자동 선택, Gemini 속도·안정성 개선',
